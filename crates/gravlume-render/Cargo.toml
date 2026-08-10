@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 egui.workspace = true
 egui-wgpu.workspace = true
+pollster.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 wgpu.workspace = true
@@ -18,9 +19,6 @@ wgpu = { workspace = true, features = ["metal"] }
 
 [target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
 wgpu = { workspace = true, features = ["vulkan"] }
-
-[dev-dependencies]
-pollster.workspace = true
 
 [lints]
 workspace = true

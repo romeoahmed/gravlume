@@ -6,15 +6,19 @@ mod capabilities;
 mod display;
 mod engine;
 mod extent;
+mod gpu_error;
 mod scene;
 mod surface;
 mod timing;
 
 #[doc(hidden)]
-pub use engine::{
-    DeviceEvent, DeviceEventKind, FrameSkip, FrameStatus, GpuEngine, PollOutcome,
-    RenderDiagnostics, RenderInitError, RenderRuntimeError,
+pub use engine::{FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
+#[doc(hidden)]
+pub use gpu_error::{
+    DeviceEvent, DeviceEventKind, RenderInitError, RenderRuntimeError, ResizeError,
 };
+#[doc(hidden)]
+pub use surface::FrameSkip;
 
 #[cfg(target_os = "macos")]
 pub(crate) const fn native_backends() -> wgpu::Backends {
