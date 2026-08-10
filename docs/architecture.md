@@ -259,7 +259,7 @@ surface format/color-space 从 `format_capabilities` 的合法组合选择。wgp
 
 WGSL core 只有 `f32`；`f16` 需要显式 enable 与设备 capability，规范没有 core `f64`。[WGSL](https://www.w3.org/TR/WGSL/) geodesic、frequency ratio、radiance accumulation 和基础偏振状态因此使用 `f32`；CPU reference、根分类、初值转换和 LUT 生成使用 `f64`。
 
-发布设备必须满足 WebGPU-compliant compute、项目 limits/format usages、`TIMESTAMP_QUERY` 与 `CLEAR_TEXTURE`。`DeviceDescriptor` 只请求 baseline 和当前 resolved plan 的可选加速 variant；不满足基线时返回 `UnsupportedPlatform`。feature 分类与三平台门槛只在 [Rust 平台合同](platform.md#3-发布平台基线)维护。
+发布设备必须满足 WebGPU-compliant compute、项目 limits/format usages 与当前有消费者的 `TIMESTAMP_QUERY`。`DeviceDescriptor` 只请求 baseline 和当前 resolved plan 的可选能力；history/diagnostic 确实需要零初始化时才加入 `CLEAR_TEXTURE`。不满足基线时返回 `UnsupportedPlatform`。feature 分类与三平台门槛只在 [Rust 平台合同](platform.md#3-发布平台基线)维护。
 
 硬件 BVH ray tracing 处理直线/几何求交，不积分弯曲时空中的 null geodesic；不作为架构前提。
 

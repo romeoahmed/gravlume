@@ -8,17 +8,17 @@ mod engine;
 mod extent;
 mod gpu_error;
 mod scene;
-mod surface;
 mod timing;
 
 #[doc(hidden)]
-pub use engine::{FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
+pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
 #[doc(hidden)]
 pub use gpu_error::{
     DeviceEvent, DeviceEventKind, RenderInitError, RenderRuntimeError, ResizeError,
 };
-#[doc(hidden)]
-pub use surface::FrameSkip;
+
+#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
+compile_error!("gravlume-render supports only native macOS, Windows, and Linux targets");
 
 #[cfg(target_os = "macos")]
 pub(crate) const fn native_backends() -> wgpu::Backends {
@@ -28,9 +28,4 @@ pub(crate) const fn native_backends() -> wgpu::Backends {
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 pub(crate) const fn native_backends() -> wgpu::Backends {
     wgpu::Backends::VULKAN
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
-pub(crate) const fn native_backends() -> wgpu::Backends {
-    wgpu::Backends::empty()
 }

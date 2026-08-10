@@ -32,30 +32,6 @@ impl TimingSample {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct TimingState {
-    map_pending: bool,
-}
-
-impl TimingState {
-    pub(crate) const fn begin_map(&mut self) -> bool {
-        if self.map_pending {
-            false
-        } else {
-            self.map_pending = true;
-            true
-        }
-    }
-
-    pub(crate) const fn has_pending_map(&self) -> bool {
-        self.map_pending
-    }
-
-    pub(crate) const fn finish_map(&mut self) {
-        self.map_pending = false;
-    }
-}
-
 fn decode_query_ticks(bytes: &[u8]) -> Option<[u64; QUERY_COUNT as usize]> {
     if bytes.len() != QUERY_BYTE_COUNT {
         return None;
@@ -86,9 +62,7 @@ pub struct GpuTimings {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
     readback_buffer: wgpu::Buffer,
-    callback_sender: mpsc::SyncSender<Result<(), wgpu::BufferAsyncError>>,
-    callback_receiver: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
-    state: TimingState,
+    callback_receiver: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
     latest: Option<TimingSample>,
 }
 
@@ -111,21 +85,17 @@ impl GpuTimings {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let (callback_sender, callback_receiver) = mpsc::sync_channel(1);
-
         Self {
             query_set,
             resolve_buffer,
             readback_buffer,
-            callback_sender,
-            callback_receiver,
-            state: TimingState::default(),
+            callback_receiver: None,
             latest: None,
         }
     }
 
     pub(crate) const fn capture_available(&self) -> bool {
-        !self.state.has_pending_map()
+        self.callback_receiver.is_none()
     }
 
     pub(crate) const fn compute_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
@@ -156,17 +126,18 @@ impl GpuTimings {
     }
 
     pub(crate) fn begin_readback(&mut self) {
-        if !self.state.begin_map() {
+        if self.callback_receiver.is_some() {
             return;
         }
 
-        let sender = self.callback_sender.clone();
+        let (sender, receiver) = mpsc::channel();
         self.readback_buffer
             .map_async(wgpu::MapMode::Read, .., move |result| {
-                if let Err(error) = sender.try_send(result) {
-                    tracing::debug!(?error, "timestamp callback could not publish its result");
+                if sender.send(result).is_err() {
+                    tracing::debug!("timestamp callback receiver dropped");
                 }
             });
+        self.callback_receiver = Some(receiver);
     }
 
     pub(crate) fn poll(
@@ -174,47 +145,46 @@ impl GpuTimings {
         device: &wgpu::Device,
         timestamp_period_ns: f32,
     ) -> Result<Option<TimingSample>, TimingError> {
-        if !self.state.has_pending_map() {
+        let Some(receiver) = self.callback_receiver.as_ref() else {
             return Ok(None);
-        }
+        };
 
         device.poll(wgpu::PollType::Poll)?;
-        match self.callback_receiver.try_recv() {
+        match receiver.try_recv() {
             Ok(Ok(())) => {
-                let ticks = match self.readback_buffer.get_mapped_range(..) {
-                    Ok(mapped) => {
-                        let ticks = decode_query_ticks(&mapped);
-                        drop(mapped);
-                        ticks
-                    }
-                    Err(error) => {
-                        self.readback_buffer.unmap();
-                        self.state.finish_map();
-                        return Err(error.into());
-                    }
-                };
-                self.readback_buffer.unmap();
-                self.state.finish_map();
-                let ticks = ticks.ok_or(TimingError::InvalidReadback)?;
+                let ticks = self.read_ticks();
+                self.finish_readback();
+                let ticks = ticks?;
                 let sample = TimingSample::from_ticks(ticks, timestamp_period_ns);
                 self.latest = Some(sample);
                 Ok(Some(sample))
             }
             Ok(Err(error)) => {
-                self.readback_buffer.unmap();
-                self.state.finish_map();
+                self.finish_readback();
                 Err(error.into())
             }
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => {
-                self.state.finish_map();
+                self.finish_readback();
                 Err(TimingError::CallbackDisconnected)
             }
         }
     }
 
+    fn read_ticks(&self) -> Result<[u64; QUERY_COUNT as usize], TimingError> {
+        let mapped = self.readback_buffer.get_mapped_range(..)?;
+        let ticks = decode_query_ticks(&mapped).ok_or(TimingError::InvalidReadback);
+        drop(mapped);
+        ticks
+    }
+
+    fn finish_readback(&mut self) {
+        self.readback_buffer.unmap();
+        self.callback_receiver = None;
+    }
+
     pub(crate) const fn has_pending_readback(&self) -> bool {
-        self.state.has_pending_map()
+        self.callback_receiver.is_some()
     }
 
     pub(crate) const fn latest(&self) -> Option<TimingSample> {
@@ -226,7 +196,7 @@ impl GpuTimings {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use super::{GpuTimings, TimingSample, TimingState};
+    use super::{GpuTimings, TimingSample};
 
     #[test]
     fn timestamp_ticks_are_converted_with_queue_period() {
@@ -234,20 +204,6 @@ mod tests {
 
         assert!((sample.compute_ms() - 0.000_3).abs() < f64::EPSILON);
         assert!((sample.display_ms() - 0.000_5).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn timing_state_allows_only_one_pending_map() {
-        let mut state = TimingState::default();
-
-        assert!(state.begin_map());
-        assert!(!state.begin_map());
-        assert!(state.has_pending_map());
-
-        state.finish_map();
-
-        assert!(!state.has_pending_map());
-        assert!(state.begin_map());
     }
 
     #[test]

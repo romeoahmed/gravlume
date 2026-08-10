@@ -31,8 +31,6 @@ pub enum RenderRuntimeError {
     Timing(String),
     #[error("non-blocking GPU poll failed: {0}")]
     Poll(#[from] wgpu::PollError),
-    #[error("frame protocol violation: {0}")]
-    FrameProtocol(String),
     #[error("failed to recreate a lost surface: {0}")]
     RecreateSurface(#[from] wgpu::CreateSurfaceError),
     #[error("surface capabilities changed incompatibly while recovering")]
@@ -97,7 +95,7 @@ pub struct DeviceEvent {
 
 impl DeviceEvent {
     #[must_use]
-    pub fn validation(message: impl Into<String>) -> Self {
+    pub(crate) fn validation(message: impl Into<String>) -> Self {
         Self {
             kind: DeviceEventKind::Validation,
             message: message.into(),
@@ -105,7 +103,7 @@ impl DeviceEvent {
     }
 
     #[must_use]
-    pub fn from_wgpu(stage: &'static str, error: wgpu::Error) -> Self {
+    pub(crate) fn from_wgpu(stage: &'static str, error: wgpu::Error) -> Self {
         let (kind, message) = device_error_details(error);
         Self {
             kind,
@@ -142,7 +140,7 @@ pub struct GpuErrorScopes {
 }
 
 impl GpuErrorScopes {
-    pub fn push(device: &wgpu::Device) -> Self {
+    pub(crate) fn push(device: &wgpu::Device) -> Self {
         Self {
             internal: device.push_error_scope(wgpu::ErrorFilter::Internal),
             out_of_memory: device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
@@ -150,7 +148,7 @@ impl GpuErrorScopes {
         }
     }
 
-    pub fn finish(self) -> impl Future<Output = Result<(), wgpu::Error>> + Send {
+    pub(crate) fn finish(self) -> impl Future<Output = Result<(), wgpu::Error>> + Send {
         let validation = self.validation.pop();
         let out_of_memory = self.out_of_memory.pop();
         let internal = self.internal.pop();

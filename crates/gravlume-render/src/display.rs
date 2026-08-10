@@ -1,4 +1,4 @@
-pub fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
+fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
     if format.is_srgb() {
         "display_to_linear_target"
     } else {
