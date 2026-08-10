@@ -1,5 +1,4 @@
-pub const BASELINE_FEATURES: wgpu::Features =
-    wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::CLEAR_TEXTURE);
+pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CapabilityError {
@@ -265,13 +264,10 @@ mod tests {
 
     #[test]
     fn baseline_features_are_exact_and_missing_set_is_structured() {
+        assert_eq!(BASELINE_FEATURES, wgpu::Features::TIMESTAMP_QUERY);
         assert_eq!(
-            BASELINE_FEATURES,
-            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::CLEAR_TEXTURE
-        );
-        assert_eq!(
-            missing_baseline_features(wgpu::Features::TIMESTAMP_QUERY),
-            wgpu::Features::CLEAR_TEXTURE
+            missing_baseline_features(wgpu::Features::empty()),
+            wgpu::Features::TIMESTAMP_QUERY
         );
         assert!(missing_baseline_features(BASELINE_FEATURES).is_empty());
     }

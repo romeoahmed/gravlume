@@ -41,33 +41,31 @@ pub struct ExtentTracker {
 }
 
 impl ExtentTracker {
-    pub(crate) fn preview_update(self, width: u32, height: u32) -> (Self, ExtentChange) {
-        let mut candidate = self;
-        let change = candidate.update(width, height);
-        (candidate, change)
-    }
-
-    pub(crate) fn update(&mut self, width: u32, height: u32) -> ExtentChange {
+    pub(crate) fn updated(mut self, width: u32, height: u32) -> (Self, ExtentChange) {
         let Some(next) = RenderExtent::new(width, height) else {
             if self.is_paused {
-                return ExtentChange::Unchanged;
+                return (self, ExtentChange::Unchanged);
             }
             self.extent = None;
             self.is_paused = true;
-            return ExtentChange::Paused;
+            return (self, ExtentChange::Paused);
         };
 
         if !self.is_paused && self.extent == Some(next) {
-            return ExtentChange::Unchanged;
+            return (self, ExtentChange::Unchanged);
         }
 
         self.is_paused = false;
         self.extent = Some(next);
         self.generation += 1;
-        ExtentChange::Rebuild {
-            extent: next,
-            generation: self.generation,
-        }
+        let generation = self.generation;
+        (
+            self,
+            ExtentChange::Rebuild {
+                extent: next,
+                generation,
+            },
+        )
     }
 
     pub(crate) const fn extent(&self) -> Option<RenderExtent> {
@@ -85,30 +83,34 @@ mod tests {
 
     #[test]
     fn zero_extent_pauses_without_advancing_generation() {
-        let mut tracker = ExtentTracker::default();
+        let tracker = ExtentTracker::default();
 
-        assert_eq!(tracker.update(0, 720), ExtentChange::Paused);
+        let (tracker, change) = tracker.updated(0, 720);
+        assert_eq!(change, ExtentChange::Paused);
         assert_eq!(tracker.extent(), None);
         assert_eq!(tracker.generation(), 0);
     }
 
     #[test]
     fn nonzero_extent_advances_generation_only_when_dimensions_change() {
-        let mut tracker = ExtentTracker::default();
+        let tracker = ExtentTracker::default();
         let odd = RenderExtent::new(1279, 719).expect("both dimensions are nonzero");
 
+        let (tracker, change) = tracker.updated(1279, 719);
         assert_eq!(
-            tracker.update(1279, 719),
+            change,
             ExtentChange::Rebuild {
                 extent: odd,
                 generation: 1,
             }
         );
-        assert_eq!(tracker.update(1279, 719), ExtentChange::Unchanged);
+        let (tracker, change) = tracker.updated(1279, 719);
+        assert_eq!(change, ExtentChange::Unchanged);
         assert_eq!(tracker.generation(), 1);
 
+        let (_, change) = tracker.updated(1280, 719);
         assert_eq!(
-            tracker.update(1280, 719),
+            change,
             ExtentChange::Rebuild {
                 extent: RenderExtent::new(1280, 719).expect("both dimensions are nonzero"),
                 generation: 2,
@@ -118,16 +120,17 @@ mod tests {
 
     #[test]
     fn returning_from_zero_rebuilds_the_extent_generation() {
-        let mut tracker = ExtentTracker::default();
-        assert!(matches!(
-            tracker.update(800, 600),
-            ExtentChange::Rebuild { .. }
-        ));
+        let tracker = ExtentTracker::default();
+        let (tracker, change) = tracker.updated(800, 600);
+        assert!(matches!(change, ExtentChange::Rebuild { .. }));
 
-        assert_eq!(tracker.update(0, 0), ExtentChange::Paused);
-        assert_eq!(tracker.update(0, 0), ExtentChange::Unchanged);
+        let (tracker, change) = tracker.updated(0, 0);
+        assert_eq!(change, ExtentChange::Paused);
+        let (tracker, change) = tracker.updated(0, 0);
+        assert_eq!(change, ExtentChange::Unchanged);
+        let (_, change) = tracker.updated(800, 600);
         assert_eq!(
-            tracker.update(800, 600),
+            change,
             ExtentChange::Rebuild {
                 extent: RenderExtent::new(800, 600).expect("both dimensions are nonzero"),
                 generation: 2,
@@ -139,7 +142,7 @@ mod tests {
     fn preview_update_does_not_commit_the_candidate_generation() {
         let tracker = ExtentTracker::default();
 
-        let (candidate, change) = tracker.preview_update(1920, 1080);
+        let (candidate, change) = tracker.updated(1920, 1080);
 
         assert_eq!(tracker.extent(), None);
         assert_eq!(tracker.generation(), 0);

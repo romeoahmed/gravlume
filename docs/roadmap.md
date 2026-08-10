@@ -10,8 +10,8 @@
 
 - 最新 macOS/Metal，以及具名 Windows/Linux desktop Vulkan adapter/driver 原生 smoke；
 - wgpu validation 无错误，奇数 extent 和边界 workgroup 无 OOB；
-- acquire/submit/present 每帧协议、suspend/resume 与 surface reconfigure 测试通过；
-- wgpu 30 的每个 surface acquire variant 都有处理测试；one-shot readback 在提交后立即 idle 仍能完成；
+- acquire → submit → egui texture release → present 保持单一线性实现，并通过 native validation smoke；suspend/resume 与 surface reconfigure 测试通过；
+- wgpu 30 的每个 surface acquire variant 在 production match 中穷尽处理；one-shot readback 在提交后立即 idle 仍能完成；
 - 发行闭包不依赖未记录的外部 shader compiler、动态库或网络资产。
 
 ## Phase 1 · 领域与 CPU reference

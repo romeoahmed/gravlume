@@ -99,6 +99,7 @@ impl SceneCompute {
 
         SceneTarget {
             extent,
+            #[cfg(test)]
             texture,
             view,
             bind_group,
@@ -124,6 +125,7 @@ impl SceneCompute {
 
 pub struct SceneTarget {
     extent: RenderExtent,
+    #[cfg(test)]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
@@ -134,7 +136,8 @@ impl SceneTarget {
         self.extent
     }
 
-    pub(crate) const fn texture(&self) -> &wgpu::Texture {
+    #[cfg(test)]
+    const fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
 
@@ -205,7 +208,7 @@ async fn request_probe_device() -> Result<(wgpu::Device, wgpu::Queue), ProbeErro
     if !adapter.get_downlevel_capabilities().is_webgpu_compliant() {
         return Err(ProbeError::Downlevel);
     }
-    let required_features = wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::CLEAR_TEXTURE;
+    let required_features = crate::capabilities::BASELINE_FEATURES;
     let missing_features = required_features - adapter.features();
     if !missing_features.is_empty() {
         return Err(ProbeError::MissingFeatures(missing_features));
@@ -246,7 +249,6 @@ fn encode_probe(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Phase 0 headless encoder"),
     });
-    encoder.clear_texture(target.texture(), &wgpu::ImageSubresourceRange::default());
     compute.encode(&mut encoder, target, None);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {

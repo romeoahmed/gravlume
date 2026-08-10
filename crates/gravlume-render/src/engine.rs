@@ -9,12 +9,19 @@ use crate::{
         install_device_callbacks, scoped_gpu_operation,
     },
     scene::{SceneCompute, SceneTarget},
-    surface::{
-        AcquireOutcome, FrameProtocol, FrameProtocolError, FrameSkip, SurfaceDirective,
-        directive_for,
-    },
     timing::{GpuTimings, TimingSample},
 };
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameSkip {
+    ZeroExtent,
+    Suspended,
+    Timeout,
+    Occluded,
+    Outdated,
+    Lost,
+    Validation,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameStatus {
@@ -40,42 +47,41 @@ impl PollOutcome {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RenderDiagnostics {
-    adapter_name: String,
-    backend: String,
-    driver: String,
-    surface_format: String,
-    color_space: String,
+pub struct RenderDiagnostics<'a> {
+    adapter_name: &'a str,
+    backend: &'a str,
+    driver: &'a str,
+    surface_format: &'a str,
+    color_space: &'a str,
     display_transfer: &'static str,
     extent_generation: u64,
     timing: Option<TimingSample>,
 }
 
-impl RenderDiagnostics {
+impl RenderDiagnostics<'_> {
     #[must_use]
-    pub fn adapter_name(&self) -> &str {
-        &self.adapter_name
+    pub const fn adapter_name(&self) -> &str {
+        self.adapter_name
     }
 
     #[must_use]
-    pub fn backend(&self) -> &str {
-        &self.backend
+    pub const fn backend(&self) -> &str {
+        self.backend
     }
 
     #[must_use]
-    pub fn driver(&self) -> &str {
-        &self.driver
+    pub const fn driver(&self) -> &str {
+        self.driver
     }
 
     #[must_use]
-    pub fn surface_format(&self) -> &str {
-        &self.surface_format
+    pub const fn surface_format(&self) -> &str {
+        self.surface_format
     }
 
     #[must_use]
-    pub fn color_space(&self) -> &str {
-        &self.color_space
+    pub const fn color_space(&self) -> &str {
+        self.color_space
     }
 
     #[must_use]
@@ -100,31 +106,6 @@ impl RenderDiagnostics {
 struct FrameResources {
     scene: SceneTarget,
     display_bind_group: wgpu::BindGroup,
-    needs_clear: bool,
-}
-
-enum SurfaceAcquisition {
-    Render {
-        texture: wgpu::SurfaceTexture,
-        reconfigure_after_present: bool,
-    },
-    Skip(FrameSkip),
-    Reconfigure,
-    Recreate,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MissingSurfaceDirective {
-    SkipSuspended,
-    Recreate,
-}
-
-const fn missing_surface_directive(surface_suspended: bool) -> MissingSurfaceDirective {
-    if surface_suspended {
-        MissingSurfaceDirective::SkipSuspended
-    } else {
-        MissingSurfaceDirective::Recreate
-    }
 }
 
 enum PreparedSurfaceFrame {
@@ -147,7 +128,34 @@ impl FrameResources {
         Self {
             scene,
             display_bind_group,
-            needs_clear: true,
+        }
+    }
+}
+
+struct DiagnosticLabels {
+    adapter_name: String,
+    backend: String,
+    driver: String,
+    surface_format: String,
+    color_space: String,
+    display_transfer: &'static str,
+}
+
+impl DiagnosticLabels {
+    fn new(adapter: &wgpu::AdapterInfo, selection: SurfaceSelection) -> Self {
+        Self {
+            adapter_name: adapter.name.clone(),
+            backend: format!("{:?}", adapter.backend),
+            driver: format!("{} {}", adapter.driver, adapter.driver_info)
+                .trim()
+                .to_owned(),
+            surface_format: format!("{:?}", selection.format()),
+            color_space: format!("{:?}", selection.color_space()),
+            display_transfer: if selection.requires_manual_srgb_encoding() {
+                "shader sRGB encoding"
+            } else {
+                "surface sRGB encoding"
+            },
         }
     }
 }
@@ -167,7 +175,7 @@ pub struct GpuEngine {
     display: DisplayPipeline,
     egui_renderer: egui_wgpu::Renderer,
     timings: GpuTimings,
-    adapter_info: wgpu::AdapterInfo,
+    diagnostic_labels: DiagnosticLabels,
     device_event_sender: mpsc::Sender<DeviceEvent>,
     device_events: mpsc::Receiver<DeviceEvent>,
 }
@@ -206,6 +214,7 @@ impl GpuEngine {
         })?;
         let selection = select_surface(&surface.get_capabilities(&adapter))
             .map_err(|error| RenderInitError::SurfaceCapabilities(error.to_string()))?;
+        let diagnostic_labels = DiagnosticLabels::new(&adapter_info, selection);
         let adapter_limits = adapter.limits();
         let required_limits = wgpu::Limits::default()
             .using_resolution(adapter_limits.clone())
@@ -245,7 +254,7 @@ impl GpuEngine {
             display,
             egui_renderer,
             timings,
-            adapter_info,
+            diagnostic_labels,
             device_event_sender,
             device_events,
         };
@@ -268,7 +277,7 @@ impl GpuEngine {
     /// Returns a typed error without changing the installed extent generation or frame-resource
     /// bundle when the requested extent, surface configuration, or GPU allocation is invalid.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ResizeError> {
-        let (candidate_extent, change) = self.extent.preview_update(width, height);
+        let (candidate_extent, change) = self.extent.updated(width, height);
         match change {
             ExtentChange::Unchanged => return Ok(()),
             ExtentChange::Paused => {
@@ -310,8 +319,7 @@ impl GpuEngine {
     ///
     /// # Errors
     ///
-    /// Returns an error when surface recovery, frame-resource validation, or the internal frame
-    /// protocol fails.
+    /// Returns an error when surface recovery or frame-resource validation fails.
     pub fn render(
         &mut self,
         paint_jobs: &[egui::ClippedPrimitive],
@@ -330,8 +338,6 @@ impl GpuEngine {
                 PreparedSurfaceFrame::Skip(reason) => return Ok(FrameStatus::Skipped(reason)),
             };
 
-        let mut protocol = FrameProtocol::default();
-        protocol.acquired().map_err(frame_protocol_error)?;
         let surface_view = surface_texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -368,13 +374,6 @@ impl GpuEngine {
             .as_mut()
             .ok_or(RenderRuntimeError::MissingFrameResources)?;
         debug_assert_eq!(frame.scene.extent(), extent);
-        if frame.needs_clear {
-            encoder.clear_texture(
-                frame.scene.texture(),
-                &wgpu::ImageSubresourceRange::default(),
-            );
-            frame.needs_clear = false;
-        }
         let compute_writes = capture_timing.then(|| self.timings.compute_writes());
         self.scene_compute
             .encode(&mut encoder, &frame.scene, compute_writes);
@@ -398,16 +397,12 @@ impl GpuEngine {
         let main_buffer = encoder.finish();
         self.queue
             .submit(callback_buffers.into_iter().chain([main_buffer]));
-        protocol.submitted().map_err(frame_protocol_error)?;
         free_egui_textures_after_submit(&mut self.egui_renderer, textures_delta);
-        protocol.textures_released().map_err(frame_protocol_error)?;
         if capture_timing {
             self.timings.begin_readback();
         }
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
-        protocol.presented().map_err(frame_protocol_error)?;
-        debug_assert!(protocol.is_complete());
 
         if reconfigure_after_present {
             self.reconfigure_surface(extent);
@@ -459,23 +454,14 @@ impl GpuEngine {
         Ok(())
     }
 
-    pub fn diagnostics(&self) -> RenderDiagnostics {
+    pub fn diagnostics(&self) -> RenderDiagnostics<'_> {
         RenderDiagnostics {
-            adapter_name: self.adapter_info.name.clone(),
-            backend: format!("{:?}", self.adapter_info.backend),
-            driver: format!(
-                "{} {}",
-                self.adapter_info.driver, self.adapter_info.driver_info
-            )
-            .trim()
-            .to_owned(),
-            surface_format: format!("{:?}", self.selection.format()),
-            color_space: format!("{:?}", self.selection.color_space()),
-            display_transfer: if self.selection.requires_manual_srgb_encoding() {
-                "shader sRGB encoding"
-            } else {
-                "surface sRGB encoding"
-            },
+            adapter_name: &self.diagnostic_labels.adapter_name,
+            backend: &self.diagnostic_labels.backend,
+            driver: &self.diagnostic_labels.driver,
+            surface_format: &self.diagnostic_labels.surface_format,
+            color_space: &self.diagnostic_labels.color_space,
+            display_transfer: self.diagnostic_labels.display_transfer,
             extent_generation: self.extent.generation(),
             timing: self.timings.latest(),
         }
@@ -485,39 +471,49 @@ impl GpuEngine {
         &mut self,
         extent: RenderExtent,
     ) -> Result<PreparedSurfaceFrame, RenderRuntimeError> {
-        let acquisition = {
-            match self.surface.as_ref() {
-                Some(surface) => acquire_surface_frame(surface),
-                None => match missing_surface_directive(self.surface_suspended) {
-                    MissingSurfaceDirective::SkipSuspended => {
-                        return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Suspended));
-                    }
-                    MissingSurfaceDirective::Recreate => SurfaceAcquisition::Recreate,
-                },
+        let acquisition = match self.surface.as_ref() {
+            Some(surface) => surface.get_current_texture(),
+            None if self.surface_suspended => {
+                return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Suspended));
+            }
+            None => {
+                return Ok(PreparedSurfaceFrame::Skip(if self.recreate_surface()? {
+                    FrameSkip::Lost
+                } else {
+                    FrameSkip::Validation
+                }));
             }
         };
+
         let frame = match acquisition {
-            SurfaceAcquisition::Render {
+            wgpu::CurrentSurfaceTexture::Success(texture) => PreparedSurfaceFrame::Render {
                 texture,
-                reconfigure_after_present,
-            } => PreparedSurfaceFrame::Render {
-                texture,
-                reconfigure_after_present,
+                reconfigure_after_present: false,
             },
-            SurfaceAcquisition::Skip(reason) => PreparedSurfaceFrame::Skip(reason),
-            SurfaceAcquisition::Reconfigure => {
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => PreparedSurfaceFrame::Render {
+                texture,
+                reconfigure_after_present: true,
+            },
+            wgpu::CurrentSurfaceTexture::Timeout => PreparedSurfaceFrame::Skip(FrameSkip::Timeout),
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                PreparedSurfaceFrame::Skip(FrameSkip::Occluded)
+            }
+            wgpu::CurrentSurfaceTexture::Outdated => {
                 PreparedSurfaceFrame::Skip(if self.reconfigure_surface(extent) {
                     FrameSkip::Outdated
                 } else {
                     FrameSkip::Validation
                 })
             }
-            SurfaceAcquisition::Recreate => {
+            wgpu::CurrentSurfaceTexture::Lost => {
                 PreparedSurfaceFrame::Skip(if self.recreate_surface()? {
                     FrameSkip::Lost
                 } else {
                     FrameSkip::Validation
                 })
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                PreparedSurfaceFrame::Skip(FrameSkip::Validation)
             }
         };
         Ok(frame)
@@ -569,10 +565,6 @@ impl GpuEngine {
     }
 }
 
-fn frame_protocol_error(error: FrameProtocolError) -> RenderRuntimeError {
-    RenderRuntimeError::FrameProtocol(error.to_string())
-}
-
 const fn validate_extent_limit(
     extent: RenderExtent,
     max_texture_dimension_2d: u32,
@@ -585,70 +577,6 @@ const fn validate_extent_limit(
         });
     }
     Ok(())
-}
-
-fn acquire_surface_frame(surface: &wgpu::Surface<'_>) -> SurfaceAcquisition {
-    match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(texture) => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Success),
-                SurfaceDirective::Render {
-                    reconfigure_after_present: false
-                }
-            );
-            SurfaceAcquisition::Render {
-                texture,
-                reconfigure_after_present: false,
-            }
-        }
-        wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Suboptimal),
-                SurfaceDirective::Render {
-                    reconfigure_after_present: true
-                }
-            );
-            SurfaceAcquisition::Render {
-                texture,
-                reconfigure_after_present: true,
-            }
-        }
-        wgpu::CurrentSurfaceTexture::Timeout => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Timeout),
-                SurfaceDirective::Skip(FrameSkip::Timeout)
-            );
-            SurfaceAcquisition::Skip(FrameSkip::Timeout)
-        }
-        wgpu::CurrentSurfaceTexture::Occluded => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Occluded),
-                SurfaceDirective::Skip(FrameSkip::Occluded)
-            );
-            SurfaceAcquisition::Skip(FrameSkip::Occluded)
-        }
-        wgpu::CurrentSurfaceTexture::Outdated => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Outdated),
-                SurfaceDirective::Reconfigure
-            );
-            SurfaceAcquisition::Reconfigure
-        }
-        wgpu::CurrentSurfaceTexture::Lost => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Lost),
-                SurfaceDirective::Recreate
-            );
-            SurfaceAcquisition::Recreate
-        }
-        wgpu::CurrentSurfaceTexture::Validation => {
-            debug_assert_eq!(
-                directive_for(AcquireOutcome::Validation),
-                SurfaceDirective::Skip(FrameSkip::Validation)
-            );
-            SurfaceAcquisition::Skip(FrameSkip::Validation)
-        }
-    }
 }
 
 fn configure_surface_checked(
@@ -675,30 +603,21 @@ fn configure_surface_scoped(
     extent: RenderExtent,
 ) -> Result<(), wgpu::Error> {
     scoped_gpu_operation(device, || {
-        configure_surface(surface, device, selection, extent);
+        surface.configure(
+            device,
+            &wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: selection.format(),
+                color_space: selection.color_space(),
+                width: extent.width(),
+                height: extent.height(),
+                present_mode: selection.present_mode(),
+                desired_maximum_frame_latency: 2,
+                alpha_mode: selection.alpha_mode(),
+                view_formats: vec![],
+            },
+        );
     })
-}
-
-fn configure_surface(
-    surface: &wgpu::Surface<'_>,
-    device: &wgpu::Device,
-    selection: SurfaceSelection,
-    extent: RenderExtent,
-) {
-    surface.configure(
-        device,
-        &wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: selection.format(),
-            color_space: selection.color_space(),
-            width: extent.width(),
-            height: extent.height(),
-            present_mode: selection.present_mode(),
-            desired_maximum_frame_latency: 2,
-            alpha_mode: selection.alpha_mode(),
-            view_formats: vec![],
-        },
-    );
 }
 
 fn encode_egui(
@@ -742,9 +661,7 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MissingSurfaceDirective, ResizeError, missing_surface_directive, validate_extent_limit,
-    };
+    use super::{ResizeError, validate_extent_limit};
     use crate::extent::RenderExtent;
 
     #[test]
@@ -778,17 +695,5 @@ mod tests {
                 max_texture_dimension_2d: 8_192,
             })
         ));
-    }
-
-    #[test]
-    fn missing_surface_retries_only_after_the_application_resumes() {
-        assert_eq!(
-            missing_surface_directive(true),
-            MissingSurfaceDirective::SkipSuspended
-        );
-        assert_eq!(
-            missing_surface_directive(false),
-            MissingSurfaceDirective::Recreate
-        );
     }
 }

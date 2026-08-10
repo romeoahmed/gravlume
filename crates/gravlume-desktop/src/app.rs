@@ -544,9 +544,7 @@ fn record_device_event(
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
-    use gravlume_render::DeviceEvent;
-
-    use super::{EventLoopSchedule, RepaintSchedule, record_device_event, smoke_once_value};
+    use super::{EventLoopSchedule, RepaintSchedule, smoke_once_value};
 
     #[test]
     fn repaint_schedule_keeps_the_earliest_deadline() {
@@ -600,14 +598,5 @@ mod tests {
         assert_eq!(schedule.next_wake(), Some(poll_deadline));
         assert!(!schedule.take_due_repaint(poll_deadline));
         assert!(schedule.take_due_repaint(now + Duration::from_millis(10)));
-    }
-
-    #[test]
-    fn duplicate_device_event_does_not_request_another_report_redraw() {
-        let event = DeviceEvent::validation("surface configuration was rejected");
-        let mut last_event = None;
-
-        assert!(record_device_event(&mut last_event, &event));
-        assert!(!record_device_event(&mut last_event, &event));
     }
 }

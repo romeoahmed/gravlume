@@ -35,7 +35,7 @@ D3D12、GLES、Web/WebGL 不在首版兼容声明内。release build 只创建�
 
 1. [`DownlevelCapabilities::is_webgpu_compliant`](https://docs.rs/wgpu/30.0.0/wgpu/struct.DownlevelCapabilities.html#method.is_webgpu_compliant) 为真；
 2. 满足项目 limits 以及每个实际纹理的 usage/format 要求；
-3. 支持 `TIMESTAMP_QUERY` 与 `CLEAR_TEXTURE`；
+3. 支持当前 frame graph 使用的 `TIMESTAMP_QUERY`；
 4. 不是 software adapter，专用 headless 测试除外；
 5. 从 `SurfaceCapabilities::format_capabilities` 选择合法的 format/color-space pair，并从 capabilities 选择 present mode。
 
@@ -61,10 +61,9 @@ Cargo feature 决定编译哪些 backend 和 shader frontend；[`FeaturesWebGPU`
 
 - core WGSL `f32`、compute、storage buffer/texture 和 WebGPU baseline limits 承担 geometry、transport、reconstruction 与 display；
 - `TIMESTAMP_QUERY` 提供 pass-boundary GPU 时间；结果乘 `Queue::get_timestamp_period`；
-- `CLEAR_TEXTURE` 负责语义确实为零的 history/diagnostic 初始化；
 - scene-linear HDR 使用 `rgba16float`，metadata 使用整数 buffer/texture；创建前验证实际 usages。
 
-[`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY) 与 [`CLEAR_TEXTURE`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWGPU.html#associatedconstant.CLEAR_TEXTURE) 均覆盖 Metal 与 Vulkan，且有直接消费者，因此作为发布要求而非兼容分支。
+[`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY) 有直接消费者，因此是当前发布要求。[`CLEAR_TEXTURE`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWGPU.html#associatedconstant.CLEAR_TEXTURE) 只在 history/diagnostic 资源确实需要零初始化时加入 resolved plan；整幅覆盖写入的纹理不为清零请求额外 feature。
 
 ### 5.2 可选加速 variant
 
