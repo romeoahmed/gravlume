@@ -10,6 +10,9 @@ mod gpu_error;
 mod scene;
 mod timing;
 
+#[cfg(test)]
+mod test_gpu;
+
 #[doc(hidden)]
 pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
 #[doc(hidden)]

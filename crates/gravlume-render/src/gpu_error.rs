@@ -234,69 +234,32 @@ const fn device_error_kind(error: &wgpu::Error) -> DeviceEventKind {
 mod tests {
     use super::{GpuErrorScopes, scoped_gpu_operation};
 
+    fn create_invalid_shader(device: &wgpu::Device) -> wgpu::ShaderModule {
+        device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("intentionally invalid contract-test shader"),
+            source: wgpu::ShaderSource::Wgsl("@compute fn broken(".into()),
+        })
+    }
+
     #[test]
     fn initialization_error_scopes_capture_invalid_wgsl() {
-        pollster::block_on(async {
-            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            descriptor.backends = crate::native_backends();
-            let instance = wgpu::Instance::new(descriptor);
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: false,
-                })
-                .await
-                .expect("native adapter is available");
-            let (device, _queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
-                .await
-                .expect("test device request succeeds");
-            let scopes = GpuErrorScopes::push(&device);
+        let device = &crate::test_gpu::native_gpu().device;
+        let scopes = GpuErrorScopes::push(device);
 
-            let _invalid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("intentionally invalid initialization shader"),
-                source: wgpu::ShaderSource::Wgsl("@compute fn broken(".into()),
-            });
+        let _invalid_shader = create_invalid_shader(device);
 
-            let error = scopes
-                .finish()
-                .await
-                .expect_err("invalid WGSL is reported through the initialization scope");
-            assert!(matches!(error, wgpu::Error::Validation { .. }));
-        });
+        let error = pollster::block_on(scopes.finish())
+            .expect_err("invalid WGSL is reported through the initialization scope");
+        assert!(matches!(error, wgpu::Error::Validation { .. }));
     }
 
     #[test]
     fn synchronous_runtime_scope_reports_invalid_resource_creation() {
-        pollster::block_on(async {
-            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            descriptor.backends = crate::native_backends();
-            let instance = wgpu::Instance::new(descriptor);
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: false,
-                })
-                .await
-                .expect("native adapter is available");
-            let (device, _queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
-                .await
-                .expect("test device request succeeds");
+        let device = &crate::test_gpu::native_gpu().device;
 
-            let error = scoped_gpu_operation(&device, || {
-                device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("intentionally invalid runtime shader"),
-                    source: wgpu::ShaderSource::Wgsl("@compute fn broken(".into()),
-                })
-            })
+        let error = scoped_gpu_operation(device, || create_invalid_shader(device))
             .expect_err("invalid runtime resource creation is reported by its local scope");
 
-            assert!(matches!(error, wgpu::Error::Validation { .. }));
-        });
+        assert!(matches!(error, wgpu::Error::Validation { .. }));
     }
 }
