@@ -1,0 +1,51 @@
+schema_version = 1
+profile = "baseline-v1"
+id = "schwarzschild-scatter-near-critical-v1"
+kind = "geodesic"
+evidence = "numeric"
+
+[producer]
+method = "80-digit direct-r and reciprocal-u quadrature"
+precision_digits = 80
+cross_form_azimuth_disagreement = "9.0537799e-41"
+
+[spacetime]
+family = "kerr-newman"
+chart = "ingoing-cartesian-kerr-schild"
+signature = "mostly-plus"
+component_order = "txyz"
+mass_m = "1"
+spin_m = "0"
+charge_m = "0"
+
+[initial]
+position_txyz_m = ["0", "50", "0", "0"]
+momentum_covariant = [
+  "-1",
+  "-0.99458384064358737043378822923853435732895414351980691399472513718570554927916145",
+  "0.103943048454132637611646780490352342016568315228622837683348418767115981014528",
+  "0",
+]
+affine_direction = "positive"
+energy_at_infinity = "1"
+
+[events]
+escape_radius_m = "50"
+escape_event_initially_armed = false
+
+[applicability]
+class = "near-critical"
+orbit = "equatorial-single-turn-scatter"
+critical_impact_parameter_m = "5.196152422706631880582339024517617100829"
+impact_parameter_offset_m = "0.001"
+side = "escape"
+
+[expected]
+termination = "escape"
+turning_radius_m = "3.034497655706080454343638050694227224458"
+azimuth_advance_rad = "11.08947404451632010196559671422843740259"
+initial_null_abs = "3.16803843302710553134034437517e-81"
+
+[tolerance]
+turning_radius_abs_m = "5e-10"
+azimuth_advance_abs_rad = "2e-8"

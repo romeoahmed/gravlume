@@ -1,0 +1,50 @@
+schema_version = 1
+profile = "baseline-v1"
+id = "schwarzschild-capture-near-critical-v1"
+kind = "geodesic"
+evidence = "numeric"
+
+[producer]
+method = "80-digit direct-r and reciprocal-u quadrature"
+precision_digits = 80
+cross_form_azimuth_disagreement = "2.9033371619760750758e-55"
+
+[spacetime]
+family = "kerr-newman"
+chart = "ingoing-cartesian-kerr-schild"
+signature = "mostly-plus"
+component_order = "txyz"
+mass_m = "1"
+spin_m = "0"
+charge_m = "0"
+
+[initial]
+position_txyz_m = ["0", "50", "0", "0"]
+momentum_covariant = [
+  "-1",
+  "-0.99458801928403951714526434933418566175320372274889538959440582464048444954731754",
+  "0.103903048454132637611646780490352342016568315228622837683348418767115981014528",
+  "0",
+]
+affine_direction = "positive"
+energy_at_infinity = "1"
+
+[events]
+outer_horizon_radius_m = "2"
+
+[applicability]
+class = "near-critical"
+orbit = "equatorial-capture"
+critical_impact_parameter_m = "5.196152422706631880582339024517617100829"
+impact_parameter_offset_m = "-0.001"
+side = "capture"
+
+[expected]
+termination = "horizon-crossing"
+event_radius_m = "2"
+azimuth_advance_rad = "9.8753378136866925805300119724165812251909920979233"
+initial_null_abs = "3.66425658494178588208384401905e-81"
+
+[tolerance]
+event_radius_abs_m = "2e-10"
+azimuth_advance_abs_rad = "2e-8"

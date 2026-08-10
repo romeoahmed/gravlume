@@ -1,0 +1,48 @@
+schema_version = 1
+profile = "baseline-v1"
+id = "schwarzschild-scatter-b6-v1"
+kind = "geodesic"
+evidence = "numeric"
+
+[producer]
+method = "80-digit direct-r and reciprocal-u quadrature"
+precision_digits = 80
+cross_form_azimuth_disagreement = "5.6176902e-41"
+
+[spacetime]
+family = "kerr-newman"
+chart = "ingoing-cartesian-kerr-schild"
+signature = "mostly-plus"
+component_order = "txyz"
+mass_m = "1"
+spin_m = "0"
+charge_m = "0"
+
+[initial]
+position_txyz_m = ["0", "50", "0", "0"]
+momentum_covariant = [
+  "-1",
+  "-0.99277494330677424337355254840577841602316427996638407416694633896574636965694494",
+  "0.12",
+  "0",
+]
+affine_direction = "positive"
+energy_at_infinity = "1"
+
+[events]
+escape_radius_m = "50"
+escape_event_initially_armed = false
+
+[applicability]
+class = "regular"
+orbit = "equatorial-single-turn-scatter"
+
+[expected]
+termination = "escape"
+turning_radius_m = "4.453363193811354931623303616376185063746"
+azimuth_advance_rad = "4.620418726881239063416504280864374022974"
+initial_null_abs = "4.91454214841681154173676126201e-81"
+
+[tolerance]
+turning_radius_abs_m = "5e-11"
+azimuth_advance_abs_rad = "5e-10"

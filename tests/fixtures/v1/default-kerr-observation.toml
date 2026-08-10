@@ -1,0 +1,55 @@
+schema_version = 1
+profile = "baseline-v1"
+id = "kerr-exterior-observation-v1"
+kind = "observation"
+evidence = "algebraic-and-numeric"
+
+[producer]
+method = "closed-form construction checked at 80 decimal digits"
+precision_digits = 80
+
+[spacetime]
+family = "kerr-newman"
+chart = "ingoing-cartesian-kerr-schild"
+signature = "mostly-plus"
+component_order = "txyz"
+mass_m = "1"
+spin_m = "0.8"
+charge_m = "0"
+
+[observer]
+coordinate_time_m = "0"
+oblate_radius_m = "30"
+polar_angle_rad = "1.0471975511965977461542144610931676280657231331250352736583148641026054687620697"
+azimuth_rad = "0"
+state = "stationary"
+target_txyz_m = ["0", "0", "0", "0"]
+up_hint = "spin-positive-z"
+measured_frequency = "1"
+
+[viewport]
+projection = "perspective"
+width = 1280
+height = 720
+vertical_fov_rad = "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225"
+origin = "top-left"
+default_subpixel = ["0.5", "0.5"]
+
+[events]
+escape_radius_m = "200"
+singularity_guard_d_over_m4 = "9.094947017729282379150390625e-13"
+
+[expected]
+parameter_state = "subextremal"
+outer_horizon_radius_m = "1.6"
+observer_cartesian_xyz_m = [
+  "25.980762113533159402911695122588085504142078807155709420837104691778995253632001",
+  "0.69282032302755091741097853660234894677712210152415225122232279178077320676352001",
+  "15.0",
+]
+observer_g_tt = "-0.93334518307856381087806612157838606469960895840739424102381798791325986491290437"
+
+[tolerance]
+radius_abs_m = "2e-13"
+frame_gram_max_abs = "2e-12"
+initial_null_normalized_abs = "2e-12"
