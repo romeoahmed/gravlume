@@ -315,8 +315,9 @@ egui input + validate/commit
   -> spatial reconstruction
   -> stationary/branch-aware history
   -> scene-linear bloom
-  -> display transform/gamut encoding
-  -> egui overlay
+  -> display transform into gamma-space composite
+  -> egui overlay on composite
+  -> surface presentation encoding
   -> submit + present
 ```
 
@@ -324,9 +325,9 @@ coarse/refine 必须使用同一 resolved solver，不能在相邻像素静默�
 
 renderer 内部资源分三层：
 
-- `DeviceResources`：device/queue、shader、layout、pipeline、sampler，直到 device lost；
+- `DeviceResources`：device/queue、shader、layout、pipeline、sampler，直到 device lost；只有无状态的最终 presentation pipeline 随 surface format 换代；
 - `SceneResources`：sky/disk/LUT、scene buffer，随 geometry/transport/asset generation；
-- `FrameResources`：HDR/coarse/history/bloom/readback ring，随 extent/format/quality generation。
+- `FrameResources`：HDR/coarse/history/bloom、gamma-space display composite 与 readback ring，随 extent/quality generation。
 
 重建使用 two-phase install：先完整创建新 bundle、验证 binding，再原子 swap；失败时保留旧 bundle并报告事件。旧 wgpu handle 可由引用计数延寿到已提交 command 完成，但显存预算必须测新旧两套并存的峰值。
 
@@ -336,11 +337,12 @@ renderer 内部资源分三层：
 
 1. 安装 `textures_delta.set`；
 2. 调 `Renderer::update_buffers` 并收集 paint callback command buffers；
-3. 编码 scene compute/HDR/display；
-4. 以最后一个 surface render pass 调 `Renderer::render`；
-5. 按 `update_buffers` 返回顺序提交 callback buffers 和 main buffer；
-6. egui render 编码完成后处理 `textures_delta.free`，不在本帧使用它之前释放；
-7. `window.pre_present_notify()`，再 present。
+3. 编码 scene compute/HDR，并把 display transform 写入固定 `Rgba8Unorm` gamma-space composite；
+4. 在 composite 的最后一个 overlay pass 调 `Renderer::render`；
+5. 把 composite 编码到当前 surface format；surface format 改变时只事务式替换这个无状态 pipeline；
+6. 按 `update_buffers` 返回顺序提交 callback buffers 和 main buffer；
+7. egui render 编码完成后处理 `textures_delta.free`，不在本帧使用它之前释放；
+8. `window.pre_present_notify()`，再 present。
 
 `Renderer::render` 的 render-pass lifetime 适配被隔离在一个小函数内，并在 finish encoder 前显式结束 pass。忘记 update/free 顺序不能依赖运行时偶然成功。[egui-wgpu Renderer](https://docs.rs/egui-wgpu/0.36.1/egui_wgpu/struct.Renderer.html)
 
@@ -385,13 +387,13 @@ CPU `tracing` 字段至少包含 frame、generation、adapter/backend、surface 
 
 ## 11. 内存与性能预算
 
-首版布局估算每个 full-resolution internal pixel：HDR `8 B`、source/geometry key `8 B`、metadata `4 B`、history HDR `8 B`、history key `8 B`、weight `2 B`、refine index `4 B`、折算 half-res coarse `5 B`、`Rgba16Float` bloom mip chain `10.67 B`，合计约 **57.7 B/pixel**。它不含 heap alignment、asset、pipeline、driver 和 rebuild 双份峰值。
+首版布局估算每个 full-resolution internal pixel：HDR `8 B`、source/geometry key `8 B`、metadata `4 B`、history HDR `8 B`、history key `8 B`、weight `2 B`、refine index `4 B`、折算 half-res coarse `5 B`、`Rgba16Float` bloom mip chain `10.67 B`、gamma-space display composite `4 B`，合计约 **61.7 B/pixel**。它不含 heap alignment、asset、pipeline、driver 和 rebuild 双份峰值。
 
 | Internal extent | 核心中间资源估算 | 初始政策 |
 |---:|---:|---|
-| 1920×1080 | 约 114 MiB | 中档独显交互基线 |
-| 2560×1440 | 约 203 MiB | 默认 internal extent 上限候选 |
-| 3840×2160 | 约 456 MiB | 不默认 native trace，使用上采样 |
+| 1920×1080 | 约 122 MiB | 中档独显交互基线 |
+| 2560×1440 | 约 217 MiB | 默认 internal extent 上限候选 |
+| 3840×2160 | 约 488 MiB | 不默认 native trace，使用上采样 |
 
 性能验收而非当前成果：
 

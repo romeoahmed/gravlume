@@ -240,9 +240,9 @@ impl DesktopApp {
                 }
             }
             Err(error) => {
+                let fatal_message = error.is_fatal().then(|| error.to_string());
                 let event = DeviceEvent::from(error);
                 tracing::error!(kind = ?event.kind(), message = event.message(), width, height, "GPU resize rejected");
-                let fatal_message = event.is_fatal().then(|| event.message().to_owned());
                 let report_changed = self.last_device_event.as_ref() != Some(&event);
                 if report_changed {
                     self.last_device_event = Some(event);
@@ -270,6 +270,12 @@ impl DesktopApp {
             self.fatal_error = Some(error);
         }
         event_loop.exit();
+    }
+}
+
+impl Drop for DesktopApp {
+    fn drop(&mut self) {
+        self.pending_textures.clear();
     }
 }
 

@@ -33,8 +33,8 @@ pub enum RenderRuntimeError {
     Poll(#[from] wgpu::PollError),
     #[error("failed to recreate a lost surface: {0}")]
     RecreateSurface(#[from] wgpu::CreateSurfaceError),
-    #[error("surface capabilities changed incompatibly while recovering")]
-    SurfaceCapabilitiesChanged,
+    #[error("recovered surface does not satisfy the SDR presentation contract: {0}")]
+    SurfaceCapabilities(String),
     #[error("nonzero extent has no matching frame-resource bundle")]
     MissingFrameResources,
 }
@@ -49,8 +49,8 @@ pub enum ResizeError {
         height: u32,
         max_texture_dimension_2d: u32,
     },
-    #[error("the surface no longer supports the active presentation configuration")]
-    SurfaceCapabilitiesChanged,
+    #[error("surface does not satisfy the SDR presentation contract: {0}")]
+    SurfaceCapabilities(String),
     #[error("failed to {stage}: {source}")]
     GpuResource {
         stage: &'static str,
@@ -63,19 +63,18 @@ impl ResizeError {
     #[must_use]
     pub const fn kind(&self) -> DeviceEventKind {
         match self {
-            Self::ExtentLimit { .. } | Self::SurfaceCapabilitiesChanged => {
-                DeviceEventKind::Validation
-            }
+            Self::ExtentLimit { .. } | Self::SurfaceCapabilities(_) => DeviceEventKind::Validation,
             Self::GpuResource { source, .. } => device_error_kind(source),
         }
     }
 
     #[must_use]
     pub const fn is_fatal(&self) -> bool {
-        matches!(
-            self.kind(),
-            DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
-        )
+        matches!(self, Self::SurfaceCapabilities(_))
+            || matches!(
+                self.kind(),
+                DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
+            )
     }
 }
 
@@ -99,11 +98,6 @@ impl DeviceEvent {
             kind,
             message: message.into(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn validation(message: impl Into<String>) -> Self {
-        Self::new(DeviceEventKind::Validation, message)
     }
 
     #[must_use]
