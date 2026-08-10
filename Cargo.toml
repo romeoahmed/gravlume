@@ -6,4 +6,33 @@ rust-version = "1.97"
 description = "A scientific black-hole visualization instrument"
 publish = false
 
+[workspace]
+members = [".", "crates/gravlume-desktop", "crates/gravlume-render"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+publish = false
+
+[workspace.dependencies]
+egui = "=0.36.1"
+egui-wgpu = { version = "=0.36.1", default-features = false }
+egui-winit = { version = "=0.36.1", default-features = false }
+pollster = "=1.0.1"
+thiserror = "=2.0.20"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt"] }
+wgpu = { version = "=30.0.0", default-features = false, features = ["parking_lot", "std", "wgsl"] }
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_must_use = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+
 [dependencies]
+gravlume-desktop = { path = "crates/gravlume-desktop" }
+tracing-subscriber.workspace = true
