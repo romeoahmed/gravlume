@@ -139,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_update_does_not_commit_the_candidate_generation() {
+    fn updated_returns_a_candidate_without_mutating_the_original() {
         let tracker = ExtentTracker::default();
 
         let (candidate, change) = tracker.updated(1920, 1080);

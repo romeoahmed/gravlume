@@ -1,6 +1,3 @@
-const MAX_WINDOW_DIMENSION: u32 = 16_384;
-const MAX_TITLE_BYTES: usize = 128;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowPreferences {
     title: String,
@@ -9,35 +6,14 @@ pub struct WindowPreferences {
 }
 
 impl WindowPreferences {
-    /// Creates validated native-window preferences.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an empty or oversized title, a zero extent, or an extent above the
-    /// desktop safety bound.
-    pub fn new(
-        title: impl Into<String>,
-        width: u32,
-        height: u32,
-    ) -> Result<Self, WindowPreferencesError> {
-        let title = title.into();
-        if title.trim().is_empty() {
-            return Err(WindowPreferencesError::EmptyTitle);
-        }
-        if title.len() > MAX_TITLE_BYTES {
-            return Err(WindowPreferencesError::TitleTooLong);
-        }
-        if width == 0 || height == 0 {
-            return Err(WindowPreferencesError::ZeroExtent);
-        }
-        if width > MAX_WINDOW_DIMENSION || height > MAX_WINDOW_DIMENSION {
-            return Err(WindowPreferencesError::ExtentTooLarge);
-        }
-        Ok(Self {
-            title,
+    /// Creates native-window preferences.
+    #[must_use]
+    pub fn new(title: impl Into<String>, width: u32, height: u32) -> Self {
+        Self {
+            title: title.into(),
             width,
             height,
-        })
+        }
     }
 
     #[must_use]
@@ -64,18 +40,6 @@ impl Default for WindowPreferences {
             height: 720,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum WindowPreferencesError {
-    #[error("window title must contain a non-whitespace character")]
-    EmptyTitle,
-    #[error("window title exceeds 128 UTF-8 bytes")]
-    TitleTooLong,
-    #[error("initial window extent must be nonzero")]
-    ZeroExtent,
-    #[error("initial window extent exceeds the 16384-pixel safety bound")]
-    ExtentTooLarge,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -87,28 +87,29 @@ pub enum DeviceEventKind {
     Lost,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct DeviceEvent {
     kind: DeviceEventKind,
     message: String,
 }
 
 impl DeviceEvent {
-    #[must_use]
-    pub(crate) fn validation(message: impl Into<String>) -> Self {
+    fn new(kind: DeviceEventKind, message: impl Into<String>) -> Self {
         Self {
-            kind: DeviceEventKind::Validation,
+            kind,
             message: message.into(),
         }
     }
 
     #[must_use]
+    pub(crate) fn validation(message: impl Into<String>) -> Self {
+        Self::new(DeviceEventKind::Validation, message)
+    }
+
+    #[must_use]
     pub(crate) fn from_wgpu(stage: &'static str, error: wgpu::Error) -> Self {
         let (kind, message) = device_error_details(error);
-        Self {
-            kind,
-            message: format!("{stage}: {message}"),
-        }
+        Self::new(kind, format!("{stage}: {message}"))
     }
 
     #[must_use]
@@ -127,6 +128,12 @@ impl DeviceEvent {
             self.kind,
             DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
         )
+    }
+}
+
+impl From<ResizeError> for DeviceEvent {
+    fn from(error: ResizeError) -> Self {
+        Self::new(error.kind(), error.to_string())
     }
 }
 
