@@ -162,7 +162,7 @@ impl ReferenceInstrument {
 ```rust
 pub fn run(launch: Launch) -> Result<(), RunError>;
 
-pub struct Launch { /* private validated fields */ }
+pub struct Launch { /* private launch fields */ }
 
 impl Default for Launch {
     // embedded assets, one Kerr exterior scene, native baseline quality

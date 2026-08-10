@@ -4,9 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gravlume_render::{
-    DeviceEvent, DeviceEventKind, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics,
-};
+use gravlume_render::{DeviceEvent, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
@@ -15,10 +13,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{
-    Launch,
-    lifecycle::{Lifecycle, LifecycleAction},
-};
+use crate::{Launch, lifecycle::Lifecycle};
 
 const PENDING_GPU_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const RETRY_FRAME_INTERVAL: Duration = Duration::from_millis(16);
@@ -44,7 +39,7 @@ pub enum RunError {
 ///
 /// Returns an error when event-loop, window, renderer, or device initialization/runtime fails.
 pub fn run(launch: Launch) -> Result<(), RunError> {
-    let mut builder = EventLoop::<UserEvent>::with_user_event();
+    let mut builder = EventLoop::<Instant>::with_user_event();
     let event_loop = builder
         .build()
         .map_err(|error| RunError::EventLoop(error.to_string()))?;
@@ -55,36 +50,34 @@ pub fn run(launch: Launch) -> Result<(), RunError> {
     app.fatal_error.take().map_or(Ok(()), Err)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum UserEvent {
-    RequestRepaint(Instant),
+struct WindowState {
+    window: Arc<Window>,
+    egui: egui_winit::State,
 }
 
 struct DesktopApp {
     launch: Launch,
     lifecycle: Lifecycle,
-    window: Option<Arc<Window>>,
+    window: Option<WindowState>,
     renderer: Option<GpuEngine>,
     egui_context: egui::Context,
-    egui_state: Option<egui_winit::State>,
-    event_proxy: EventLoopProxy<UserEvent>,
+    event_proxy: EventLoopProxy<Instant>,
     schedule: EventLoopSchedule,
     pending_textures: egui::TexturesDelta,
-    last_device_event: Option<(DeviceEventKind, String)>,
+    last_device_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
     presented_frames: u64,
     smoke_once: bool,
 }
 
 impl DesktopApp {
-    fn new(launch: Launch, event_proxy: EventLoopProxy<UserEvent>) -> Self {
+    fn new(launch: Launch, event_proxy: EventLoopProxy<Instant>) -> Self {
         Self {
             launch,
             lifecycle: Lifecycle::default(),
             window: None,
             renderer: None,
             egui_context: egui::Context::default(),
-            egui_state: None,
             event_proxy,
             schedule: EventLoopSchedule::default(),
             pending_textures: egui::TexturesDelta::default(),
@@ -96,7 +89,9 @@ impl DesktopApp {
     }
 
     fn initialize(&mut self, event_loop: &ActiveEventLoop) -> Result<(), RunError> {
-        if self.window.is_none() {
+        let window = if let Some(window_state) = &self.window {
+            Arc::clone(&window_state.window)
+        } else {
             let window_preferences = self.launch.window();
             let attributes = Window::default_attributes()
                 .with_title(window_preferences.title())
@@ -109,7 +104,7 @@ impl DesktopApp {
                     .create_window(attributes)
                     .map_err(|error| RunError::Window(error.to_string()))?,
             );
-            let state = egui_winit::State::new(
+            let egui = egui_winit::State::new(
                 self.egui_context.clone(),
                 egui::ViewportId::ROOT,
                 window.as_ref(),
@@ -125,22 +120,17 @@ impl DesktopApp {
                     }
                     let now = Instant::now();
                     let deadline = now.checked_add(request.delay).unwrap_or(now);
-                    if repaint_proxy
-                        .send_event(UserEvent::RequestRepaint(deadline))
-                        .is_err()
-                    {
+                    if repaint_proxy.send_event(deadline).is_err() {
                         tracing::debug!("event loop closed before egui repaint request");
                     }
                 });
-            self.egui_state = Some(state);
-            self.window = Some(window);
-        }
-
-        let Some(window) = self.window.as_ref().map(Arc::clone) else {
-            return Err(RunError::Window(
-                "window lifecycle did not retain the created window".to_owned(),
-            ));
+            self.window = Some(WindowState {
+                window: Arc::clone(&window),
+                egui,
+            });
+            window
         };
+
         if let Some(renderer) = self.renderer.as_mut() {
             renderer
                 .resume_surface()
@@ -167,17 +157,16 @@ impl DesktopApp {
 
     fn draw_frame(&mut self, event_loop: &ActiveEventLoop) {
         let render_result = {
-            let (Some(window), Some(state), Some(renderer)) = (
-                self.window.as_ref(),
-                self.egui_state.as_mut(),
-                self.renderer.as_mut(),
-            ) else {
+            let (Some(window_state), Some(renderer)) =
+                (self.window.as_mut(), self.renderer.as_mut())
+            else {
                 return;
             };
+            let window = &window_state.window;
 
             let diagnostics = renderer.diagnostics();
             let device_event = self.last_device_event.as_ref();
-            let raw_input = state.take_egui_input(window);
+            let raw_input = window_state.egui.take_egui_input(window);
             let output = self.egui_context.run_ui(raw_input, |root_ui| {
                 show_overlay(root_ui.ctx(), &diagnostics, device_event);
             });
@@ -186,13 +175,13 @@ impl DesktopApp {
                 textures_delta,
                 shapes,
                 pixels_per_point,
-                viewport_output,
+                ..
             } = output;
-            state.handle_platform_output_with_event_loop(window, event_loop, platform_output);
-            if let Some(viewport) = viewport_output.get(&egui::ViewportId::ROOT) {
-                self.schedule
-                    .request_repaint(Instant::now(), viewport.repaint_delay);
-            }
+            window_state.egui.handle_platform_output_with_event_loop(
+                window,
+                event_loop,
+                platform_output,
+            );
             let paint_jobs = self.egui_context.tessellate(shapes, pixels_per_point);
             self.pending_textures.append(textures_delta);
             renderer.render(&paint_jobs, &self.pending_textures, pixels_per_point)
@@ -201,7 +190,7 @@ impl DesktopApp {
         match render_result {
             Ok(FrameStatus::Presented) => {
                 self.pending_textures.clear();
-                self.presented_frames = self.presented_frames.saturating_add(1);
+                self.presented_frames += 1;
             }
             Ok(FrameStatus::Skipped(FrameSkip::Timeout)) => {
                 self.schedule
@@ -221,13 +210,17 @@ impl DesktopApp {
         }
     }
 
-    fn process_device_events(&mut self, event_loop: &ActiveEventLoop, events: &[DeviceEvent]) {
+    fn process_device_events(&mut self, event_loop: &ActiveEventLoop, events: Vec<DeviceEvent>) {
         let mut report_changed = false;
         for event in events {
             tracing::error!(kind = ?event.kind(), message = event.message(), "GPU device event");
-            report_changed |= record_device_event(&mut self.last_device_event, event);
-            if event.is_fatal() {
-                self.fail(event_loop, RunError::Device(event.message().to_owned()));
+            let fatal_message = event.is_fatal().then(|| event.message().to_owned());
+            if self.last_device_event.as_ref() != Some(&event) {
+                self.last_device_event = Some(event);
+                report_changed = true;
+            }
+            if let Some(message) = fatal_message {
+                self.fail(event_loop, RunError::Device(message));
                 return;
             }
         }
@@ -236,32 +229,36 @@ impl DesktopApp {
         }
     }
 
-    fn resize_renderer(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) -> bool {
-        let Some(result) = self
-            .renderer
-            .as_mut()
-            .map(|renderer| renderer.resize(width, height))
-        else {
-            return false;
+    fn resize_renderer(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
         };
-        match result {
-            Ok(()) => true,
-            Err(error) => {
-                let kind = error.kind();
-                let message = error.to_string();
-                tracing::error!(?kind, %message, width, height, "GPU resize rejected");
-                self.last_device_event = Some((kind, message.clone()));
-                if error.is_fatal() {
-                    self.fail(event_loop, RunError::Device(message));
+        match renderer.resize(width, height) {
+            Ok(()) => {
+                if width != 0 && height != 0 {
+                    self.request_redraw();
                 }
-                false
+            }
+            Err(error) => {
+                let event = DeviceEvent::from(error);
+                tracing::error!(kind = ?event.kind(), message = event.message(), width, height, "GPU resize rejected");
+                let fatal_message = event.is_fatal().then(|| event.message().to_owned());
+                let report_changed = self.last_device_event.as_ref() != Some(&event);
+                if report_changed {
+                    self.last_device_event = Some(event);
+                }
+                if let Some(message) = fatal_message {
+                    self.fail(event_loop, RunError::Device(message));
+                } else if report_changed {
+                    self.request_redraw();
+                }
             }
         }
     }
 
     fn request_redraw(&self) {
         if let Some(window) = &self.window {
-            window.request_redraw();
+            window.window.request_redraw();
         }
     }
 
@@ -276,27 +273,17 @@ impl DesktopApp {
     }
 }
 
-impl Drop for DesktopApp {
-    fn drop(&mut self) {
-        self.pending_textures.clear();
-    }
-}
-
-impl ApplicationHandler<UserEvent> for DesktopApp {
+impl ApplicationHandler<Instant> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.lifecycle.resume() == LifecycleAction::Initialize
+        if self.lifecycle.resume()
             && let Err(error) = self.initialize(event_loop)
         {
             self.fail(event_loop, error);
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
-        match event {
-            UserEvent::RequestRepaint(deadline) => {
-                self.schedule.request_repaint_at(deadline);
-            }
-        }
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, deadline: Instant) {
+        self.schedule.request_repaint_at(deadline);
     }
 
     fn window_event(
@@ -305,18 +292,15 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = self.window.as_ref().map(Arc::clone) else {
+        let Some(window_state) = self.window.as_mut() else {
             return;
         };
+        let window = Arc::clone(&window_state.window);
         if window.id() != window_id {
             return;
         }
 
-        let response = self
-            .egui_state
-            .as_mut()
-            .map(|state| state.on_window_event(&window, &event))
-            .unwrap_or_default();
+        let response = window_state.egui.on_window_event(&window, &event);
         if response.repaint {
             window.request_redraw();
         }
@@ -324,21 +308,11 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if self.resize_renderer(event_loop, size.width, size.height)
-                    && size.width != 0
-                    && size.height != 0
-                {
-                    window.request_redraw();
-                }
+                self.resize_renderer(event_loop, size.width, size.height);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = window.inner_size();
-                if self.resize_renderer(event_loop, size.width, size.height)
-                    && size.width != 0
-                    && size.height != 0
-                {
-                    window.request_redraw();
-                }
+                self.resize_renderer(event_loop, size.width, size.height);
             }
             WindowEvent::RedrawRequested => self.draw_frame(event_loop),
             _ if response.consumed => {}
@@ -352,8 +326,9 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         let poll_result = self.renderer.as_mut().map(GpuEngine::poll);
         match poll_result {
             Some(Ok(outcome)) => {
-                self.process_device_events(event_loop, outcome.events());
-                if self.smoke_once && self.presented_frames > 0 && outcome.completed_readback() {
+                let (completed_readback, events) = outcome.into_parts();
+                self.process_device_events(event_loop, events);
+                if self.smoke_once && self.presented_frames > 0 && completed_readback {
                     tracing::info!("Phase 0 one-frame smoke completed");
                     event_loop.exit();
                     return;
@@ -385,7 +360,7 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.lifecycle.suspend() == LifecycleAction::ReleaseSurface
+        if self.lifecycle.suspend()
             && let Some(renderer) = self.renderer.as_mut()
         {
             renderer.suspend();
@@ -395,8 +370,8 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
 
 fn show_overlay(
     context: &egui::Context,
-    diagnostics: &RenderDiagnostics,
-    device_event: Option<&(DeviceEventKind, String)>,
+    diagnostics: &RenderDiagnostics<'_>,
+    device_event: Option<&DeviceEvent>,
 ) {
     egui::Window::new("Phase 0 · Desktop stack")
         .default_pos([16.0, 16.0])
@@ -433,11 +408,11 @@ fn show_overlay(
             } else {
                 ui.monospace("GPU timing pending");
             }
-            if let Some((kind, message)) = device_event {
+            if let Some(event) = device_event {
                 ui.separator();
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 170, 80),
-                    format!("GPU {kind:?}: {message}"),
+                    format!("GPU {:?}: {}", event.kind(), event.message()),
                 );
             }
         });
@@ -448,17 +423,22 @@ fn show_overlay(
 /// Source: <https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html#method.about_to_wait>
 #[derive(Debug, Default)]
 struct EventLoopSchedule {
-    repaint: RepaintSchedule,
+    repaint_deadline: Option<Instant>,
     gpu_poll_deadline: Option<Instant>,
 }
 
 impl EventLoopSchedule {
     fn request_repaint(&mut self, now: Instant, delay: Duration) {
-        self.repaint.request(now, delay);
+        if delay != Duration::MAX {
+            self.request_repaint_at(now.checked_add(delay).unwrap_or(now));
+        }
     }
 
     fn request_repaint_at(&mut self, deadline: Instant) {
-        self.repaint.request_at(deadline);
+        self.repaint_deadline = Some(
+            self.repaint_deadline
+                .map_or(deadline, |current| current.min(deadline)),
+        );
     }
 
     fn after_gpu_poll(&mut self, now: Instant, has_pending_work: bool) {
@@ -476,11 +456,19 @@ impl EventLoopSchedule {
     }
 
     fn take_due_repaint(&mut self, now: Instant) -> bool {
-        self.repaint.take_due(now)
+        if self
+            .repaint_deadline
+            .is_some_and(|deadline| deadline <= now)
+        {
+            self.repaint_deadline = None;
+            true
+        } else {
+            false
+        }
     }
 
     fn next_wake(&self) -> Option<Instant> {
-        match (self.repaint.deadline(), self.gpu_poll_deadline) {
+        match (self.repaint_deadline, self.gpu_poll_deadline) {
             (Some(repaint), Some(gpu_poll)) => Some(repaint.min(gpu_poll)),
             (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
             (None, None) => None,
@@ -488,76 +476,28 @@ impl EventLoopSchedule {
     }
 }
 
-#[derive(Debug, Default)]
-struct RepaintSchedule {
-    deadline: Option<Instant>,
-}
-
-impl RepaintSchedule {
-    fn request(&mut self, now: Instant, delay: Duration) {
-        if delay == Duration::MAX {
-            return;
-        }
-        self.request_at(now.checked_add(delay).unwrap_or(now));
-    }
-
-    fn request_at(&mut self, deadline: Instant) {
-        self.deadline = Some(
-            self.deadline
-                .map_or(deadline, |current| current.min(deadline)),
-        );
-    }
-
-    fn take_due(&mut self, now: Instant) -> bool {
-        if self.deadline.is_some_and(|deadline| deadline <= now) {
-            self.deadline = None;
-            true
-        } else {
-            false
-        }
-    }
-
-    const fn deadline(&self) -> Option<Instant> {
-        self.deadline
-    }
-}
-
 fn smoke_once_value(value: Option<&OsStr>) -> bool {
     value.is_some_and(|value| value == OsStr::new("1"))
-}
-
-fn record_device_event(
-    last_event: &mut Option<(DeviceEventKind, String)>,
-    event: &DeviceEvent,
-) -> bool {
-    if last_event
-        .as_ref()
-        .is_some_and(|(kind, message)| *kind == event.kind() && message == event.message())
-    {
-        return false;
-    }
-    *last_event = Some((event.kind(), event.message().to_owned()));
-    true
 }
 
 #[cfg(test)]
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
-    use super::{EventLoopSchedule, RepaintSchedule, smoke_once_value};
+    use super::{EventLoopSchedule, smoke_once_value};
 
     #[test]
     fn repaint_schedule_keeps_the_earliest_deadline() {
         let now = std::time::Instant::now();
-        let mut schedule = RepaintSchedule::default();
+        let mut schedule = EventLoopSchedule::default();
 
-        schedule.request(now, Duration::from_millis(20));
-        schedule.request(now, Duration::from_millis(5));
-        schedule.request(now, Duration::from_millis(10));
+        schedule.request_repaint(now, Duration::from_millis(20));
+        schedule.request_repaint(now, Duration::from_millis(5));
+        schedule.request_repaint(now, Duration::from_millis(10));
 
-        assert!(!schedule.take_due(now + Duration::from_millis(4)));
-        assert!(schedule.take_due(now + Duration::from_millis(5)));
-        assert_eq!(schedule.deadline(), None);
+        assert!(!schedule.take_due_repaint(now + Duration::from_millis(4)));
+        assert!(schedule.take_due_repaint(now + Duration::from_millis(5)));
+        assert_eq!(schedule.next_wake(), None);
     }
 
     #[test]

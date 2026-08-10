@@ -37,13 +37,8 @@ pub struct PollOutcome {
 
 impl PollOutcome {
     #[must_use]
-    pub const fn completed_readback(&self) -> bool {
-        self.completed_readback
-    }
-
-    #[must_use]
-    pub fn events(&self) -> &[DeviceEvent] {
-        &self.events
+    pub fn into_parts(self) -> (bool, Vec<DeviceEvent>) {
+        (self.completed_readback, self.events)
     }
 }
 

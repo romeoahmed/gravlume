@@ -7,11 +7,11 @@ mod launch;
 mod lifecycle;
 
 pub use app::{RunError, run};
-pub use launch::{Launch, WindowPreferences, WindowPreferencesError};
+pub use launch::{Launch, WindowPreferences};
 
 #[cfg(test)]
 mod tests {
-    use super::{Launch, WindowPreferences, WindowPreferencesError};
+    use super::{Launch, WindowPreferences};
 
     #[test]
     fn default_launch_has_a_valid_offline_window() {
@@ -23,25 +23,17 @@ mod tests {
     }
 
     #[test]
-    fn window_preferences_reject_invalid_seam_values() {
-        assert_eq!(
-            WindowPreferences::new("", 800, 600),
-            Err(WindowPreferencesError::EmptyTitle)
-        );
-        assert_eq!(
-            WindowPreferences::new("Gravlume", 0, 600),
-            Err(WindowPreferencesError::ZeroExtent)
-        );
-        assert_eq!(
-            WindowPreferences::new("Gravlume", 20_000, 600),
-            Err(WindowPreferencesError::ExtentTooLarge)
-        );
+    fn window_preferences_preserve_platform_requests() {
+        let preferences = WindowPreferences::new("", 0, u32::MAX);
+
+        assert_eq!(preferences.title(), "");
+        assert_eq!(preferences.width(), 0);
+        assert_eq!(preferences.height(), u32::MAX);
     }
 
     #[test]
-    fn validated_window_preferences_replace_launch_defaults() {
-        let preferences =
-            WindowPreferences::new("Scientific View", 1024, 768).expect("valid preferences");
+    fn window_preferences_replace_launch_defaults() {
+        let preferences = WindowPreferences::new("Scientific View", 1024, 768);
         let launch = Launch::default().with_window(preferences.clone());
 
         assert_eq!(launch.window(), &preferences);
