@@ -519,7 +519,8 @@ impl GpuEngine {
             let Some(surface) = self.surface.as_ref() else {
                 return false;
             };
-            configure_surface_checked(surface, &self.adapter, &self.device, self.selection, extent)
+            let capabilities = surface.get_capabilities(&self.adapter);
+            configure_surface_checked(surface, &self.device, &capabilities, self.selection, extent)
         };
         match result {
             Ok(()) => true,
@@ -532,20 +533,16 @@ impl GpuEngine {
 
     fn recreate_surface(&mut self) -> Result<bool, RenderRuntimeError> {
         let replacement = self.instance.create_surface(Arc::clone(&self.window))?;
-        let selection = select_surface(&replacement.get_capabilities(&self.adapter))
-            .map_err(|_| RenderRuntimeError::SurfaceCapabilitiesChanged)?;
-        if selection != self.selection {
+        let capabilities = replacement.get_capabilities(&self.adapter);
+        if !self.selection.is_supported_by(&capabilities) {
             return Err(RenderRuntimeError::SurfaceCapabilitiesChanged);
         }
         if let Some(extent) = self.extent.extent()
-            && let Err(event) = configure_surface_checked(
-                &replacement,
-                &self.adapter,
-                &self.device,
-                selection,
-                extent,
-            )
+            && let Err(error) =
+                configure_surface_scoped(&replacement, &self.device, self.selection, extent)
         {
+            let event =
+                DeviceEvent::from_wgpu("failed to configure the presentation surface", error);
             self.enqueue_device_event(event);
             return Ok(false);
         }
@@ -576,12 +573,12 @@ const fn validate_extent_limit(
 
 fn configure_surface_checked(
     surface: &wgpu::Surface<'_>,
-    adapter: &wgpu::Adapter,
     device: &wgpu::Device,
+    capabilities: &wgpu::SurfaceCapabilities,
     selection: SurfaceSelection,
     extent: RenderExtent,
 ) -> Result<(), DeviceEvent> {
-    if !selection.is_supported_by(&surface.get_capabilities(adapter)) {
+    if !selection.is_supported_by(capabilities) {
         return Err(DeviceEvent::validation(
             "surface no longer supports the active presentation configuration",
         ));
