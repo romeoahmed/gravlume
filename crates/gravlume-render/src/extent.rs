@@ -81,76 +81,45 @@ impl ExtentTracker {
 mod tests {
     use super::{ExtentChange, ExtentTracker, RenderExtent};
 
-    #[test]
-    fn zero_extent_pauses_without_advancing_generation() {
-        let tracker = ExtentTracker::default();
-
-        let (tracker, change) = tracker.updated(0, 720);
-        assert_eq!(change, ExtentChange::Paused);
-        assert_eq!(tracker.extent(), None);
-        assert_eq!(tracker.generation(), 0);
+    fn extent(width: u32, height: u32) -> RenderExtent {
+        RenderExtent::new(width, height).expect("test extent is nonzero")
     }
 
     #[test]
-    fn nonzero_extent_advances_generation_only_when_dimensions_change() {
-        let tracker = ExtentTracker::default();
-        let odd = RenderExtent::new(1279, 719).expect("both dimensions are nonzero");
+    fn updates_are_transactional_and_generation_based() {
+        let original = ExtentTracker::default();
 
-        let (tracker, change) = tracker.updated(1279, 719);
+        let (active, change) = original.updated(1279, 719);
         assert_eq!(
             change,
             ExtentChange::Rebuild {
-                extent: odd,
+                extent: extent(1279, 719),
                 generation: 1,
             }
         );
-        let (tracker, change) = tracker.updated(1279, 719);
+        assert_eq!(original.extent(), None);
+        assert_eq!(original.generation(), 0);
+
+        let (active, change) = active.updated(1279, 719);
         assert_eq!(change, ExtentChange::Unchanged);
-        assert_eq!(tracker.generation(), 1);
+        assert_eq!(active.generation(), 1);
 
-        let (_, change) = tracker.updated(1280, 719);
-        assert_eq!(
-            change,
-            ExtentChange::Rebuild {
-                extent: RenderExtent::new(1280, 719).expect("both dimensions are nonzero"),
-                generation: 2,
-            }
-        );
-    }
-
-    #[test]
-    fn returning_from_zero_rebuilds_the_extent_generation() {
-        let tracker = ExtentTracker::default();
-        let (tracker, change) = tracker.updated(800, 600);
-        assert!(matches!(change, ExtentChange::Rebuild { .. }));
-
-        let (tracker, change) = tracker.updated(0, 0);
+        let (paused, change) = active.updated(0, 719);
         assert_eq!(change, ExtentChange::Paused);
-        let (tracker, change) = tracker.updated(0, 0);
+        assert_eq!(paused.extent(), None);
+        assert_eq!(paused.generation(), 1);
+
+        let (paused, change) = paused.updated(0, 0);
         assert_eq!(change, ExtentChange::Unchanged);
-        let (_, change) = tracker.updated(800, 600);
+
+        let (resumed, change) = paused.updated(1279, 719);
         assert_eq!(
             change,
             ExtentChange::Rebuild {
-                extent: RenderExtent::new(800, 600).expect("both dimensions are nonzero"),
+                extent: extent(1279, 719),
                 generation: 2,
             }
         );
-    }
-
-    #[test]
-    fn updated_returns_a_candidate_without_mutating_the_original() {
-        let tracker = ExtentTracker::default();
-
-        let (candidate, change) = tracker.updated(1920, 1080);
-
-        assert_eq!(tracker.extent(), None);
-        assert_eq!(tracker.generation(), 0);
-        assert_eq!(candidate.extent(), RenderExtent::new(1920, 1080));
-        assert_eq!(candidate.generation(), 1);
-        assert!(matches!(
-            change,
-            ExtentChange::Rebuild { generation: 1, .. }
-        ));
+        assert_eq!(resumed.extent(), Some(extent(1279, 719)));
     }
 }

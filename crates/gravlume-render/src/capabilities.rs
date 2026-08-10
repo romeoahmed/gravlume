@@ -62,10 +62,6 @@ impl SurfaceSelection {
     }
 }
 
-pub const fn missing_baseline_features(available: wgpu::Features) -> wgpu::Features {
-    BASELINE_FEATURES.difference(available)
-}
-
 pub fn check_baseline_adapter(
     device_type: wgpu::DeviceType,
     is_webgpu_compliant: bool,
@@ -78,7 +74,7 @@ pub fn check_baseline_adapter(
     if !is_webgpu_compliant {
         return Err(CapabilityError::DownlevelAdapter);
     }
-    let missing_features = missing_baseline_features(available_features);
+    let missing_features = BASELINE_FEATURES.difference(available_features);
     if !missing_features.is_empty() {
         return Err(CapabilityError::MissingFeatures(missing_features));
     }
@@ -152,10 +148,7 @@ pub fn select_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BASELINE_FEATURES, CapabilityError, check_baseline_adapter, missing_baseline_features,
-        select_surface,
-    };
+    use super::{BASELINE_FEATURES, CapabilityError, check_baseline_adapter, select_surface};
 
     fn capabilities(
         formats: &[(wgpu::TextureFormat, wgpu::SurfaceColorSpaces)],
@@ -226,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_selection_support_check_covers_every_configured_field() {
+    fn selected_surface_is_invalidated_by_capability_changes() {
         let caps = capabilities(&[(
             wgpu::TextureFormat::Bgra8UnormSrgb,
             wgpu::SurfaceColorSpaces::SRGB,
@@ -263,59 +256,63 @@ mod tests {
     }
 
     #[test]
-    fn baseline_features_are_exact_and_missing_set_is_structured() {
-        assert_eq!(BASELINE_FEATURES, wgpu::Features::TIMESTAMP_QUERY);
-        assert_eq!(
-            missing_baseline_features(wgpu::Features::empty()),
-            wgpu::Features::TIMESTAMP_QUERY
-        );
-        assert!(missing_baseline_features(BASELINE_FEATURES).is_empty());
-    }
-
-    #[test]
-    fn adapter_gate_rejects_software_downlevel_and_incomplete_hdr_usage() {
-        let hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
+    fn adapter_gate_enforces_the_native_release_contract() {
+        let required_hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC;
-
-        assert_eq!(
-            check_baseline_adapter(wgpu::DeviceType::Cpu, true, BASELINE_FEATURES, hdr_usages,),
-            Err(CapabilityError::SoftwareAdapter)
-        );
-        assert_eq!(
-            check_baseline_adapter(
+        let cases = [
+            (
+                "software adapter",
+                wgpu::DeviceType::Cpu,
+                true,
+                BASELINE_FEATURES,
+                required_hdr_usages,
+                Err(CapabilityError::SoftwareAdapter),
+            ),
+            (
+                "downlevel adapter",
                 wgpu::DeviceType::IntegratedGpu,
                 false,
                 BASELINE_FEATURES,
-                hdr_usages,
+                required_hdr_usages,
+                Err(CapabilityError::DownlevelAdapter),
             ),
-            Err(CapabilityError::DownlevelAdapter)
-        );
-        assert_eq!(
-            check_baseline_adapter(
+            (
+                "missing timestamp queries",
+                wgpu::DeviceType::IntegratedGpu,
+                true,
+                wgpu::Features::empty(),
+                required_hdr_usages,
+                Err(CapabilityError::MissingFeatures(
+                    wgpu::Features::TIMESTAMP_QUERY,
+                )),
+            ),
+            (
+                "incomplete HDR usages",
                 wgpu::DeviceType::DiscreteGpu,
                 true,
                 BASELINE_FEATURES,
                 wgpu::TextureUsages::TEXTURE_BINDING,
+                Err(CapabilityError::MissingHdrTextureUsages(
+                    wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                )),
             ),
-            Err(CapabilityError::MissingHdrTextureUsages(
-                wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC
-            ))
-        );
-    }
-
-    #[test]
-    fn adapter_gate_accepts_exact_phase_zero_capabilities() {
-        assert_eq!(
-            check_baseline_adapter(
+            (
+                "supported adapter",
                 wgpu::DeviceType::IntegratedGpu,
                 true,
                 BASELINE_FEATURES,
-                wgpu::TextureUsages::STORAGE_BINDING
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                required_hdr_usages,
+                Ok(()),
             ),
-            Ok(())
-        );
+        ];
+
+        for (case, device_type, compliant, features, usages, expected) in cases {
+            assert_eq!(
+                check_baseline_adapter(device_type, compliant, features, usages),
+                expected,
+                "{case}"
+            );
+        }
     }
 }

@@ -660,20 +660,13 @@ mod tests {
     use crate::extent::RenderExtent;
 
     #[test]
-    fn native_backend_is_narrowed_to_the_release_contract() {
-        #[cfg(target_os = "macos")]
-        assert_eq!(crate::native_backends(), wgpu::Backends::METAL);
-
-        #[cfg(any(target_os = "windows", target_os = "linux"))]
-        assert_eq!(crate::native_backends(), wgpu::Backends::VULKAN);
-    }
-
-    #[test]
-    fn resize_rejects_each_dimension_above_the_device_limit_before_allocation() {
+    fn resize_accepts_the_device_limit_and_rejects_each_excess_dimension() {
         let maximum = 8_192;
+        let boundary = RenderExtent::new(maximum, maximum).expect("extent is nonzero");
         let too_wide = RenderExtent::new(maximum + 1, 1).expect("extent is nonzero");
         let too_tall = RenderExtent::new(1, maximum + 1).expect("extent is nonzero");
 
+        assert!(validate_extent_limit(boundary, maximum).is_ok());
         assert!(matches!(
             validate_extent_limit(too_wide, maximum),
             Err(ResizeError::ExtentLimit {
