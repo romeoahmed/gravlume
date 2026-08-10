@@ -301,7 +301,8 @@ impl ApplicationHandler<Instant> for DesktopApp {
         }
 
         let response = window_state.egui.on_window_event(&window, &event);
-        if response.repaint {
+        // This event is the requested repaint; echoing it would queue another frame.
+        if response.repaint && !matches!(&event, WindowEvent::RedrawRequested) {
             window.request_redraw();
         }
 
