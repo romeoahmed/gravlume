@@ -487,16 +487,29 @@ mod tests {
     use super::{EventLoopSchedule, smoke_once_value};
 
     #[test]
-    fn repaint_schedule_keeps_the_earliest_deadline() {
+    fn gpu_progress_never_consumes_or_requests_a_repaint() {
         let now = std::time::Instant::now();
         let mut schedule = EventLoopSchedule::default();
 
         schedule.request_repaint(now, Duration::from_millis(20));
-        schedule.request_repaint(now, Duration::from_millis(5));
         schedule.request_repaint(now, Duration::from_millis(10));
+        schedule.request_repaint(now, Duration::from_millis(15));
+        schedule.after_gpu_poll(now, true);
 
-        assert!(!schedule.take_due_repaint(now + Duration::from_millis(4)));
-        assert!(schedule.take_due_repaint(now + Duration::from_millis(5)));
+        let first_poll = now + super::PENDING_GPU_POLL_INTERVAL;
+        assert_eq!(schedule.next_wake(), Some(first_poll));
+        assert!(!schedule.take_due_repaint(first_poll));
+
+        schedule.after_gpu_poll(first_poll, true);
+        let second_poll = first_poll + super::PENDING_GPU_POLL_INTERVAL;
+        assert_eq!(schedule.next_wake(), Some(second_poll));
+        assert!(!schedule.take_due_repaint(second_poll));
+
+        schedule.after_gpu_poll(second_poll, false);
+        let repaint = now + Duration::from_millis(10);
+        assert_eq!(schedule.next_wake(), Some(repaint));
+        assert!(!schedule.take_due_repaint(now + Duration::from_millis(9)));
+        assert!(schedule.take_due_repaint(repaint));
         assert_eq!(schedule.next_wake(), None);
     }
 
@@ -505,38 +518,5 @@ mod tests {
         assert!(!smoke_once_value(None));
         assert!(smoke_once_value(Some(OsStr::new("1"))));
         assert!(!smoke_once_value(Some(OsStr::new("true"))));
-    }
-
-    #[test]
-    fn gpu_poll_deadline_wakes_without_requesting_a_redraw() {
-        let now = std::time::Instant::now();
-        let mut schedule = EventLoopSchedule::default();
-
-        schedule.after_gpu_poll(now, true);
-        let poll_deadline = now + super::PENDING_GPU_POLL_INTERVAL;
-        assert_eq!(schedule.next_wake(), Some(poll_deadline));
-        assert!(!schedule.take_due_repaint(poll_deadline));
-
-        schedule.after_gpu_poll(poll_deadline, true);
-        let next_poll_deadline = poll_deadline + super::PENDING_GPU_POLL_INTERVAL;
-        assert_eq!(schedule.next_wake(), Some(next_poll_deadline));
-        assert!(!schedule.take_due_repaint(next_poll_deadline));
-
-        schedule.after_gpu_poll(next_poll_deadline, false);
-        assert_eq!(schedule.next_wake(), None);
-    }
-
-    #[test]
-    fn repaint_and_gpu_poll_keep_independent_deadlines() {
-        let now = std::time::Instant::now();
-        let mut schedule = EventLoopSchedule::default();
-
-        schedule.request_repaint(now, Duration::from_millis(10));
-        schedule.after_gpu_poll(now, true);
-
-        let poll_deadline = now + super::PENDING_GPU_POLL_INTERVAL;
-        assert_eq!(schedule.next_wake(), Some(poll_deadline));
-        assert!(!schedule.take_due_repaint(poll_deadline));
-        assert!(schedule.take_due_repaint(now + Duration::from_millis(10)));
     }
 }

@@ -1,4 +1,3 @@
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WindowPreferences {
     title: String,
     width: u32,
@@ -42,7 +41,7 @@ impl Default for WindowPreferences {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct Launch {
     window: WindowPreferences,
 }
