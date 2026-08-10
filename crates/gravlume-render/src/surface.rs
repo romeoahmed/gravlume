@@ -39,6 +39,7 @@ enum FrameStage {
     Ready,
     Acquired,
     Submitted,
+    TexturesReleased,
     Complete,
 }
 
@@ -48,6 +49,10 @@ pub enum FrameProtocolError {
     SubmitBeforeAcquire,
     #[error("frame presented before its commands were submitted")]
     PresentBeforeSubmit,
+    #[error("egui textures released before frame commands were submitted")]
+    ReleaseTexturesBeforeSubmit,
+    #[error("frame presented before deferred egui textures were released")]
+    PresentBeforeTextureRelease,
     #[error("surface texture acquired more than once in one frame")]
     DuplicateAcquire,
     #[error("frame protocol is already complete")]
@@ -66,7 +71,7 @@ impl FrameProtocol {
                 self.stage = FrameStage::Acquired;
                 Ok(())
             }
-            FrameStage::Acquired | FrameStage::Submitted => {
+            FrameStage::Acquired | FrameStage::Submitted | FrameStage::TexturesReleased => {
                 Err(FrameProtocolError::DuplicateAcquire)
             }
             FrameStage::Complete => Err(FrameProtocolError::AlreadyComplete),
@@ -80,7 +85,22 @@ impl FrameProtocol {
                 self.stage = FrameStage::Submitted;
                 Ok(())
             }
-            FrameStage::Submitted | FrameStage::Complete => {
+            FrameStage::Submitted | FrameStage::TexturesReleased | FrameStage::Complete => {
+                Err(FrameProtocolError::AlreadyComplete)
+            }
+        }
+    }
+
+    pub(crate) const fn textures_released(&mut self) -> Result<(), FrameProtocolError> {
+        match self.stage {
+            FrameStage::Ready | FrameStage::Acquired => {
+                Err(FrameProtocolError::ReleaseTexturesBeforeSubmit)
+            }
+            FrameStage::Submitted => {
+                self.stage = FrameStage::TexturesReleased;
+                Ok(())
+            }
+            FrameStage::TexturesReleased | FrameStage::Complete => {
                 Err(FrameProtocolError::AlreadyComplete)
             }
         }
@@ -91,7 +111,8 @@ impl FrameProtocol {
             FrameStage::Ready | FrameStage::Acquired => {
                 Err(FrameProtocolError::PresentBeforeSubmit)
             }
-            FrameStage::Submitted => {
+            FrameStage::Submitted => Err(FrameProtocolError::PresentBeforeTextureRelease),
+            FrameStage::TexturesReleased => {
                 self.stage = FrameStage::Complete;
                 Ok(())
             }
@@ -146,6 +167,9 @@ mod tests {
 
         protocol.acquired().expect("first acquire is valid");
         protocol.submitted().expect("submit follows acquire");
+        protocol
+            .textures_released()
+            .expect("egui textures are released after submit");
         protocol.presented().expect("present follows submit");
 
         assert!(protocol.is_complete());
@@ -172,5 +196,30 @@ mod tests {
             protocol.acquired(),
             Err(FrameProtocolError::DuplicateAcquire)
         );
+    }
+
+    #[test]
+    fn frame_protocol_requires_texture_release_after_submit_and_before_present() {
+        let mut protocol = FrameProtocol::default();
+        protocol.acquired().expect("first acquire is valid");
+
+        assert_eq!(
+            protocol.textures_released(),
+            Err(FrameProtocolError::ReleaseTexturesBeforeSubmit)
+        );
+
+        protocol.submitted().expect("submit follows acquire");
+        assert_eq!(
+            protocol.presented(),
+            Err(FrameProtocolError::PresentBeforeTextureRelease)
+        );
+
+        protocol
+            .textures_released()
+            .expect("texture release follows submit");
+        protocol
+            .presented()
+            .expect("present follows texture release");
+        assert!(protocol.is_complete());
     }
 }

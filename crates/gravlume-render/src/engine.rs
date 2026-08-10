@@ -1,4 +1,7 @@
-use std::sync::{Arc, mpsc};
+use std::{
+    future::Future,
+    sync::{Arc, mpsc},
+};
 
 use crate::{
     capabilities::{BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, select_surface},
@@ -21,6 +24,12 @@ pub enum RenderInitError {
     SurfaceCapabilities(String),
     #[error("failed to create the Phase 0 device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
+    #[error("failed to create {stage}: {source}")]
+    GpuResource {
+        stage: &'static str,
+        #[source]
+        source: wgpu::Error,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -172,6 +181,40 @@ struct FrameResources {
     needs_clear: bool,
 }
 
+/// Captures every wgpu error category while the initial resource bundle is constructed.
+///
+/// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Device.html#method.push_error_scope>
+struct InitializationErrorScopes {
+    internal: wgpu::ErrorScopeGuard,
+    out_of_memory: wgpu::ErrorScopeGuard,
+    validation: wgpu::ErrorScopeGuard,
+}
+
+impl InitializationErrorScopes {
+    fn push(device: &wgpu::Device) -> Self {
+        Self {
+            internal: device.push_error_scope(wgpu::ErrorFilter::Internal),
+            out_of_memory: device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
+            validation: device.push_error_scope(wgpu::ErrorFilter::Validation),
+        }
+    }
+
+    fn finish(self) -> impl Future<Output = Result<(), wgpu::Error>> + Send {
+        let validation = self.validation.pop();
+        let out_of_memory = self.out_of_memory.pop();
+        let internal = self.internal.pop();
+        async move {
+            let validation = validation.await;
+            let out_of_memory = out_of_memory.await;
+            let internal = internal.await;
+            out_of_memory
+                .or(internal)
+                .or(validation)
+                .map_or(Ok(()), Err)
+        }
+    }
+}
+
 enum SurfaceAcquisition {
     Render {
         texture: wgpu::SurfaceTexture,
@@ -264,6 +307,7 @@ impl GpuEngine {
             .await?;
 
         let device_events = install_device_callbacks(&device);
+        let resource_scopes = InitializationErrorScopes::push(&device);
         let scene_compute = SceneCompute::new(&device);
         let display = DisplayPipeline::new(&device, selection.format());
         let egui_renderer = egui_wgpu::Renderer::new(
@@ -291,6 +335,13 @@ impl GpuEngine {
             device_events,
         };
         engine.resize(initial_size.width, initial_size.height);
+        resource_scopes
+            .finish()
+            .await
+            .map_err(|source| RenderInitError::GpuResource {
+                stage: "Phase 0 GPU resources",
+                source,
+            })?;
         Ok(engine)
     }
 
@@ -406,14 +457,12 @@ impl GpuEngine {
         if capture_timing {
             self.timings.encode_resolve(&mut encoder);
         }
-        for texture_id in &textures_delta.free {
-            self.egui_renderer.free_texture(texture_id);
-        }
-
         let main_buffer = encoder.finish();
         self.queue
             .submit(callback_buffers.into_iter().chain([main_buffer]));
         protocol.submitted().map_err(frame_protocol_error)?;
+        free_egui_textures_after_submit(&mut self.egui_renderer, textures_delta);
+        protocol.textures_released().map_err(frame_protocol_error)?;
         if capture_timing {
             self.timings.begin_readback();
         }
@@ -632,19 +681,22 @@ fn encode_egui(
     renderer.render(&mut pass, paint_jobs, screen);
 }
 
+// egui-wgpu defers destruction until after submit so current command buffers stay valid.
+// Source: https://docs.rs/egui-wgpu/0.36.1/src/egui_wgpu/winit.rs.html#740-748
+fn free_egui_textures_after_submit(
+    renderer: &mut egui_wgpu::Renderer,
+    textures_delta: &egui::TexturesDelta,
+) {
+    for texture_id in &textures_delta.free {
+        renderer.free_texture(texture_id);
+    }
+}
+
 fn install_device_callbacks(device: &wgpu::Device) -> mpsc::Receiver<DeviceEvent> {
     let (sender, receiver) = mpsc::channel();
     let uncaptured_sender = sender.clone();
     device.on_uncaptured_error(Arc::new(move |error| {
-        let (kind, message) = match error {
-            wgpu::Error::Validation { description, .. } => {
-                (DeviceEventKind::Validation, description)
-            }
-            wgpu::Error::Internal { description, .. } => (DeviceEventKind::Internal, description),
-            wgpu::Error::OutOfMemory { .. } => {
-                (DeviceEventKind::OutOfMemory, "GPU out of memory".to_owned())
-            }
-        };
+        let (kind, message) = device_error_details(error);
         if uncaptured_sender
             .send(DeviceEvent { kind, message })
             .is_err()
@@ -667,8 +719,20 @@ fn install_device_callbacks(device: &wgpu::Device) -> mpsc::Receiver<DeviceEvent
     receiver
 }
 
+fn device_error_details(error: wgpu::Error) -> (DeviceEventKind, String) {
+    match error {
+        wgpu::Error::Validation { description, .. } => (DeviceEventKind::Validation, description),
+        wgpu::Error::Internal { description, .. } => (DeviceEventKind::Internal, description),
+        wgpu::Error::OutOfMemory { .. } => {
+            (DeviceEventKind::OutOfMemory, "GPU out of memory".to_owned())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::InitializationErrorScopes;
+
     #[test]
     fn native_backend_is_narrowed_to_the_release_contract() {
         #[cfg(target_os = "macos")]
@@ -676,5 +740,39 @@ mod tests {
 
         #[cfg(any(target_os = "windows", target_os = "linux"))]
         assert_eq!(crate::native_backends(), wgpu::Backends::VULKAN);
+    }
+
+    #[test]
+    fn initialization_error_scopes_capture_invalid_wgsl() {
+        pollster::block_on(async {
+            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            descriptor.backends = crate::native_backends();
+            let instance = wgpu::Instance::new(descriptor);
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: None,
+                    apply_limit_buckets: false,
+                })
+                .await
+                .expect("native adapter is available");
+            let (device, _queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor::default())
+                .await
+                .expect("test device request succeeds");
+            let scopes = InitializationErrorScopes::push(&device);
+
+            let _invalid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("intentionally invalid initialization shader"),
+                source: wgpu::ShaderSource::Wgsl("@compute fn broken(".into()),
+            });
+
+            let error = scopes
+                .finish()
+                .await
+                .expect_err("invalid WGSL is reported through the initialization scope");
+            assert!(matches!(error, wgpu::Error::Validation { .. }));
+        });
     }
 }

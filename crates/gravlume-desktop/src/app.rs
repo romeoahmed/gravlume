@@ -68,7 +68,7 @@ struct DesktopApp {
     egui_context: egui::Context,
     egui_state: Option<egui_winit::State>,
     event_proxy: EventLoopProxy<UserEvent>,
-    repaint: RepaintSchedule,
+    schedule: EventLoopSchedule,
     pending_textures: egui::TexturesDelta,
     last_device_event: Option<(DeviceEventKind, String)>,
     fatal_error: Option<RunError>,
@@ -86,7 +86,7 @@ impl DesktopApp {
             egui_context: egui::Context::default(),
             egui_state: None,
             event_proxy,
-            repaint: RepaintSchedule::default(),
+            schedule: EventLoopSchedule::default(),
             pending_textures: egui::TexturesDelta::default(),
             last_device_event: None,
             fatal_error: None,
@@ -190,7 +190,8 @@ impl DesktopApp {
             } = output;
             state.handle_platform_output_with_event_loop(window, event_loop, platform_output);
             if let Some(viewport) = viewport_output.get(&egui::ViewportId::ROOT) {
-                self.repaint.request(Instant::now(), viewport.repaint_delay);
+                self.schedule
+                    .request_repaint(Instant::now(), viewport.repaint_delay);
             }
             let paint_jobs = self.egui_context.tessellate(shapes, pixels_per_point);
             self.pending_textures.append(textures_delta);
@@ -203,10 +204,12 @@ impl DesktopApp {
                 self.presented_frames = self.presented_frames.saturating_add(1);
             }
             Ok(FrameStatus::Skipped(FrameSkip::Timeout)) => {
-                self.repaint.request(Instant::now(), RETRY_FRAME_INTERVAL);
+                self.schedule
+                    .request_repaint(Instant::now(), RETRY_FRAME_INTERVAL);
             }
             Ok(FrameStatus::Skipped(FrameSkip::Outdated | FrameSkip::Lost)) => {
-                self.repaint.request(Instant::now(), Duration::ZERO);
+                self.schedule
+                    .request_repaint(Instant::now(), Duration::ZERO);
             }
             Ok(FrameStatus::Skipped(
                 FrameSkip::Occluded | FrameSkip::ZeroExtent | FrameSkip::Suspended,
@@ -263,7 +266,9 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
-            UserEvent::RequestRepaint(deadline) => self.repaint.request_at(deadline),
+            UserEvent::RequestRepaint(deadline) => {
+                self.schedule.request_repaint_at(deadline);
+            }
         }
     }
 
@@ -338,17 +343,15 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         }
 
         let now = Instant::now();
-        if self
+        let has_pending_gpu_work = self
             .renderer
             .as_ref()
-            .is_some_and(GpuEngine::has_pending_gpu_work)
-        {
-            self.repaint.request(now, PENDING_GPU_POLL_INTERVAL);
-        }
-        if self.repaint.take_due(now) {
+            .is_some_and(GpuEngine::has_pending_gpu_work);
+        self.schedule.after_gpu_poll(now, has_pending_gpu_work);
+        if self.schedule.take_due_repaint(now) {
             self.request_redraw();
         }
-        match self.repaint.deadline() {
+        match self.schedule.next_wake() {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
@@ -413,6 +416,51 @@ fn show_overlay(
         });
 }
 
+/// Keeps timer wakeups for GPU progress separate from repaint requests.
+///
+/// Source: <https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html#method.about_to_wait>
+#[derive(Debug, Default)]
+struct EventLoopSchedule {
+    repaint: RepaintSchedule,
+    gpu_poll_deadline: Option<Instant>,
+}
+
+impl EventLoopSchedule {
+    fn request_repaint(&mut self, now: Instant, delay: Duration) {
+        self.repaint.request(now, delay);
+    }
+
+    fn request_repaint_at(&mut self, deadline: Instant) {
+        self.repaint.request_at(deadline);
+    }
+
+    fn after_gpu_poll(&mut self, now: Instant, has_pending_work: bool) {
+        if !has_pending_work {
+            self.gpu_poll_deadline = None;
+            return;
+        }
+        if self
+            .gpu_poll_deadline
+            .is_none_or(|deadline| deadline <= now)
+        {
+            self.gpu_poll_deadline =
+                Some(now.checked_add(PENDING_GPU_POLL_INTERVAL).unwrap_or(now));
+        }
+    }
+
+    fn take_due_repaint(&mut self, now: Instant) -> bool {
+        self.repaint.take_due(now)
+    }
+
+    fn next_wake(&self) -> Option<Instant> {
+        match (self.repaint.deadline(), self.gpu_poll_deadline) {
+            (Some(repaint), Some(gpu_poll)) => Some(repaint.min(gpu_poll)),
+            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+            (None, None) => None,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct RepaintSchedule {
     deadline: Option<Instant>,
@@ -455,7 +503,7 @@ fn smoke_once_value(value: Option<&OsStr>) -> bool {
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
-    use super::{RepaintSchedule, smoke_once_value};
+    use super::{EventLoopSchedule, RepaintSchedule, smoke_once_value};
 
     #[test]
     fn repaint_schedule_keeps_the_earliest_deadline() {
@@ -476,5 +524,38 @@ mod tests {
         assert!(!smoke_once_value(None));
         assert!(smoke_once_value(Some(OsStr::new("1"))));
         assert!(!smoke_once_value(Some(OsStr::new("true"))));
+    }
+
+    #[test]
+    fn gpu_poll_deadline_wakes_without_requesting_a_redraw() {
+        let now = std::time::Instant::now();
+        let mut schedule = EventLoopSchedule::default();
+
+        schedule.after_gpu_poll(now, true);
+        let poll_deadline = now + super::PENDING_GPU_POLL_INTERVAL;
+        assert_eq!(schedule.next_wake(), Some(poll_deadline));
+        assert!(!schedule.take_due_repaint(poll_deadline));
+
+        schedule.after_gpu_poll(poll_deadline, true);
+        let next_poll_deadline = poll_deadline + super::PENDING_GPU_POLL_INTERVAL;
+        assert_eq!(schedule.next_wake(), Some(next_poll_deadline));
+        assert!(!schedule.take_due_repaint(next_poll_deadline));
+
+        schedule.after_gpu_poll(next_poll_deadline, false);
+        assert_eq!(schedule.next_wake(), None);
+    }
+
+    #[test]
+    fn repaint_and_gpu_poll_keep_independent_deadlines() {
+        let now = std::time::Instant::now();
+        let mut schedule = EventLoopSchedule::default();
+
+        schedule.request_repaint(now, Duration::from_millis(10));
+        schedule.after_gpu_poll(now, true);
+
+        let poll_deadline = now + super::PENDING_GPU_POLL_INTERVAL;
+        assert_eq!(schedule.next_wake(), Some(poll_deadline));
+        assert!(!schedule.take_due_repaint(poll_deadline));
+        assert!(schedule.take_due_repaint(now + Duration::from_millis(10)));
     }
 }
