@@ -33,7 +33,7 @@ pub enum ExtentChange {
     },
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct ExtentTracker {
     extent: Option<RenderExtent>,
     generation: u64,
@@ -41,6 +41,12 @@ pub struct ExtentTracker {
 }
 
 impl ExtentTracker {
+    pub(crate) fn preview_update(self, width: u32, height: u32) -> (Self, ExtentChange) {
+        let mut candidate = self;
+        let change = candidate.update(width, height);
+        (candidate, change)
+    }
+
     pub(crate) fn update(&mut self, width: u32, height: u32) -> ExtentChange {
         let Some(next) = RenderExtent::new(width, height) else {
             if self.is_paused {
@@ -127,5 +133,21 @@ mod tests {
                 generation: 2,
             }
         );
+    }
+
+    #[test]
+    fn preview_update_does_not_commit_the_candidate_generation() {
+        let tracker = ExtentTracker::default();
+
+        let (candidate, change) = tracker.preview_update(1920, 1080);
+
+        assert_eq!(tracker.extent(), None);
+        assert_eq!(tracker.generation(), 0);
+        assert_eq!(candidate.extent(), RenderExtent::new(1920, 1080));
+        assert_eq!(candidate.generation(), 1);
+        assert!(matches!(
+            change,
+            ExtentChange::Rebuild { generation: 1, .. }
+        ));
     }
 }

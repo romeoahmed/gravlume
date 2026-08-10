@@ -1,103 +1,25 @@
-use std::{
-    future::Future,
-    sync::{Arc, mpsc},
-};
+use std::sync::{Arc, mpsc};
 
 use crate::{
     capabilities::{BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, select_surface},
     display::DisplayPipeline,
     extent::{ExtentChange, ExtentTracker, RenderExtent},
+    gpu_error::{
+        DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
+        install_device_callbacks, scoped_gpu_operation,
+    },
     scene::{SceneCompute, SceneTarget},
-    surface::{AcquireOutcome, FrameProtocol, FrameProtocolError, SurfaceDirective, directive_for},
+    surface::{
+        AcquireOutcome, FrameProtocol, FrameProtocolError, FrameSkip, SurfaceDirective,
+        directive_for,
+    },
     timing::{GpuTimings, TimingSample},
 };
-
-#[derive(Debug, thiserror::Error)]
-pub enum RenderInitError {
-    #[error("failed to create the native presentation surface: {0}")]
-    CreateSurface(#[from] wgpu::CreateSurfaceError),
-    #[error("no adapter was available for the native surface: {0}")]
-    RequestAdapter(#[from] wgpu::RequestAdapterError),
-    #[error("adapter {adapter:?} does not satisfy Phase 0: {reason}")]
-    UnsupportedAdapter { adapter: String, reason: String },
-    #[error("surface does not satisfy the SDR presentation contract: {0}")]
-    SurfaceCapabilities(String),
-    #[error("failed to create the Phase 0 device: {0}")]
-    RequestDevice(#[from] wgpu::RequestDeviceError),
-    #[error("failed to create {stage}: {source}")]
-    GpuResource {
-        stage: &'static str,
-        #[source]
-        source: wgpu::Error,
-    },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum RenderRuntimeError {
-    #[error("GPU timing/readback failed: {0}")]
-    Timing(String),
-    #[error("non-blocking GPU poll failed: {0}")]
-    Poll(#[from] wgpu::PollError),
-    #[error("frame protocol violation: {0}")]
-    FrameProtocol(String),
-    #[error("surface acquisition reported a validation error")]
-    SurfaceValidation,
-    #[error("failed to recreate a lost surface: {0}")]
-    RecreateSurface(#[from] wgpu::CreateSurfaceError),
-    #[error("surface capabilities changed incompatibly while recovering")]
-    SurfaceCapabilitiesChanged,
-    #[error("nonzero extent has no matching frame-resource bundle")]
-    MissingFrameResources,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameSkip {
-    ZeroExtent,
-    Suspended,
-    Timeout,
-    Occluded,
-    Outdated,
-    Lost,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameStatus {
     Presented,
     Skipped(FrameSkip),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceEventKind {
-    Validation,
-    Internal,
-    OutOfMemory,
-    Lost,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeviceEvent {
-    kind: DeviceEventKind,
-    message: String,
-}
-
-impl DeviceEvent {
-    #[must_use]
-    pub const fn kind(&self) -> DeviceEventKind {
-        self.kind
-    }
-
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-
-    #[must_use]
-    pub const fn is_fatal(&self) -> bool {
-        matches!(
-            self.kind,
-            DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
-        )
-    }
 }
 
 #[derive(Debug, Default)]
@@ -181,47 +103,36 @@ struct FrameResources {
     needs_clear: bool,
 }
 
-/// Captures every wgpu error category while the initial resource bundle is constructed.
-///
-/// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Device.html#method.push_error_scope>
-struct InitializationErrorScopes {
-    internal: wgpu::ErrorScopeGuard,
-    out_of_memory: wgpu::ErrorScopeGuard,
-    validation: wgpu::ErrorScopeGuard,
-}
-
-impl InitializationErrorScopes {
-    fn push(device: &wgpu::Device) -> Self {
-        Self {
-            internal: device.push_error_scope(wgpu::ErrorFilter::Internal),
-            out_of_memory: device.push_error_scope(wgpu::ErrorFilter::OutOfMemory),
-            validation: device.push_error_scope(wgpu::ErrorFilter::Validation),
-        }
-    }
-
-    fn finish(self) -> impl Future<Output = Result<(), wgpu::Error>> + Send {
-        let validation = self.validation.pop();
-        let out_of_memory = self.out_of_memory.pop();
-        let internal = self.internal.pop();
-        async move {
-            let validation = validation.await;
-            let out_of_memory = out_of_memory.await;
-            let internal = internal.await;
-            out_of_memory
-                .or(internal)
-                .or(validation)
-                .map_or(Ok(()), Err)
-        }
-    }
-}
-
 enum SurfaceAcquisition {
     Render {
         texture: wgpu::SurfaceTexture,
         reconfigure_after_present: bool,
     },
     Skip(FrameSkip),
+    Reconfigure,
     Recreate,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MissingSurfaceDirective {
+    SkipSuspended,
+    Recreate,
+}
+
+const fn missing_surface_directive(surface_suspended: bool) -> MissingSurfaceDirective {
+    if surface_suspended {
+        MissingSurfaceDirective::SkipSuspended
+    } else {
+        MissingSurfaceDirective::Recreate
+    }
+}
+
+enum PreparedSurfaceFrame {
+    Render {
+        texture: wgpu::SurfaceTexture,
+        reconfigure_after_present: bool,
+    },
+    Skip(FrameSkip),
 }
 
 impl FrameResources {
@@ -243,6 +154,7 @@ impl FrameResources {
 
 pub struct GpuEngine {
     surface: Option<wgpu::Surface<'static>>,
+    surface_suspended: bool,
     instance: wgpu::Instance,
     window: Arc<winit::window::Window>,
     adapter: wgpu::Adapter,
@@ -256,6 +168,7 @@ pub struct GpuEngine {
     egui_renderer: egui_wgpu::Renderer,
     timings: GpuTimings,
     adapter_info: wgpu::AdapterInfo,
+    device_event_sender: mpsc::Sender<DeviceEvent>,
     device_events: mpsc::Receiver<DeviceEvent>,
 }
 
@@ -306,8 +219,8 @@ impl GpuEngine {
             })
             .await?;
 
-        let device_events = install_device_callbacks(&device);
-        let resource_scopes = InitializationErrorScopes::push(&device);
+        let (device_event_sender, device_events) = install_device_callbacks(&device);
+        let resource_scopes = GpuErrorScopes::push(&device);
         let scene_compute = SceneCompute::new(&device);
         let display = DisplayPipeline::new(&device, selection.format());
         let egui_renderer = egui_wgpu::Renderer::new(
@@ -319,6 +232,7 @@ impl GpuEngine {
         let initial_size = window.inner_size();
         let mut engine = Self {
             surface: Some(surface),
+            surface_suspended: false,
             instance,
             window,
             adapter,
@@ -332,9 +246,10 @@ impl GpuEngine {
             egui_renderer,
             timings,
             adapter_info,
+            device_event_sender,
             device_events,
         };
-        engine.resize(initial_size.width, initial_size.height);
+        let resize_result = engine.resize(initial_size.width, initial_size.height);
         resource_scopes
             .finish()
             .await
@@ -342,22 +257,53 @@ impl GpuEngine {
                 stage: "Phase 0 GPU resources",
                 source,
             })?;
+        resize_result.map_err(RenderInitError::InitialResize)?;
         Ok(engine)
     }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        match self.extent.update(width, height) {
-            ExtentChange::Unchanged => {}
-            ExtentChange::Paused => self.frame_resources = None,
+    /// Rebuilds every size-dependent resource as one transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error without changing the installed extent generation or frame-resource
+    /// bundle when the requested extent, surface configuration, or GPU allocation is invalid.
+    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ResizeError> {
+        let (candidate_extent, change) = self.extent.preview_update(width, height);
+        match change {
+            ExtentChange::Unchanged => return Ok(()),
+            ExtentChange::Paused => {
+                self.extent = candidate_extent;
+                self.frame_resources = None;
+            }
             ExtentChange::Rebuild { extent, .. } => {
-                let replacement =
-                    FrameResources::new(&self.device, &self.scene_compute, &self.display, extent);
+                validate_extent_limit(extent, self.device.limits().max_texture_dimension_2d)?;
                 if let Some(surface) = &self.surface {
-                    configure_surface(surface, &self.device, self.selection, extent);
+                    let capabilities = surface.get_capabilities(&self.adapter);
+                    if !self.selection.is_supported_by(&capabilities) {
+                        return Err(ResizeError::SurfaceCapabilitiesChanged);
+                    }
                 }
+
+                let replacement = scoped_gpu_operation(&self.device, || {
+                    FrameResources::new(&self.device, &self.scene_compute, &self.display, extent)
+                })
+                .map_err(|source| ResizeError::GpuResource {
+                    stage: "create frame resources",
+                    source,
+                })?;
+                if let Some(surface) = &self.surface {
+                    configure_surface_scoped(surface, &self.device, self.selection, extent)
+                        .map_err(|source| ResizeError::GpuResource {
+                            stage: "configure the presentation surface",
+                            source,
+                        })?;
+                }
+
+                self.extent = candidate_extent;
                 self.frame_resources = Some(replacement);
             }
         }
+        Ok(())
     }
 
     /// Encodes, submits, and presents one complete frame transaction.
@@ -375,21 +321,13 @@ impl GpuEngine {
         let Some(extent) = self.extent.extent() else {
             return Ok(FrameStatus::Skipped(FrameSkip::ZeroExtent));
         };
-        let Some(surface) = self.surface.as_ref() else {
-            return Ok(FrameStatus::Skipped(FrameSkip::Suspended));
-        };
-
         let (surface_texture, reconfigure_after_present) =
-            match acquire_surface_frame(surface, &self.device, self.selection, extent)? {
-                SurfaceAcquisition::Render {
+            match self.prepare_surface_frame(extent)? {
+                PreparedSurfaceFrame::Render {
                     texture,
                     reconfigure_after_present,
                 } => (texture, reconfigure_after_present),
-                SurfaceAcquisition::Skip(reason) => return Ok(FrameStatus::Skipped(reason)),
-                SurfaceAcquisition::Recreate => {
-                    self.recreate_surface()?;
-                    return Ok(FrameStatus::Skipped(FrameSkip::Lost));
-                }
+                PreparedSurfaceFrame::Skip(reason) => return Ok(FrameStatus::Skipped(reason)),
             };
 
         let mut protocol = FrameProtocol::default();
@@ -472,7 +410,7 @@ impl GpuEngine {
         debug_assert!(protocol.is_complete());
 
         if reconfigure_after_present {
-            configure_surface(surface, &self.device, self.selection, extent);
+            self.reconfigure_surface(extent);
         }
         Ok(FrameStatus::Presented)
     }
@@ -505,6 +443,7 @@ impl GpuEngine {
 
     pub fn suspend(&mut self) {
         self.surface = None;
+        self.surface_suspended = true;
     }
 
     /// Restores the presentation surface after a desktop resume event.
@@ -513,6 +452,7 @@ impl GpuEngine {
     ///
     /// Returns an error when the native surface cannot be recreated or its capabilities changed.
     pub fn resume_surface(&mut self) -> Result<(), RenderRuntimeError> {
+        self.surface_suspended = false;
         if self.surface.is_none() {
             self.recreate_surface()?;
         }
@@ -541,18 +481,91 @@ impl GpuEngine {
         }
     }
 
-    fn recreate_surface(&mut self) -> Result<(), RenderRuntimeError> {
+    fn prepare_surface_frame(
+        &mut self,
+        extent: RenderExtent,
+    ) -> Result<PreparedSurfaceFrame, RenderRuntimeError> {
+        let acquisition = {
+            match self.surface.as_ref() {
+                Some(surface) => acquire_surface_frame(surface),
+                None => match missing_surface_directive(self.surface_suspended) {
+                    MissingSurfaceDirective::SkipSuspended => {
+                        return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Suspended));
+                    }
+                    MissingSurfaceDirective::Recreate => SurfaceAcquisition::Recreate,
+                },
+            }
+        };
+        let frame = match acquisition {
+            SurfaceAcquisition::Render {
+                texture,
+                reconfigure_after_present,
+            } => PreparedSurfaceFrame::Render {
+                texture,
+                reconfigure_after_present,
+            },
+            SurfaceAcquisition::Skip(reason) => PreparedSurfaceFrame::Skip(reason),
+            SurfaceAcquisition::Reconfigure => {
+                PreparedSurfaceFrame::Skip(if self.reconfigure_surface(extent) {
+                    FrameSkip::Outdated
+                } else {
+                    FrameSkip::Validation
+                })
+            }
+            SurfaceAcquisition::Recreate => {
+                PreparedSurfaceFrame::Skip(if self.recreate_surface()? {
+                    FrameSkip::Lost
+                } else {
+                    FrameSkip::Validation
+                })
+            }
+        };
+        Ok(frame)
+    }
+
+    fn reconfigure_surface(&self, extent: RenderExtent) -> bool {
+        let result = {
+            let Some(surface) = self.surface.as_ref() else {
+                return false;
+            };
+            configure_surface_checked(surface, &self.adapter, &self.device, self.selection, extent)
+        };
+        match result {
+            Ok(()) => true,
+            Err(event) => {
+                self.enqueue_device_event(event);
+                false
+            }
+        }
+    }
+
+    fn recreate_surface(&mut self) -> Result<bool, RenderRuntimeError> {
         let replacement = self.instance.create_surface(Arc::clone(&self.window))?;
         let selection = select_surface(&replacement.get_capabilities(&self.adapter))
             .map_err(|_| RenderRuntimeError::SurfaceCapabilitiesChanged)?;
         if selection != self.selection {
             return Err(RenderRuntimeError::SurfaceCapabilitiesChanged);
         }
-        if let Some(extent) = self.extent.extent() {
-            configure_surface(&replacement, &self.device, selection, extent);
+        if let Some(extent) = self.extent.extent()
+            && let Err(event) = configure_surface_checked(
+                &replacement,
+                &self.adapter,
+                &self.device,
+                selection,
+                extent,
+            )
+        {
+            self.enqueue_device_event(event);
+            return Ok(false);
         }
         self.surface = Some(replacement);
-        Ok(())
+        Ok(true)
+    }
+
+    fn enqueue_device_event(&self, event: DeviceEvent) {
+        if self.device_event_sender.send(event).is_err() {
+            tracing::debug!("device event receiver dropped");
+        }
     }
 }
 
@@ -560,13 +573,22 @@ fn frame_protocol_error(error: FrameProtocolError) -> RenderRuntimeError {
     RenderRuntimeError::FrameProtocol(error.to_string())
 }
 
-fn acquire_surface_frame(
-    surface: &wgpu::Surface<'_>,
-    device: &wgpu::Device,
-    selection: SurfaceSelection,
+const fn validate_extent_limit(
     extent: RenderExtent,
-) -> Result<SurfaceAcquisition, RenderRuntimeError> {
-    let acquisition = match surface.get_current_texture() {
+    max_texture_dimension_2d: u32,
+) -> Result<(), ResizeError> {
+    if extent.width() > max_texture_dimension_2d || extent.height() > max_texture_dimension_2d {
+        return Err(ResizeError::ExtentLimit {
+            width: extent.width(),
+            height: extent.height(),
+            max_texture_dimension_2d,
+        });
+    }
+    Ok(())
+}
+
+fn acquire_surface_frame(surface: &wgpu::Surface<'_>) -> SurfaceAcquisition {
+    match surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(texture) => {
             debug_assert_eq!(
                 directive_for(AcquireOutcome::Success),
@@ -594,14 +616,14 @@ fn acquire_surface_frame(
         wgpu::CurrentSurfaceTexture::Timeout => {
             debug_assert_eq!(
                 directive_for(AcquireOutcome::Timeout),
-                SurfaceDirective::Skip
+                SurfaceDirective::Skip(FrameSkip::Timeout)
             );
             SurfaceAcquisition::Skip(FrameSkip::Timeout)
         }
         wgpu::CurrentSurfaceTexture::Occluded => {
             debug_assert_eq!(
                 directive_for(AcquireOutcome::Occluded),
-                SurfaceDirective::Skip
+                SurfaceDirective::Skip(FrameSkip::Occluded)
             );
             SurfaceAcquisition::Skip(FrameSkip::Occluded)
         }
@@ -610,8 +632,7 @@ fn acquire_surface_frame(
                 directive_for(AcquireOutcome::Outdated),
                 SurfaceDirective::Reconfigure
             );
-            configure_surface(surface, device, selection, extent);
-            SurfaceAcquisition::Skip(FrameSkip::Outdated)
+            SurfaceAcquisition::Reconfigure
         }
         wgpu::CurrentSurfaceTexture::Lost => {
             debug_assert_eq!(
@@ -623,12 +644,39 @@ fn acquire_surface_frame(
         wgpu::CurrentSurfaceTexture::Validation => {
             debug_assert_eq!(
                 directive_for(AcquireOutcome::Validation),
-                SurfaceDirective::ReportValidation
+                SurfaceDirective::Skip(FrameSkip::Validation)
             );
-            return Err(RenderRuntimeError::SurfaceValidation);
+            SurfaceAcquisition::Skip(FrameSkip::Validation)
         }
-    };
-    Ok(acquisition)
+    }
+}
+
+fn configure_surface_checked(
+    surface: &wgpu::Surface<'_>,
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    selection: SurfaceSelection,
+    extent: RenderExtent,
+) -> Result<(), DeviceEvent> {
+    if !selection.is_supported_by(&surface.get_capabilities(adapter)) {
+        return Err(DeviceEvent::validation(
+            "surface no longer supports the active presentation configuration",
+        ));
+    }
+    configure_surface_scoped(surface, device, selection, extent).map_err(|error| {
+        DeviceEvent::from_wgpu("failed to configure the presentation surface", error)
+    })
+}
+
+fn configure_surface_scoped(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    selection: SurfaceSelection,
+    extent: RenderExtent,
+) -> Result<(), wgpu::Error> {
+    scoped_gpu_operation(device, || {
+        configure_surface(surface, device, selection, extent);
+    })
 }
 
 fn configure_surface(
@@ -692,46 +740,12 @@ fn free_egui_textures_after_submit(
     }
 }
 
-fn install_device_callbacks(device: &wgpu::Device) -> mpsc::Receiver<DeviceEvent> {
-    let (sender, receiver) = mpsc::channel();
-    let uncaptured_sender = sender.clone();
-    device.on_uncaptured_error(Arc::new(move |error| {
-        let (kind, message) = device_error_details(error);
-        if uncaptured_sender
-            .send(DeviceEvent { kind, message })
-            .is_err()
-        {
-            tracing::debug!("device event receiver dropped");
-        }
-    }));
-    device.set_device_lost_callback(move |reason, message| {
-        let message = format!("{reason:?}: {message}");
-        if sender
-            .send(DeviceEvent {
-                kind: DeviceEventKind::Lost,
-                message,
-            })
-            .is_err()
-        {
-            tracing::debug!("device event receiver dropped");
-        }
-    });
-    receiver
-}
-
-fn device_error_details(error: wgpu::Error) -> (DeviceEventKind, String) {
-    match error {
-        wgpu::Error::Validation { description, .. } => (DeviceEventKind::Validation, description),
-        wgpu::Error::Internal { description, .. } => (DeviceEventKind::Internal, description),
-        wgpu::Error::OutOfMemory { .. } => {
-            (DeviceEventKind::OutOfMemory, "GPU out of memory".to_owned())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::InitializationErrorScopes;
+    use super::{
+        MissingSurfaceDirective, ResizeError, missing_surface_directive, validate_extent_limit,
+    };
+    use crate::extent::RenderExtent;
 
     #[test]
     fn native_backend_is_narrowed_to_the_release_contract() {
@@ -743,36 +757,38 @@ mod tests {
     }
 
     #[test]
-    fn initialization_error_scopes_capture_invalid_wgsl() {
-        pollster::block_on(async {
-            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            descriptor.backends = crate::native_backends();
-            let instance = wgpu::Instance::new(descriptor);
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: false,
-                })
-                .await
-                .expect("native adapter is available");
-            let (device, _queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor::default())
-                .await
-                .expect("test device request succeeds");
-            let scopes = InitializationErrorScopes::push(&device);
+    fn resize_rejects_each_dimension_above_the_device_limit_before_allocation() {
+        let maximum = 8_192;
+        let too_wide = RenderExtent::new(maximum + 1, 1).expect("extent is nonzero");
+        let too_tall = RenderExtent::new(1, maximum + 1).expect("extent is nonzero");
 
-            let _invalid_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("intentionally invalid initialization shader"),
-                source: wgpu::ShaderSource::Wgsl("@compute fn broken(".into()),
-            });
+        assert!(matches!(
+            validate_extent_limit(too_wide, maximum),
+            Err(ResizeError::ExtentLimit {
+                width: 8_193,
+                height: 1,
+                max_texture_dimension_2d: 8_192,
+            })
+        ));
+        assert!(matches!(
+            validate_extent_limit(too_tall, maximum),
+            Err(ResizeError::ExtentLimit {
+                width: 1,
+                height: 8_193,
+                max_texture_dimension_2d: 8_192,
+            })
+        ));
+    }
 
-            let error = scopes
-                .finish()
-                .await
-                .expect_err("invalid WGSL is reported through the initialization scope");
-            assert!(matches!(error, wgpu::Error::Validation { .. }));
-        });
+    #[test]
+    fn missing_surface_retries_only_after_the_application_resumes() {
+        assert_eq!(
+            missing_surface_directive(true),
+            MissingSurfaceDirective::SkipSuspended
+        );
+        assert_eq!(
+            missing_surface_directive(false),
+            MissingSurfaceDirective::Recreate
+        );
     }
 }

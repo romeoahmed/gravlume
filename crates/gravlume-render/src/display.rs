@@ -116,6 +116,9 @@ impl DisplayPipeline {
 mod tests {
     use super::{DisplayPipeline, fragment_entry};
 
+    const WIDTH: u32 = 3;
+    const PADDED_BYTES_PER_ROW: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+
     #[test]
     fn display_entry_matches_surface_transfer_responsibility() {
         assert_eq!(
@@ -139,14 +142,16 @@ mod tests {
         assert_eq!(pixels[11], 255);
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "the end-to-end GPU probe keeps resource lifetimes and submission order linear"
-    )]
     async fn probe_display() -> Vec<u8> {
-        const WIDTH: u32 = 3;
-        const PADDED_BYTES_PER_ROW: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let (device, queue) = request_test_device().await;
+        let scene = create_scene_input(&device, &queue);
+        let output = create_output(&device);
+        let readback = create_readback_buffer(&device);
+        let commands = encode_probe(&device, &scene, &output, &readback);
+        readback_pixels(&device, &queue, &readback, commands)
+    }
 
+    async fn request_test_device() -> (wgpu::Device, wgpu::Queue) {
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = crate::native_backends();
         let instance = wgpu::Instance::new(descriptor);
@@ -163,7 +168,7 @@ mod tests {
         let required_limits = wgpu::Limits::default()
             .using_resolution(adapter_limits.clone())
             .using_alignment(adapter_limits);
-        let (device, queue) = adapter
+        adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("display diagnostic contract device"),
                 required_features: wgpu::Features::empty(),
@@ -171,7 +176,10 @@ mod tests {
                 ..Default::default()
             })
             .await
-            .expect("display contract device request succeeds");
+            .expect("display contract device request succeeds")
+    }
+
+    fn create_scene_input(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
         let scene = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("display diagnostic scene input"),
             size: wgpu::Extent3d {
@@ -209,8 +217,11 @@ mod tests {
                 depth_or_array_layers: 1,
             },
         );
-        let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
-        let output = device.create_texture(&wgpu::TextureDescriptor {
+        scene
+    }
+
+    fn create_output(device: &wgpu::Device) -> wgpu::Texture {
+        device.create_texture(&wgpu::TextureDescriptor {
             label: Some("display diagnostic output"),
             size: wgpu::Extent3d {
                 width: WIDTH,
@@ -223,29 +234,41 @@ mod tests {
             format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
-        });
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
-        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        })
+    }
+
+    fn create_readback_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("display diagnostic readback"),
             size: u64::from(PADDED_BYTES_PER_ROW),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
-        });
-        let display = DisplayPipeline::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-        let bind_group = display.bind_scene(&device, &scene_view);
+        })
+    }
+
+    fn encode_probe(
+        device: &wgpu::Device,
+        scene: &wgpu::Texture,
+        output: &wgpu::Texture,
+        readback: &wgpu::Buffer,
+    ) -> wgpu::CommandBuffer {
+        let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let display = DisplayPipeline::new(device, wgpu::TextureFormat::Rgba8Unorm);
+        let bind_group = display.bind_scene(device, &scene_view);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("display diagnostic encoder"),
         });
         display.encode(&mut encoder, &output_view, &bind_group, None);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &output,
+                texture: output,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(PADDED_BYTES_PER_ROW),
@@ -258,7 +281,16 @@ mod tests {
                 depth_or_array_layers: 1,
             },
         );
-        let submission = queue.submit([encoder.finish()]);
+        encoder.finish()
+    }
+
+    fn readback_pixels(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        readback: &wgpu::Buffer,
+        commands: wgpu::CommandBuffer,
+    ) -> Vec<u8> {
+        let submission = queue.submit([commands]);
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         readback.map_async(wgpu::MapMode::Read, .., move |result| {
             let _ = sender.send(result);

@@ -49,6 +49,18 @@ impl SurfaceSelection {
     pub(crate) fn requires_manual_srgb_encoding(self) -> bool {
         !self.format.is_srgb()
     }
+
+    pub(crate) fn is_supported_by(self, capabilities: &wgpu::SurfaceCapabilities) -> bool {
+        let Some(color_space) = self.color_space.to_color_spaces() else {
+            return false;
+        };
+        capabilities
+            .usages
+            .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+            && capabilities.color_spaces(self.format).contains(color_space)
+            && capabilities.present_modes.contains(&self.present_mode)
+            && capabilities.alpha_modes.contains(&self.alpha_mode)
+    }
 }
 
 pub const fn missing_baseline_features(available: wgpu::Features) -> wgpu::Features {
@@ -212,6 +224,43 @@ mod tests {
             select_surface(&caps),
             Err(CapabilityError::NoSdrSurfacePair)
         );
+    }
+
+    #[test]
+    fn surface_selection_support_check_covers_every_configured_field() {
+        let caps = capabilities(&[(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::SurfaceColorSpaces::SRGB,
+        )]);
+        let selection = select_surface(&caps).expect("the fixture has a valid SDR selection");
+        assert!(selection.is_supported_by(&caps));
+
+        let mut missing_usage = capabilities(&[(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::SurfaceColorSpaces::SRGB,
+        )]);
+        missing_usage.usages = wgpu::TextureUsages::COPY_SRC;
+        assert!(!selection.is_supported_by(&missing_usage));
+
+        let missing_color_space = capabilities(&[(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::SurfaceColorSpaces::DISPLAY_P3,
+        )]);
+        assert!(!selection.is_supported_by(&missing_color_space));
+
+        let mut missing_present_mode = capabilities(&[(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::SurfaceColorSpaces::SRGB,
+        )]);
+        missing_present_mode.present_modes = vec![wgpu::PresentMode::Immediate];
+        assert!(!selection.is_supported_by(&missing_present_mode));
+
+        let mut missing_alpha_mode = capabilities(&[(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::SurfaceColorSpaces::SRGB,
+        )]);
+        missing_alpha_mode.alpha_modes = vec![wgpu::CompositeAlphaMode::PreMultiplied];
+        assert!(!selection.is_supported_by(&missing_alpha_mode));
     }
 
     #[test]

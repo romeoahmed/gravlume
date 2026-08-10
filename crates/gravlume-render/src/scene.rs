@@ -189,11 +189,7 @@ impl HeadlessProbe {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::too_many_lines,
-    reason = "the end-to-end GPU probe keeps resource lifetimes and submission order linear"
-)]
-async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeError> {
+async fn request_probe_device() -> Result<(wgpu::Device, wgpu::Queue), ProbeError> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = crate::native_backends();
     let instance = wgpu::Instance::new(descriptor);
@@ -218,33 +214,40 @@ async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeErro
     let required_limits = wgpu::Limits::default()
         .using_resolution(adapter_limits.clone())
         .using_alignment(adapter_limits);
-    let (device, queue) = adapter
+    adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("Phase 0 headless contract device"),
             required_features,
             required_limits,
             ..Default::default()
         })
-        .await?;
+        .await
+        .map_err(ProbeError::from)
+}
 
-    let compute = SceneCompute::new(&device);
-    let target = compute.create_target(&device, extent);
+#[cfg(test)]
+fn readback_row_layout(extent: RenderExtent) -> (u32, u32) {
     let bytes_per_pixel =
         u32::try_from(HeadlessProbe::BYTES_PER_PIXEL).expect("HDR pixel byte width fits u32");
-    let unpadded_bytes_per_row = extent.width() * bytes_per_pixel;
-    let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-        * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Phase 0 headless HDR readback"),
-        size: u64::from(padded_bytes_per_row) * u64::from(extent.height()),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
+    let unpadded = extent.width() * bytes_per_pixel;
+    let padded =
+        unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    (unpadded, padded)
+}
+
+#[cfg(test)]
+fn encode_probe(
+    device: &wgpu::Device,
+    compute: &SceneCompute,
+    target: &SceneTarget,
+    readback: &wgpu::Buffer,
+    padded_bytes_per_row: u32,
+) -> wgpu::CommandBuffer {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Phase 0 headless encoder"),
     });
     encoder.clear_texture(target.texture(), &wgpu::ImageSubresourceRange::default());
-    compute.encode(&mut encoder, &target, None);
+    compute.encode(&mut encoder, target, None);
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: target.texture(),
@@ -253,21 +256,31 @@ async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeErro
             aspect: wgpu::TextureAspect::All,
         },
         wgpu::TexelCopyBufferInfo {
-            buffer: &readback,
+            buffer: readback,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded_bytes_per_row),
-                rows_per_image: Some(extent.height()),
+                rows_per_image: Some(target.extent().height()),
             },
         },
         wgpu::Extent3d {
-            width: extent.width(),
-            height: extent.height(),
+            width: target.extent().width(),
+            height: target.extent().height(),
             depth_or_array_layers: 1,
         },
     );
-    let submission = queue.submit([encoder.finish()]);
+    encoder.finish()
+}
 
+#[cfg(test)]
+fn readback_bytes(
+    device: &wgpu::Device,
+    readback: &wgpu::Buffer,
+    submission: wgpu::SubmissionIndex,
+    extent: RenderExtent,
+    unpadded_bytes_per_row: u32,
+    padded_bytes_per_row: u32,
+) -> Result<Vec<u8>, ProbeError> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(1);
     readback
         .slice(..)
@@ -287,19 +300,41 @@ async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeErro
         .slice(..)
         .get_mapped_range()
         .map_err(|_| ProbeError::Map)?;
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(unpadded_bytes_per_row).expect("row length fits usize")
-            * usize::try_from(extent.height()).expect("height fits usize"),
-    );
-    for row in mapped
-        .chunks_exact(usize::try_from(padded_bytes_per_row).expect("padded row length fits usize"))
-    {
-        bytes.extend_from_slice(
-            &row[..usize::try_from(unpadded_bytes_per_row).expect("row length fits usize")],
-        );
+    let unpadded = usize::try_from(unpadded_bytes_per_row).expect("row length fits usize");
+    let padded = usize::try_from(padded_bytes_per_row).expect("padded row length fits usize");
+    let height = usize::try_from(extent.height()).expect("height fits usize");
+    let mut bytes = Vec::with_capacity(unpadded * height);
+    for row in mapped.chunks_exact(padded) {
+        bytes.extend_from_slice(&row[..unpadded]);
     }
     drop(mapped);
     readback.unmap();
+    Ok(bytes)
+}
+
+#[cfg(test)]
+async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeError> {
+    let (device, queue) = request_probe_device().await?;
+
+    let compute = SceneCompute::new(&device);
+    let target = compute.create_target(&device, extent);
+    let (unpadded_bytes_per_row, padded_bytes_per_row) = readback_row_layout(extent);
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Phase 0 headless HDR readback"),
+        size: u64::from(padded_bytes_per_row) * u64::from(extent.height()),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let commands = encode_probe(&device, &compute, &target, &readback, padded_bytes_per_row);
+    let submission = queue.submit([commands]);
+    let bytes = readback_bytes(
+        &device,
+        &readback,
+        submission,
+        extent,
+        unpadded_bytes_per_row,
+        padded_bytes_per_row,
+    )?;
 
     Ok(HeadlessProbe { extent, bytes })
 }

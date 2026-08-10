@@ -1,4 +1,15 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameSkip {
+    ZeroExtent,
+    Suspended,
+    Timeout,
+    Occluded,
+    Outdated,
+    Lost,
+    Validation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AcquireOutcome {
     Success,
     Suboptimal,
@@ -12,10 +23,9 @@ pub enum AcquireOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SurfaceDirective {
     Render { reconfigure_after_present: bool },
-    Skip,
+    Skip(FrameSkip),
     Reconfigure,
     Recreate,
-    ReportValidation,
 }
 
 pub const fn directive_for(outcome: AcquireOutcome) -> SurfaceDirective {
@@ -26,10 +36,11 @@ pub const fn directive_for(outcome: AcquireOutcome) -> SurfaceDirective {
         AcquireOutcome::Suboptimal => SurfaceDirective::Render {
             reconfigure_after_present: true,
         },
-        AcquireOutcome::Timeout | AcquireOutcome::Occluded => SurfaceDirective::Skip,
+        AcquireOutcome::Timeout => SurfaceDirective::Skip(FrameSkip::Timeout),
+        AcquireOutcome::Occluded => SurfaceDirective::Skip(FrameSkip::Occluded),
         AcquireOutcome::Outdated => SurfaceDirective::Reconfigure,
         AcquireOutcome::Lost => SurfaceDirective::Recreate,
-        AcquireOutcome::Validation => SurfaceDirective::ReportValidation,
+        AcquireOutcome::Validation => SurfaceDirective::Skip(FrameSkip::Validation),
     }
 }
 
@@ -128,7 +139,8 @@ impl FrameProtocol {
 #[cfg(test)]
 mod tests {
     use super::{
-        AcquireOutcome, FrameProtocol, FrameProtocolError, SurfaceDirective, directive_for,
+        AcquireOutcome, FrameProtocol, FrameProtocolError, FrameSkip, SurfaceDirective,
+        directive_for,
     };
 
     #[test]
@@ -146,19 +158,33 @@ mod tests {
                     reconfigure_after_present: true,
                 },
             ),
-            (AcquireOutcome::Timeout, SurfaceDirective::Skip),
-            (AcquireOutcome::Occluded, SurfaceDirective::Skip),
+            (
+                AcquireOutcome::Timeout,
+                SurfaceDirective::Skip(FrameSkip::Timeout),
+            ),
+            (
+                AcquireOutcome::Occluded,
+                SurfaceDirective::Skip(FrameSkip::Occluded),
+            ),
             (AcquireOutcome::Outdated, SurfaceDirective::Reconfigure),
             (AcquireOutcome::Lost, SurfaceDirective::Recreate),
             (
                 AcquireOutcome::Validation,
-                SurfaceDirective::ReportValidation,
+                SurfaceDirective::Skip(FrameSkip::Validation),
             ),
         ];
 
         for (outcome, expected) in cases {
             assert_eq!(directive_for(outcome), expected, "outcome: {outcome:?}");
         }
+    }
+
+    #[test]
+    fn reported_surface_validation_is_a_recoverable_skip() {
+        assert_eq!(
+            directive_for(AcquireOutcome::Validation),
+            SurfaceDirective::Skip(FrameSkip::Validation)
+        );
     }
 
     #[test]

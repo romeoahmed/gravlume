@@ -212,23 +212,50 @@ impl DesktopApp {
                     .request_repaint(Instant::now(), Duration::ZERO);
             }
             Ok(FrameStatus::Skipped(
-                FrameSkip::Occluded | FrameSkip::ZeroExtent | FrameSkip::Suspended,
+                FrameSkip::Validation
+                | FrameSkip::Occluded
+                | FrameSkip::ZeroExtent
+                | FrameSkip::Suspended,
             )) => {}
             Err(error) => self.fail(event_loop, RunError::RenderRuntime(error.to_string())),
         }
     }
 
     fn process_device_events(&mut self, event_loop: &ActiveEventLoop, events: &[DeviceEvent]) {
+        let mut report_changed = false;
         for event in events {
             tracing::error!(kind = ?event.kind(), message = event.message(), "GPU device event");
-            self.last_device_event = Some((event.kind(), event.message().to_owned()));
+            report_changed |= record_device_event(&mut self.last_device_event, event);
             if event.is_fatal() {
                 self.fail(event_loop, RunError::Device(event.message().to_owned()));
                 return;
             }
         }
-        if !events.is_empty() {
+        if report_changed {
             self.request_redraw();
+        }
+    }
+
+    fn resize_renderer(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) -> bool {
+        let Some(result) = self
+            .renderer
+            .as_mut()
+            .map(|renderer| renderer.resize(width, height))
+        else {
+            return false;
+        };
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                let kind = error.kind();
+                let message = error.to_string();
+                tracing::error!(?kind, %message, width, height, "GPU resize rejected");
+                self.last_device_event = Some((kind, message.clone()));
+                if error.is_fatal() {
+                    self.fail(event_loop, RunError::Device(message));
+                }
+                false
+            }
         }
     }
 
@@ -278,7 +305,7 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        let Some(window) = self.window.as_ref() else {
+        let Some(window) = self.window.as_ref().map(Arc::clone) else {
             return;
         };
         if window.id() != window_id {
@@ -288,7 +315,7 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         let response = self
             .egui_state
             .as_mut()
-            .map(|state| state.on_window_event(window, &event))
+            .map(|state| state.on_window_event(&window, &event))
             .unwrap_or_default();
         if response.repaint {
             window.request_redraw();
@@ -297,19 +324,19 @@ impl ApplicationHandler<UserEvent> for DesktopApp {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.resize(size.width, size.height);
-                }
-                if size.width != 0 && size.height != 0 {
+                if self.resize_renderer(event_loop, size.width, size.height)
+                    && size.width != 0
+                    && size.height != 0
+                {
                     window.request_redraw();
                 }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = window.inner_size();
-                if let Some(renderer) = self.renderer.as_mut() {
-                    renderer.resize(size.width, size.height);
-                }
-                if size.width != 0 && size.height != 0 {
+                if self.resize_renderer(event_loop, size.width, size.height)
+                    && size.width != 0
+                    && size.height != 0
+                {
                     window.request_redraw();
                 }
             }
@@ -499,11 +526,27 @@ fn smoke_once_value(value: Option<&OsStr>) -> bool {
     value.is_some_and(|value| value == OsStr::new("1"))
 }
 
+fn record_device_event(
+    last_event: &mut Option<(DeviceEventKind, String)>,
+    event: &DeviceEvent,
+) -> bool {
+    if last_event
+        .as_ref()
+        .is_some_and(|(kind, message)| *kind == event.kind() && message == event.message())
+    {
+        return false;
+    }
+    *last_event = Some((event.kind(), event.message().to_owned()));
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use std::{ffi::OsStr, time::Duration};
 
-    use super::{EventLoopSchedule, RepaintSchedule, smoke_once_value};
+    use gravlume_render::DeviceEvent;
+
+    use super::{EventLoopSchedule, RepaintSchedule, record_device_event, smoke_once_value};
 
     #[test]
     fn repaint_schedule_keeps_the_earliest_deadline() {
@@ -557,5 +600,14 @@ mod tests {
         assert_eq!(schedule.next_wake(), Some(poll_deadline));
         assert!(!schedule.take_due_repaint(poll_deadline));
         assert!(schedule.take_due_repaint(now + Duration::from_millis(10)));
+    }
+
+    #[test]
+    fn duplicate_device_event_does_not_request_another_report_redraw() {
+        let event = DeviceEvent::validation("surface configuration was rejected");
+        let mut last_event = None;
+
+        assert!(record_device_event(&mut last_event, &event));
+        assert!(!record_device_event(&mut last_event, &event));
     }
 }
