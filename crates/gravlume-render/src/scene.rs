@@ -4,7 +4,7 @@ const WORKGROUP_WIDTH: u32 = 8;
 const WORKGROUP_HEIGHT: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DispatchGrid {
+pub struct DispatchGrid {
     x: u32,
     y: u32,
 }
@@ -26,7 +26,7 @@ impl DispatchGrid {
     }
 }
 
-pub(crate) struct SceneCompute {
+pub struct SceneCompute {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -122,7 +122,7 @@ impl SceneCompute {
     }
 }
 
-pub(crate) struct SceneTarget {
+pub struct SceneTarget {
     extent: RenderExtent,
     texture: wgpu::Texture,
     view: wgpu::TextureView,
@@ -134,11 +134,11 @@ impl SceneTarget {
         self.extent
     }
 
-    pub(crate) fn texture(&self) -> &wgpu::Texture {
+    pub(crate) const fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
 
-    pub(crate) fn view(&self) -> &wgpu::TextureView {
+    pub(crate) const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 }
@@ -189,6 +189,10 @@ impl HeadlessProbe {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the end-to-end GPU probe keeps resource lifetimes and submission order linear"
+)]
 async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeError> {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = crate::native_backends();
@@ -225,7 +229,9 @@ async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeErro
 
     let compute = SceneCompute::new(&device);
     let target = compute.create_target(&device, extent);
-    let unpadded_bytes_per_row = extent.width() * HeadlessProbe::BYTES_PER_PIXEL as u32;
+    let bytes_per_pixel =
+        u32::try_from(HeadlessProbe::BYTES_PER_PIXEL).expect("HDR pixel byte width fits u32");
+    let unpadded_bytes_per_row = extent.width() * bytes_per_pixel;
     let padded_bytes_per_row = unpadded_bytes_per_row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
         * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let readback = device.create_buffer(&wgpu::BufferDescriptor {

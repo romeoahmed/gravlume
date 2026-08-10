@@ -8,19 +8,19 @@ enum LifecycleState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LifecycleAction {
+pub enum LifecycleAction {
     None,
     Initialize,
     ReleaseSurface,
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct Lifecycle {
+pub struct Lifecycle {
     state: LifecycleState,
 }
 
 impl Lifecycle {
-    pub(crate) fn resume(&mut self) -> LifecycleAction {
+    pub(crate) const fn resume(&mut self) -> LifecycleAction {
         match self.state {
             LifecycleState::AwaitingResume | LifecycleState::Suspended => {
                 self.state = LifecycleState::Active;
@@ -30,7 +30,7 @@ impl Lifecycle {
         }
     }
 
-    pub(crate) fn suspend(&mut self) -> LifecycleAction {
+    pub(crate) const fn suspend(&mut self) -> LifecycleAction {
         match self.state {
             LifecycleState::Active => {
                 self.state = LifecycleState::Suspended;
@@ -42,7 +42,7 @@ impl Lifecycle {
         }
     }
 
-    pub(crate) fn fail(&mut self) {
+    pub(crate) const fn fail(&mut self) {
         self.state = LifecycleState::Fatal;
     }
 }

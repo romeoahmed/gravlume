@@ -2,14 +2,19 @@ use std::sync::mpsc::{self, TryRecvError};
 
 const QUERY_COUNT: u32 = 4;
 const QUERY_BYTES: u64 = QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
+const QUERY_BYTE_COUNT: usize = QUERY_COUNT as usize * size_of::<u64>();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TimingSample {
+pub struct TimingSample {
     compute_ms: f64,
     display_ms: f64,
 }
 
 impl TimingSample {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "single-pass GPU tick deltas stay far below f64's exact integer range"
+    )]
     pub(crate) fn from_ticks(ticks: [u64; 4], timestamp_period_ns: f32) -> Self {
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
         Self {
@@ -28,12 +33,12 @@ impl TimingSample {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct TimingState {
+pub struct TimingState {
     map_pending: bool,
 }
 
 impl TimingState {
-    pub(crate) fn begin_map(&mut self) -> bool {
+    pub(crate) const fn begin_map(&mut self) -> bool {
         if self.map_pending {
             false
         } else {
@@ -46,13 +51,13 @@ impl TimingState {
         self.map_pending
     }
 
-    pub(crate) fn finish_map(&mut self) {
+    pub(crate) const fn finish_map(&mut self) {
         self.map_pending = false;
     }
 }
 
 fn decode_query_ticks(bytes: &[u8]) -> Option<[u64; QUERY_COUNT as usize]> {
-    if bytes.len() != QUERY_BYTES as usize {
+    if bytes.len() != QUERY_BYTE_COUNT {
         return None;
     }
 
@@ -64,7 +69,7 @@ fn decode_query_ticks(bytes: &[u8]) -> Option<[u64; QUERY_COUNT as usize]> {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum TimingError {
+pub enum TimingError {
     #[error("non-blocking GPU poll failed: {0}")]
     Poll(#[from] wgpu::PollError),
     #[error("GPU timestamp readback mapping failed: {0}")]
@@ -77,7 +82,7 @@ pub(crate) enum TimingError {
     InvalidReadback,
 }
 
-pub(crate) struct GpuTimings {
+pub struct GpuTimings {
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
     readback_buffer: wgpu::Buffer,
@@ -123,7 +128,7 @@ impl GpuTimings {
         !self.state.has_pending_map()
     }
 
-    pub(crate) fn compute_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
+    pub(crate) const fn compute_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(0),
@@ -131,7 +136,7 @@ impl GpuTimings {
         }
     }
 
-    pub(crate) fn display_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
+    pub(crate) const fn display_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
         wgpu::RenderPassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(2),

@@ -1,5 +1,5 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AcquireOutcome {
+pub enum AcquireOutcome {
     Success,
     Suboptimal,
     Timeout,
@@ -10,7 +10,7 @@ pub(crate) enum AcquireOutcome {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SurfaceDirective {
+pub enum SurfaceDirective {
     Render { reconfigure_after_present: bool },
     Skip,
     Reconfigure,
@@ -18,7 +18,7 @@ pub(crate) enum SurfaceDirective {
     ReportValidation,
 }
 
-pub(crate) const fn directive_for(outcome: AcquireOutcome) -> SurfaceDirective {
+pub const fn directive_for(outcome: AcquireOutcome) -> SurfaceDirective {
     match outcome {
         AcquireOutcome::Success => SurfaceDirective::Render {
             reconfigure_after_present: false,
@@ -43,7 +43,7 @@ enum FrameStage {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum FrameProtocolError {
+pub enum FrameProtocolError {
     #[error("frame submitted before acquiring a surface texture")]
     SubmitBeforeAcquire,
     #[error("frame presented before its commands were submitted")]
@@ -55,12 +55,12 @@ pub(crate) enum FrameProtocolError {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct FrameProtocol {
+pub struct FrameProtocol {
     stage: FrameStage,
 }
 
 impl FrameProtocol {
-    pub(crate) fn acquired(&mut self) -> Result<(), FrameProtocolError> {
+    pub(crate) const fn acquired(&mut self) -> Result<(), FrameProtocolError> {
         match self.stage {
             FrameStage::Ready => {
                 self.stage = FrameStage::Acquired;
@@ -73,19 +73,20 @@ impl FrameProtocol {
         }
     }
 
-    pub(crate) fn submitted(&mut self) -> Result<(), FrameProtocolError> {
+    pub(crate) const fn submitted(&mut self) -> Result<(), FrameProtocolError> {
         match self.stage {
             FrameStage::Ready => Err(FrameProtocolError::SubmitBeforeAcquire),
             FrameStage::Acquired => {
                 self.stage = FrameStage::Submitted;
                 Ok(())
             }
-            FrameStage::Submitted => Err(FrameProtocolError::AlreadyComplete),
-            FrameStage::Complete => Err(FrameProtocolError::AlreadyComplete),
+            FrameStage::Submitted | FrameStage::Complete => {
+                Err(FrameProtocolError::AlreadyComplete)
+            }
         }
     }
 
-    pub(crate) fn presented(&mut self) -> Result<(), FrameProtocolError> {
+    pub(crate) const fn presented(&mut self) -> Result<(), FrameProtocolError> {
         match self.stage {
             FrameStage::Ready | FrameStage::Acquired => {
                 Err(FrameProtocolError::PresentBeforeSubmit)
