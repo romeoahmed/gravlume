@@ -1,20 +1,35 @@
-fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
+use crate::extent::RenderExtent;
+
+// Keep egui textures independent of surface format by using its preferred gamma-space target.
+// Source: https://docs.rs/egui-wgpu/0.36.1/egui_wgpu/struct.Renderer.html#method.new
+pub const COMPOSITE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+fn presentation_entry(format: wgpu::TextureFormat) -> &'static str {
     if format.is_srgb() {
-        "display_to_linear_target"
+        "present_to_linear_target"
     } else {
-        "display_to_gamma_target"
+        "present_to_gamma_target"
     }
 }
 
 pub struct DisplayPipeline {
-    pipeline: wgpu::RenderPipeline,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    composite_pipeline: wgpu::RenderPipeline,
+    presentation_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
+pub struct DisplayTarget {
+    view: wgpu::TextureView,
+    display_bind_group: wgpu::BindGroup,
+    presentation_bind_group: wgpu::BindGroup,
+}
+
 impl DisplayPipeline {
-    pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("display bind group layout"),
+            label: Some("display input bind group layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -32,14 +47,48 @@ impl DisplayPipeline {
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Phase 0 display shader"),
+            label: Some("Phase 0 display and presentation shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/display.wgsl").into()),
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("neutral HDR display pipeline"),
-            layout: Some(&pipeline_layout),
+        let composite_pipeline = Self::create_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "neutral HDR display pipeline",
+            "display_to_gamma_target",
+            COMPOSITE_FORMAT,
+        );
+        let presentation_pipeline = Self::create_render_pipeline(
+            device,
+            &pipeline_layout,
+            &shader,
+            "surface presentation pipeline",
+            presentation_entry(surface_format),
+            surface_format,
+        );
+
+        Self {
+            shader,
+            pipeline_layout,
+            composite_pipeline,
+            presentation_pipeline,
+            bind_group_layout,
+        }
+    }
+
+    fn create_render_pipeline(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
+        label: &'static str,
+        fragment_entry: &'static str,
+        format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("fullscreen_triangle"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[],
@@ -48,8 +97,8 @@ impl DisplayPipeline {
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(fragment_entry(format)),
+                module: shader,
+                entry_point: Some(fragment_entry),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -59,38 +108,83 @@ impl DisplayPipeline {
             }),
             multiview_mask: None,
             cache: None,
-        });
-
-        Self {
-            pipeline,
-            bind_group_layout,
-        }
+        })
     }
 
-    pub(crate) fn bind_scene(
+    pub(crate) fn create_presentation_pipeline(
+        &self,
+        device: &wgpu::Device,
+        surface_format: wgpu::TextureFormat,
+    ) -> wgpu::RenderPipeline {
+        Self::create_render_pipeline(
+            device,
+            &self.pipeline_layout,
+            &self.shader,
+            "surface presentation pipeline",
+            presentation_entry(surface_format),
+            surface_format,
+        )
+    }
+
+    pub(crate) fn install_presentation_pipeline(&mut self, pipeline: wgpu::RenderPipeline) {
+        self.presentation_pipeline = pipeline;
+    }
+
+    pub(crate) fn create_target(
         &self,
         device: &wgpu::Device,
         scene_view: &wgpu::TextureView,
+        extent: RenderExtent,
+    ) -> DisplayTarget {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("gamma-space display composite"),
+            size: wgpu::Extent3d {
+                width: extent.width(),
+                height: extent.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: COMPOSITE_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let display_bind_group = self.bind_input(device, "display scene HDR input", scene_view);
+        let presentation_bind_group =
+            self.bind_input(device, "presentation composite input", &view);
+        DisplayTarget {
+            view,
+            display_bind_group,
+            presentation_bind_group,
+        }
+    }
+
+    fn bind_input(
+        &self,
+        device: &wgpu::Device,
+        label: &'static str,
+        view: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("display scene HDR bind group"),
+            label: Some(label),
             layout: &self.bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(scene_view),
+                resource: wgpu::BindingResource::TextureView(view),
             }],
         })
     }
 
-    pub(crate) fn encode(
+    pub(crate) fn encode_display(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        surface_view: &wgpu::TextureView,
-        scene_bind_group: &wgpu::BindGroup,
+        target: &DisplayTarget,
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let color_attachment = Some(wgpu::RenderPassColorAttachment {
-            view: surface_view,
+            view: &target.view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -106,15 +200,51 @@ impl DisplayPipeline {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, scene_bind_group, &[]);
+        pass.set_pipeline(&self.composite_pipeline);
+        pass.set_bind_group(0, &target.display_bind_group, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    pub(crate) fn encode_presentation(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface_view: &wgpu::TextureView,
+        target: &DisplayTarget,
+        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+    ) {
+        let color_attachment = Some(wgpu::RenderPassColorAttachment {
+            view: surface_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("surface presentation pass"),
+            color_attachments: &[color_attachment],
+            depth_stencil_attachment: None,
+            timestamp_writes,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.presentation_pipeline);
+        pass.set_bind_group(0, &target.presentation_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+}
+
+impl DisplayTarget {
+    pub(crate) const fn view(&self) -> &wgpu::TextureView {
+        &self.view
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::DisplayPipeline;
+    use crate::extent::RenderExtent;
 
     const WIDTH: u32 = 3;
     const PADDED_BYTES_PER_ROW: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -203,13 +333,15 @@ mod tests {
         let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
         let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
         let display = DisplayPipeline::new(&gpu.device, format);
-        let bind_group = display.bind_scene(&gpu.device, &scene_view);
+        let extent = RenderExtent::new(WIDTH, 1).expect("display test extent is nonzero");
+        let display_target = display.create_target(&gpu.device, &scene_view, extent);
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("display diagnostic encoder"),
             });
-        display.encode(&mut encoder, &output_view, &bind_group, None);
+        display.encode_display(&mut encoder, &display_target, None);
+        display.encode_presentation(&mut encoder, &output_view, &display_target, None);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &output,

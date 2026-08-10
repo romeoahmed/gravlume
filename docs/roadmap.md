@@ -4,7 +4,7 @@
 
 ## Phase 0 · 桌面栈闭环
 
-**交付物**：Cargo workspace 基线、lockfile、winit window、compute 写入 scene-linear HDR intermediate、display pass、egui overlay、resize/zero extent、surface recovery 和结构化 device error。
+**交付物**：Cargo workspace 基线、lockfile、winit window、compute 写入 scene-linear HDR intermediate、gamma-space display composite、egui overlay、surface presentation、resize/zero extent、surface recovery 和结构化 device error。
 
 **退出条件**：
 

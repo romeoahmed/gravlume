@@ -2,7 +2,7 @@ use std::sync::{Arc, mpsc};
 
 use crate::{
     capabilities::{BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, select_surface},
-    display::DisplayPipeline,
+    display::{COMPOSITE_FORMAT, DisplayPipeline, DisplayTarget},
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     gpu_error::{
         DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
@@ -100,7 +100,7 @@ impl RenderDiagnostics<'_> {
 
 struct FrameResources {
     scene: SceneTarget,
-    display_bind_group: wgpu::BindGroup,
+    display: DisplayTarget,
 }
 
 enum PreparedSurfaceFrame {
@@ -111,6 +111,11 @@ enum PreparedSurfaceFrame {
     Skip(FrameSkip),
 }
 
+struct SurfaceUpdate {
+    selection: SurfaceSelection,
+    presentation_pipeline: Option<wgpu::RenderPipeline>,
+}
+
 impl FrameResources {
     fn new(
         device: &wgpu::Device,
@@ -119,11 +124,8 @@ impl FrameResources {
         extent: RenderExtent,
     ) -> Self {
         let scene = scene_compute.create_target(device, extent);
-        let display_bind_group = display.bind_scene(device, scene.view());
-        Self {
-            scene,
-            display_bind_group,
-        }
+        let display = display.create_target(device, scene.view(), extent);
+        Self { scene, display }
     }
 }
 
@@ -146,12 +148,22 @@ impl DiagnosticLabels {
                 .to_owned(),
             surface_format: format!("{:?}", selection.format()),
             color_space: format!("{:?}", selection.color_space()),
-            display_transfer: if selection.requires_manual_srgb_encoding() {
-                "shader sRGB encoding"
-            } else {
-                "surface sRGB encoding"
-            },
+            display_transfer: display_transfer_label(selection),
         }
+    }
+
+    fn update_surface(&mut self, selection: SurfaceSelection) {
+        self.surface_format = format!("{:?}", selection.format());
+        self.color_space = format!("{:?}", selection.color_space());
+        self.display_transfer = display_transfer_label(selection);
+    }
+}
+
+fn display_transfer_label(selection: SurfaceSelection) -> &'static str {
+    if selection.requires_manual_srgb_encoding() {
+        "gamma composite passthrough"
+    } else {
+        "surface sRGB re-encoding"
     }
 }
 
@@ -229,7 +241,7 @@ impl GpuEngine {
         let display = DisplayPipeline::new(&device, selection.format());
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
-            selection.format(),
+            COMPOSITE_FORMAT,
             egui_wgpu::RendererOptions::default(),
         );
         let timings = GpuTimings::new(&device);
@@ -281,28 +293,43 @@ impl GpuEngine {
             }
             ExtentChange::Rebuild { extent, .. } => {
                 validate_extent_limit(extent, self.device.limits().max_texture_dimension_2d)?;
-                if let Some(surface) = &self.surface {
+                let selection = if let Some(surface) = &self.surface {
                     let capabilities = surface.get_capabilities(&self.adapter);
-                    if !self.selection.is_supported_by(&capabilities) {
-                        return Err(ResizeError::SurfaceCapabilitiesChanged);
-                    }
-                }
+                    select_surface(&capabilities)
+                        .map_err(|error| ResizeError::SurfaceCapabilities(error.to_string()))?
+                } else {
+                    self.selection
+                };
 
-                let replacement = scoped_gpu_operation(&self.device, || {
-                    FrameResources::new(&self.device, &self.scene_compute, &self.display, extent)
-                })
-                .map_err(|source| ResizeError::GpuResource {
-                    stage: "create frame resources",
-                    source,
-                })?;
+                let format_changed = selection.format() != self.selection.format();
+                let (replacement, presentation_pipeline) =
+                    scoped_gpu_operation(&self.device, || {
+                        let replacement = FrameResources::new(
+                            &self.device,
+                            &self.scene_compute,
+                            &self.display,
+                            extent,
+                        );
+                        let presentation_pipeline = format_changed.then(|| {
+                            self.display
+                                .create_presentation_pipeline(&self.device, selection.format())
+                        });
+                        (replacement, presentation_pipeline)
+                    })
+                    .map_err(|source| ResizeError::GpuResource {
+                        stage: "create frame and presentation resources",
+                        source,
+                    })?;
                 if let Some(surface) = &self.surface {
-                    configure_surface_scoped(surface, &self.device, self.selection, extent)
-                        .map_err(|source| ResizeError::GpuResource {
+                    configure_surface_scoped(surface, &self.device, selection, extent).map_err(
+                        |source| ResizeError::GpuResource {
                             stage: "configure the presentation surface",
                             source,
-                        })?;
+                        },
+                    )?;
                 }
 
+                self.install_surface_selection(selection, presentation_pipeline);
                 self.extent = candidate_extent;
                 self.frame_resources = Some(replacement);
             }
@@ -372,19 +399,22 @@ impl GpuEngine {
         let compute_writes = capture_timing.then(|| self.timings.compute_writes());
         self.scene_compute
             .encode(&mut encoder, &frame.scene, compute_writes);
-        let display_writes = capture_timing.then(|| self.timings.display_writes());
-        self.display.encode(
-            &mut encoder,
-            &surface_view,
-            &frame.display_bind_group,
-            display_writes,
-        );
+        let display_begin_writes = capture_timing.then(|| self.timings.display_begin_writes());
+        self.display
+            .encode_display(&mut encoder, &frame.display, display_begin_writes);
         encode_egui(
             &self.egui_renderer,
             &mut encoder,
-            &surface_view,
+            frame.display.view(),
             paint_jobs,
             &screen,
+        );
+        let display_end_writes = capture_timing.then(|| self.timings.display_end_writes());
+        self.display.encode_presentation(
+            &mut encoder,
+            &surface_view,
+            &frame.display,
+            display_end_writes,
         );
         if capture_timing {
             self.timings.encode_resolve(&mut encoder);
@@ -400,7 +430,7 @@ impl GpuEngine {
         self.queue.present(surface_texture);
 
         if reconfigure_after_present {
-            self.reconfigure_surface(extent);
+            self.reconfigure_surface(extent)?;
         }
         Ok(FrameStatus::Presented)
     }
@@ -494,7 +524,7 @@ impl GpuEngine {
                 PreparedSurfaceFrame::Skip(FrameSkip::Occluded)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                PreparedSurfaceFrame::Skip(if self.reconfigure_surface(extent) {
+                PreparedSurfaceFrame::Skip(if self.reconfigure_surface(extent)? {
                     FrameSkip::Outdated
                 } else {
                     FrameSkip::Validation
@@ -514,40 +544,92 @@ impl GpuEngine {
         Ok(frame)
     }
 
-    fn reconfigure_surface(&self, extent: RenderExtent) -> bool {
-        let result = {
-            let Some(surface) = self.surface.as_ref() else {
-                return false;
-            };
-            let capabilities = surface.get_capabilities(&self.adapter);
-            configure_surface_checked(surface, &self.device, &capabilities, self.selection, extent)
+    fn reconfigure_surface(&mut self, extent: RenderExtent) -> Result<bool, RenderRuntimeError> {
+        let Some(surface) = self.surface.as_ref() else {
+            return Ok(false);
         };
-        match result {
-            Ok(()) => true,
-            Err(event) => {
-                self.enqueue_device_event(event);
-                false
-            }
+        let capabilities = surface.get_capabilities(&self.adapter);
+        let Some(update) = self.prepare_runtime_surface_update(&capabilities)? else {
+            return Ok(false);
+        };
+        if let Err(error) =
+            configure_surface_scoped(surface, &self.device, update.selection, extent)
+        {
+            self.enqueue_device_event(DeviceEvent::from_wgpu(
+                "failed to configure the presentation surface",
+                error,
+            ));
+            return Ok(false);
         }
+        self.install_surface_selection(update.selection, update.presentation_pipeline);
+        Ok(true)
     }
 
     fn recreate_surface(&mut self) -> Result<bool, RenderRuntimeError> {
         let replacement = self.instance.create_surface(Arc::clone(&self.window))?;
         let capabilities = replacement.get_capabilities(&self.adapter);
-        if !self.selection.is_supported_by(&capabilities) {
-            return Err(RenderRuntimeError::SurfaceCapabilitiesChanged);
-        }
+        let Some(update) = self.prepare_runtime_surface_update(&capabilities)? else {
+            return Ok(false);
+        };
         if let Some(extent) = self.extent.extent()
             && let Err(error) =
-                configure_surface_scoped(&replacement, &self.device, self.selection, extent)
+                configure_surface_scoped(&replacement, &self.device, update.selection, extent)
         {
             let event =
                 DeviceEvent::from_wgpu("failed to configure the presentation surface", error);
             self.enqueue_device_event(event);
             return Ok(false);
         }
+        self.install_surface_selection(update.selection, update.presentation_pipeline);
         self.surface = Some(replacement);
         Ok(true)
+    }
+
+    fn prepare_runtime_surface_update(
+        &self,
+        capabilities: &wgpu::SurfaceCapabilities,
+    ) -> Result<Option<SurfaceUpdate>, RenderRuntimeError> {
+        let selection = select_surface(capabilities)
+            .map_err(|error| RenderRuntimeError::SurfaceCapabilities(error.to_string()))?;
+        match self.create_presentation_pipeline_if_needed(selection) {
+            Ok(presentation_pipeline) => Ok(Some(SurfaceUpdate {
+                selection,
+                presentation_pipeline,
+            })),
+            Err(error) => {
+                self.enqueue_device_event(DeviceEvent::from_wgpu(
+                    "failed to rebuild surface presentation pipeline",
+                    error,
+                ));
+                Ok(None)
+            }
+        }
+    }
+
+    fn create_presentation_pipeline_if_needed(
+        &self,
+        selection: SurfaceSelection,
+    ) -> Result<Option<wgpu::RenderPipeline>, wgpu::Error> {
+        if selection.format() == self.selection.format() {
+            return Ok(None);
+        }
+        scoped_gpu_operation(&self.device, || {
+            self.display
+                .create_presentation_pipeline(&self.device, selection.format())
+        })
+        .map(Some)
+    }
+
+    fn install_surface_selection(
+        &mut self,
+        selection: SurfaceSelection,
+        presentation_pipeline: Option<wgpu::RenderPipeline>,
+    ) {
+        if let Some(pipeline) = presentation_pipeline {
+            self.display.install_presentation_pipeline(pipeline);
+        }
+        self.selection = selection;
+        self.diagnostic_labels.update_surface(selection);
     }
 
     fn enqueue_device_event(&self, event: DeviceEvent) {
@@ -569,23 +651,6 @@ const fn validate_extent_limit(
         });
     }
     Ok(())
-}
-
-fn configure_surface_checked(
-    surface: &wgpu::Surface<'_>,
-    device: &wgpu::Device,
-    capabilities: &wgpu::SurfaceCapabilities,
-    selection: SurfaceSelection,
-    extent: RenderExtent,
-) -> Result<(), DeviceEvent> {
-    if !selection.is_supported_by(capabilities) {
-        return Err(DeviceEvent::validation(
-            "surface no longer supports the active presentation configuration",
-        ));
-    }
-    configure_surface_scoped(surface, device, selection, extent).map_err(|error| {
-        DeviceEvent::from_wgpu("failed to configure the presentation surface", error)
-    })
 }
 
 fn configure_surface_scoped(

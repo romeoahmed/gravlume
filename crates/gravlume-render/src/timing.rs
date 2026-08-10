@@ -106,10 +106,18 @@ impl GpuTimings {
         }
     }
 
-    pub(crate) const fn display_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
+    pub(crate) const fn display_begin_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
         wgpu::RenderPassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(2),
+            end_of_pass_write_index: None,
+        }
+    }
+
+    pub(crate) const fn display_end_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
+        wgpu::RenderPassTimestampWrites {
+            query_set: &self.query_set,
+            beginning_of_pass_write_index: None,
             end_of_pass_write_index: Some(3),
         }
     }
@@ -259,7 +267,26 @@ mod tests {
                 label: Some("one-shot timestamp display pass"),
                 color_attachments: &[attachment],
                 depth_stencil_attachment: None,
-                timestamp_writes: Some(timings.display_writes()),
+                timestamp_writes: Some(timings.display_begin_writes()),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        {
+            let attachment = Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            });
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("one-shot timestamp presentation pass"),
+                color_attachments: &[attachment],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(timings.display_end_writes()),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });

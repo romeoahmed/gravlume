@@ -41,3 +41,6 @@ nursery = { level = "warn", priority = -1 }
 [dependencies]
 gravlume-desktop = { path = "crates/gravlume-desktop" }
 tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -42,8 +42,9 @@ Trace -> GeometricSample
       -> invariant radiance + optical depth + transport flags
       -> reconstruct/history
       -> scene-linear HDR
-      -> display transform/gamut encoding
+      -> display transform into gamma-space composite
       -> egui/diagnostic overlays
+      -> surface presentation encoding
 ```
 
 geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostics 或 validation。Appearance effect 从 scene-linear result 开始，不回写 geodesic 或 emission。
