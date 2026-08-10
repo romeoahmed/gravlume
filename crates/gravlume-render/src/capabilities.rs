@@ -1,8 +1,8 @@
-pub(crate) const BASELINE_FEATURES: wgpu::Features =
+pub const BASELINE_FEATURES: wgpu::Features =
     wgpu::Features::TIMESTAMP_QUERY.union(wgpu::Features::CLEAR_TEXTURE);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum CapabilityError {
+pub enum CapabilityError {
     #[error("software adapters are outside the native desktop baseline")]
     SoftwareAdapter,
     #[error("adapter is not WebGPU compliant")]
@@ -22,7 +22,7 @@ pub(crate) enum CapabilityError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SurfaceSelection {
+pub struct SurfaceSelection {
     format: wgpu::TextureFormat,
     color_space: wgpu::SurfaceColorSpace,
     present_mode: wgpu::PresentMode,
@@ -51,11 +51,11 @@ impl SurfaceSelection {
     }
 }
 
-pub(crate) const fn missing_baseline_features(available: wgpu::Features) -> wgpu::Features {
+pub const fn missing_baseline_features(available: wgpu::Features) -> wgpu::Features {
     BASELINE_FEATURES.difference(available)
 }
 
-pub(crate) fn check_baseline_adapter(
+pub fn check_baseline_adapter(
     device_type: wgpu::DeviceType,
     is_webgpu_compliant: bool,
     available_features: wgpu::Features,
@@ -82,7 +82,7 @@ pub(crate) fn check_baseline_adapter(
     Ok(())
 }
 
-pub(crate) fn select_surface(
+pub fn select_surface(
     capabilities: &wgpu::SurfaceCapabilities,
 ) -> Result<SurfaceSelection, CapabilityError> {
     if !capabilities

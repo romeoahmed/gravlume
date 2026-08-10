@@ -72,14 +72,17 @@ pub struct DeviceEvent {
 }
 
 impl DeviceEvent {
+    #[must_use]
     pub const fn kind(&self) -> DeviceEventKind {
         self.kind
     }
 
+    #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 
+    #[must_use]
     pub const fn is_fatal(&self) -> bool {
         matches!(
             self.kind,
@@ -95,10 +98,12 @@ pub struct PollOutcome {
 }
 
 impl PollOutcome {
+    #[must_use]
     pub const fn completed_readback(&self) -> bool {
         self.completed_readback
     }
 
+    #[must_use]
     pub fn events(&self) -> &[DeviceEvent] {
         &self.events
     }
@@ -117,30 +122,37 @@ pub struct RenderDiagnostics {
 }
 
 impl RenderDiagnostics {
+    #[must_use]
     pub fn adapter_name(&self) -> &str {
         &self.adapter_name
     }
 
+    #[must_use]
     pub fn backend(&self) -> &str {
         &self.backend
     }
 
+    #[must_use]
     pub fn driver(&self) -> &str {
         &self.driver
     }
 
+    #[must_use]
     pub fn surface_format(&self) -> &str {
         &self.surface_format
     }
 
+    #[must_use]
     pub fn color_space(&self) -> &str {
         &self.color_space
     }
 
+    #[must_use]
     pub const fn display_transfer(&self) -> &'static str {
         self.display_transfer
     }
 
+    #[must_use]
     pub const fn extent_generation(&self) -> u64 {
         self.extent_generation
     }
@@ -158,6 +170,15 @@ struct FrameResources {
     scene: SceneTarget,
     display_bind_group: wgpu::BindGroup,
     needs_clear: bool,
+}
+
+enum SurfaceAcquisition {
+    Render {
+        texture: wgpu::SurfaceTexture,
+        reconfigure_after_present: bool,
+    },
+    Skip(FrameSkip),
+    Recreate,
 }
 
 impl FrameResources {
@@ -196,6 +217,12 @@ pub struct GpuEngine {
 }
 
 impl GpuEngine {
+    /// Creates the Phase 0 GPU device and presentation resources for `window`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the native surface, adapter, required capabilities, or device cannot
+    /// be initialized.
     pub async fn new(window: Arc<winit::window::Window>) -> Result<Self, RenderInitError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = crate::native_backends();
@@ -282,6 +309,12 @@ impl GpuEngine {
         }
     }
 
+    /// Encodes, submits, and presents one complete frame transaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when surface recovery, frame-resource validation, or the internal frame
+    /// protocol fails.
     pub fn render(
         &mut self,
         paint_jobs: &[egui::ClippedPrimitive],
@@ -295,63 +328,18 @@ impl GpuEngine {
             return Ok(FrameStatus::Skipped(FrameSkip::Suspended));
         };
 
-        let (surface_texture, reconfigure_after_present) = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture) => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Success),
-                    SurfaceDirective::Render {
-                        reconfigure_after_present: false
-                    }
-                );
-                (texture, false)
-            }
-            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Suboptimal),
-                    SurfaceDirective::Render {
-                        reconfigure_after_present: true
-                    }
-                );
-                (texture, true)
-            }
-            wgpu::CurrentSurfaceTexture::Timeout => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Timeout),
-                    SurfaceDirective::Skip
-                );
-                return Ok(FrameStatus::Skipped(FrameSkip::Timeout));
-            }
-            wgpu::CurrentSurfaceTexture::Occluded => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Occluded),
-                    SurfaceDirective::Skip
-                );
-                return Ok(FrameStatus::Skipped(FrameSkip::Occluded));
-            }
-            wgpu::CurrentSurfaceTexture::Outdated => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Outdated),
-                    SurfaceDirective::Reconfigure
-                );
-                configure_surface(surface, &self.device, self.selection, extent);
-                return Ok(FrameStatus::Skipped(FrameSkip::Outdated));
-            }
-            wgpu::CurrentSurfaceTexture::Lost => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Lost),
-                    SurfaceDirective::Recreate
-                );
-                self.recreate_surface()?;
-                return Ok(FrameStatus::Skipped(FrameSkip::Lost));
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                debug_assert_eq!(
-                    directive_for(AcquireOutcome::Validation),
-                    SurfaceDirective::ReportValidation
-                );
-                return Err(RenderRuntimeError::SurfaceValidation);
-            }
-        };
+        let (surface_texture, reconfigure_after_present) =
+            match acquire_surface_frame(surface, &self.device, self.selection, extent)? {
+                SurfaceAcquisition::Render {
+                    texture,
+                    reconfigure_after_present,
+                } => (texture, reconfigure_after_present),
+                SurfaceAcquisition::Skip(reason) => return Ok(FrameStatus::Skipped(reason)),
+                SurfaceAcquisition::Recreate => {
+                    self.recreate_surface()?;
+                    return Ok(FrameStatus::Skipped(FrameSkip::Lost));
+                }
+            };
 
         let mut protocol = FrameProtocol::default();
         protocol.acquired().map_err(frame_protocol_error)?;
@@ -440,6 +428,11 @@ impl GpuEngine {
         Ok(FrameStatus::Presented)
     }
 
+    /// Advances pending GPU work without blocking the event loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when device polling or timestamp readback fails.
     pub fn poll(&mut self) -> Result<PollOutcome, RenderRuntimeError> {
         let completed_readback = if self.timings.has_pending_readback() {
             self.timings
@@ -465,6 +458,11 @@ impl GpuEngine {
         self.surface = None;
     }
 
+    /// Restores the presentation surface after a desktop resume event.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the native surface cannot be recreated or its capabilities changed.
     pub fn resume_surface(&mut self) -> Result<(), RenderRuntimeError> {
         if self.surface.is_none() {
             self.recreate_surface()?;
@@ -511,6 +509,77 @@ impl GpuEngine {
 
 fn frame_protocol_error(error: FrameProtocolError) -> RenderRuntimeError {
     RenderRuntimeError::FrameProtocol(error.to_string())
+}
+
+fn acquire_surface_frame(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    selection: SurfaceSelection,
+    extent: RenderExtent,
+) -> Result<SurfaceAcquisition, RenderRuntimeError> {
+    let acquisition = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture) => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Success),
+                SurfaceDirective::Render {
+                    reconfigure_after_present: false
+                }
+            );
+            SurfaceAcquisition::Render {
+                texture,
+                reconfigure_after_present: false,
+            }
+        }
+        wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Suboptimal),
+                SurfaceDirective::Render {
+                    reconfigure_after_present: true
+                }
+            );
+            SurfaceAcquisition::Render {
+                texture,
+                reconfigure_after_present: true,
+            }
+        }
+        wgpu::CurrentSurfaceTexture::Timeout => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Timeout),
+                SurfaceDirective::Skip
+            );
+            SurfaceAcquisition::Skip(FrameSkip::Timeout)
+        }
+        wgpu::CurrentSurfaceTexture::Occluded => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Occluded),
+                SurfaceDirective::Skip
+            );
+            SurfaceAcquisition::Skip(FrameSkip::Occluded)
+        }
+        wgpu::CurrentSurfaceTexture::Outdated => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Outdated),
+                SurfaceDirective::Reconfigure
+            );
+            configure_surface(surface, device, selection, extent);
+            SurfaceAcquisition::Skip(FrameSkip::Outdated)
+        }
+        wgpu::CurrentSurfaceTexture::Lost => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Lost),
+                SurfaceDirective::Recreate
+            );
+            SurfaceAcquisition::Recreate
+        }
+        wgpu::CurrentSurfaceTexture::Validation => {
+            debug_assert_eq!(
+                directive_for(AcquireOutcome::Validation),
+                SurfaceDirective::ReportValidation
+            );
+            return Err(RenderRuntimeError::SurfaceValidation);
+        }
+    };
+    Ok(acquisition)
 }
 
 fn configure_surface(

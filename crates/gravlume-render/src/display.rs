@@ -1,4 +1,4 @@
-pub(crate) fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
+pub fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
     if format.is_srgb() {
         "display_to_linear_target"
     } else {
@@ -6,7 +6,7 @@ pub(crate) fn fragment_entry(format: wgpu::TextureFormat) -> &'static str {
     }
 }
 
-pub(crate) struct DisplayPipeline {
+pub struct DisplayPipeline {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
@@ -139,6 +139,10 @@ mod tests {
         assert_eq!(pixels[11], 255);
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the end-to-end GPU probe keeps resource lifetimes and submission order linear"
+    )]
     async fn probe_display() -> Vec<u8> {
         const WIDTH: u32 = 3;
         const PADDED_BYTES_PER_ROW: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;

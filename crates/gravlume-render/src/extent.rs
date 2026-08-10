@@ -1,7 +1,7 @@
 use std::num::NonZeroU32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RenderExtent {
+pub struct RenderExtent {
     width: NonZeroU32,
     height: NonZeroU32,
 }
@@ -24,7 +24,7 @@ impl RenderExtent {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ExtentChange {
+pub enum ExtentChange {
     Unchanged,
     Paused,
     Rebuild {
@@ -34,7 +34,7 @@ pub(crate) enum ExtentChange {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ExtentTracker {
+pub struct ExtentTracker {
     extent: Option<RenderExtent>,
     generation: u64,
     is_paused: bool,

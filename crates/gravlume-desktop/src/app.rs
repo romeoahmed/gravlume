@@ -38,6 +38,11 @@ pub enum RunError {
     Device(String),
 }
 
+/// Runs the native Gravlume application until the event loop exits.
+///
+/// # Errors
+///
+/// Returns an error when event-loop, window, renderer, or device initialization/runtime fails.
 pub fn run(launch: Launch) -> Result<(), RunError> {
     let mut builder = EventLoop::<UserEvent>::with_user_event();
     let event_loop = builder
@@ -108,7 +113,7 @@ impl DesktopApp {
                 self.egui_context.clone(),
                 egui::ViewportId::ROOT,
                 window.as_ref(),
-                Some(window.scale_factor() as f32),
+                None,
                 window.theme(),
                 None,
             );

@@ -9,6 +9,12 @@ pub struct WindowPreferences {
 }
 
 impl WindowPreferences {
+    /// Creates validated native-window preferences.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or oversized title, a zero extent, or an extent above the
+    /// desktop safety bound.
     pub fn new(
         title: impl Into<String>,
         width: u32,
@@ -34,14 +40,17 @@ impl WindowPreferences {
         })
     }
 
+    #[must_use]
     pub fn title(&self) -> &str {
         &self.title
     }
 
+    #[must_use]
     pub const fn width(&self) -> u32 {
         self.width
     }
 
+    #[must_use]
     pub const fn height(&self) -> u32 {
         self.height
     }
@@ -75,6 +84,7 @@ pub struct Launch {
 }
 
 impl Launch {
+    #[must_use]
     pub fn with_window(mut self, window: WindowPreferences) -> Self {
         self.window = window;
         self
