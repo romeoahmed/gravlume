@@ -4,7 +4,9 @@ Gravlume 是一个从零开始实现的 Rust 桌面科学可视化项目，用�
 
 ## 当前状态
 
-仓库处于 **设计与验证基线阶段**。目前只有 Cargo 生成的最小二进制、版本化 fixture 和待实现合同；尚未实现窗口、GPU tracer、吸积盘或研究 workbench。文档中的性能目标、算法候选和阶段能力都是验收条件，不是已完成功能。
+仓库已实现 **Phase 0 桌面栈闭环**：锁定的 Cargo workspace、winit 生命周期、wgpu scene-linear `rgba16float` compute、SDR display pass、egui overlay、resize/zero extent、surface recovery、结构化 device error 与非阻塞 GPU 计时回读。macOS/Metal 的 headless 合同和原生窗口 smoke 可在本仓库执行；Windows/Linux Vulkan 仍需在路线图要求的具名 adapter/driver 上补齐发布证据。
+
+这仍不是物理 tracer：Observation、CPU `f64` reference、Kerr–Schild GPU 追迹、吸积盘和 research workbench 属于后续阶段。文档中的后续性能目标、算法候选和阶段能力仍是验收条件，不是已完成功能。
 
 ## 产品边界
 
@@ -37,8 +39,9 @@ Inspired by [NPGS](https://github.com/baopinshui/NPGS); Gravlume is an independe
 ## 本地状态检查
 
 ```bash
-cargo check
-cargo test
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+GRAVLUME_SMOKE_ONCE=1 cargo run --locked
 ```
 
-在 Phase 0 引入桌面依赖前，`Cargo.toml` 刻意保持最小。版本只在真实调用者出现时加入，并由 Cargo 解算后的 `Cargo.lock` 固定；平台文档中的版本是实施起点，不替代 manifest。
+`GRAVLUME_SMOKE_ONCE=1` 在成功 present 且提交后的 GPU timing readback 于 idle 中完成后自动退出。依赖只按真实调用者加入，并由 `Cargo.lock` 固定；平台文档中的版本是实施起点，不替代 manifest。
