@@ -678,6 +678,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "egui-wgpu",
+ "pollster",
  "thiserror 2.0.20",
  "tracing",
  "wgpu",
