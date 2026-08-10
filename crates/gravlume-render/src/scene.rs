@@ -147,92 +147,8 @@ impl SceneTarget {
 }
 
 #[cfg(test)]
-#[derive(Debug, thiserror::Error)]
-enum ProbeError {
-    #[error("no native GPU adapter satisfies the Phase 0 request: {0}")]
-    Adapter(#[from] wgpu::RequestAdapterError),
-    #[error("the selected adapter is not WebGPU compliant")]
-    Downlevel,
-    #[error("adapter is missing Phase 0 features: {0:?}")]
-    MissingFeatures(wgpu::Features),
-    #[error("failed to request the Phase 0 device: {0}")]
-    Device(#[from] wgpu::RequestDeviceError),
-    #[error("buffer map failed")]
-    Map,
-    #[error("GPU poll failed: {0}")]
-    Poll(#[from] wgpu::PollError),
-}
-
-#[cfg(test)]
-struct HeadlessProbe {
-    extent: RenderExtent,
-    bytes: Vec<u8>,
-}
-
-#[cfg(test)]
-impl HeadlessProbe {
-    const BYTES_PER_PIXEL: usize = 8;
-
-    const fn extent(&self) -> RenderExtent {
-        self.extent
-    }
-
-    fn every_alpha_is_one(&self) -> bool {
-        self.bytes
-            .chunks_exact(Self::BYTES_PER_PIXEL)
-            .all(|pixel| u16::from_le_bytes([pixel[6], pixel[7]]) == 0x3c00)
-    }
-
-    fn has_channel_above_one(&self) -> bool {
-        self.bytes.chunks_exact(Self::BYTES_PER_PIXEL).any(|pixel| {
-            let red = u16::from_le_bytes([pixel[0], pixel[1]]);
-            red > 0x3c00 && red < 0x7c00
-        })
-    }
-}
-
-#[cfg(test)]
-async fn request_probe_device() -> Result<(wgpu::Device, wgpu::Queue), ProbeError> {
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-    descriptor.backends = crate::native_backends();
-    let instance = wgpu::Instance::new(descriptor);
-    let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: false,
-            compatible_surface: None,
-            apply_limit_buckets: false,
-        })
-        .await?;
-
-    if !adapter.get_downlevel_capabilities().is_webgpu_compliant() {
-        return Err(ProbeError::Downlevel);
-    }
-    let required_features = crate::capabilities::BASELINE_FEATURES;
-    let missing_features = required_features - adapter.features();
-    if !missing_features.is_empty() {
-        return Err(ProbeError::MissingFeatures(missing_features));
-    }
-    let adapter_limits = adapter.limits();
-    let required_limits = wgpu::Limits::default()
-        .using_resolution(adapter_limits.clone())
-        .using_alignment(adapter_limits);
-    adapter
-        .request_device(&wgpu::DeviceDescriptor {
-            label: Some("Phase 0 headless contract device"),
-            required_features,
-            required_limits,
-            ..Default::default()
-        })
-        .await
-        .map_err(ProbeError::from)
-}
-
-#[cfg(test)]
-fn readback_row_layout(extent: RenderExtent) -> (u32, u32) {
-    let bytes_per_pixel =
-        u32::try_from(HeadlessProbe::BYTES_PER_PIXEL).expect("HDR pixel byte width fits u32");
-    let unpadded = extent.width() * bytes_per_pixel;
+const fn readback_row_layout(extent: RenderExtent) -> (u32, u32) {
+    let unpadded = extent.width() * 8;
     let padded =
         unpadded.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     (unpadded, padded)
@@ -275,33 +191,12 @@ fn encode_probe(
 }
 
 #[cfg(test)]
-fn readback_bytes(
-    device: &wgpu::Device,
-    readback: &wgpu::Buffer,
-    submission: wgpu::SubmissionIndex,
+fn remove_row_padding(
+    mapped: &[u8],
     extent: RenderExtent,
     unpadded_bytes_per_row: u32,
     padded_bytes_per_row: u32,
-) -> Result<Vec<u8>, ProbeError> {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = sender.send(result);
-        });
-    device.poll(wgpu::PollType::Wait {
-        submission_index: Some(submission),
-        timeout: None,
-    })?;
-    receiver
-        .recv()
-        .map_err(|_| ProbeError::Map)?
-        .map_err(|_| ProbeError::Map)?;
-
-    let mapped = readback
-        .slice(..)
-        .get_mapped_range()
-        .map_err(|_| ProbeError::Map)?;
+) -> Vec<u8> {
     let unpadded = usize::try_from(unpadded_bytes_per_row).expect("row length fits usize");
     let padded = usize::try_from(padded_bytes_per_row).expect("padded row length fits usize");
     let height = usize::try_from(extent.height()).expect("height fits usize");
@@ -309,68 +204,65 @@ fn readback_bytes(
     for row in mapped.chunks_exact(padded) {
         bytes.extend_from_slice(&row[..unpadded]);
     }
-    drop(mapped);
-    readback.unmap();
-    Ok(bytes)
+    bytes
 }
 
 #[cfg(test)]
-async fn probe_headless(extent: RenderExtent) -> Result<HeadlessProbe, ProbeError> {
-    let (device, queue) = request_probe_device().await?;
-
-    let compute = SceneCompute::new(&device);
-    let target = compute.create_target(&device, extent);
+fn render_scene(extent: RenderExtent) -> Vec<u8> {
+    let gpu = crate::test_gpu::native_gpu();
+    let compute = SceneCompute::new(&gpu.device);
+    let target = compute.create_target(&gpu.device, extent);
     let (unpadded_bytes_per_row, padded_bytes_per_row) = readback_row_layout(extent);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Phase 0 headless HDR readback"),
         size: u64::from(padded_bytes_per_row) * u64::from(extent.height()),
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let commands = encode_probe(&device, &compute, &target, &readback, padded_bytes_per_row);
-    let submission = queue.submit([commands]);
-    let bytes = readback_bytes(
-        &device,
+    let commands = encode_probe(
+        &gpu.device,
+        &compute,
+        &target,
         &readback,
-        submission,
+        padded_bytes_per_row,
+    );
+    let submission = gpu.queue.submit([commands]);
+    let mapped = crate::test_gpu::read_buffer(&readback, submission);
+    remove_row_padding(
+        &mapped,
         extent,
         unpadded_bytes_per_row,
         padded_bytes_per_row,
-    )?;
-
-    Ok(HeadlessProbe { extent, bytes })
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DispatchGrid, probe_headless};
+    use super::render_scene;
     use crate::extent::RenderExtent;
 
     #[test]
-    fn dispatch_grid_ceiling_divides_edge_workgroups() {
-        let cases = [
-            ((1, 1), (1, 1)),
-            ((8, 8), (1, 1)),
-            ((9, 8), (2, 1)),
-            ((1279, 719), (160, 90)),
-        ];
-
-        for ((width, height), expected) in cases {
+    fn compute_overwrites_every_pixel_at_workgroup_boundaries() {
+        for (width, height) in [(1, 1), (8, 8), (9, 8), (17, 9)] {
             let extent = RenderExtent::new(width, height).expect("test extent is nonzero");
-            let grid = DispatchGrid::for_extent(extent);
-            assert_eq!((grid.x(), grid.y()), expected);
+            let bytes = render_scene(extent);
+            let pixels = bytes.chunks_exact(8);
+
+            assert!(pixels.remainder().is_empty(), "{width}x{height}");
+            assert_eq!(pixels.len(), (width * height) as usize, "{width}x{height}");
+            assert!(
+                pixels
+                    .clone()
+                    .all(|pixel| u16::from_le_bytes([pixel[6], pixel[7]]) == 0x3c00),
+                "compute left an unwritten pixel at {width}x{height}"
+            );
+            assert!(
+                pixels.clone().any(|pixel| {
+                    let red = u16::from_le_bytes([pixel[0], pixel[1]]);
+                    red > 0x3c00 && red < 0x7c00
+                }),
+                "scene lost its HDR range at {width}x{height}"
+            );
         }
-    }
-
-    #[test]
-    fn headless_compute_writes_scene_linear_hdr_for_odd_extent() {
-        let extent = RenderExtent::new(17, 9).expect("test extent is nonzero");
-
-        let probe = pollster::block_on(probe_headless(extent))
-            .expect("the native adapter should execute the Phase 0 compute shader");
-
-        assert_eq!(probe.extent(), extent);
-        assert!(probe.every_alpha_is_one());
-        assert!(probe.has_channel_above_one());
     }
 }

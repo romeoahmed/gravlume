@@ -194,8 +194,6 @@ impl GpuTimings {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use super::{GpuTimings, TimingSample};
 
     #[test]
@@ -219,90 +217,69 @@ mod tests {
 
     #[test]
     fn one_shot_readback_completes_after_submission_goes_idle() {
-        pollster::block_on(async {
-            let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
-            descriptor.backends = crate::native_backends();
-            let instance = wgpu::Instance::new(descriptor);
-            let adapter = instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: false,
-                })
-                .await
-                .expect("native adapter is available");
-            let adapter_limits = adapter.limits();
-            let required_limits = wgpu::Limits::default()
-                .using_resolution(adapter_limits.clone())
-                .using_alignment(adapter_limits);
-            let (device, queue) = adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("one-shot timestamp contract device"),
-                    required_features: crate::capabilities::BASELINE_FEATURES,
-                    required_limits,
-                    ..Default::default()
-                })
-                .await
-                .expect("Phase 0 device request succeeds");
-            let target = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("one-shot timestamp render target"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            let mut timings = GpuTimings::new(&device);
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let gpu = crate::test_gpu::native_gpu();
+        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("one-shot timestamp render target"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut timings = GpuTimings::new(&gpu.device);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("one-shot timestamp encoder"),
             });
-            {
-                let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("one-shot timestamp compute pass"),
-                    timestamp_writes: Some(timings.compute_writes()),
-                });
-            }
-            {
-                let attachment = Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                });
-                let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("one-shot timestamp display pass"),
-                    color_attachments: &[attachment],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: Some(timings.display_writes()),
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-            }
-            timings.encode_resolve(&mut encoder);
-            queue.submit([encoder.finish()]);
-            timings.begin_readback();
+        {
+            let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("one-shot timestamp compute pass"),
+                timestamp_writes: Some(timings.compute_writes()),
+            });
+        }
+        {
+            let attachment = Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            });
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("one-shot timestamp display pass"),
+                color_attachments: &[attachment],
+                depth_stencil_attachment: None,
+                timestamp_writes: Some(timings.display_writes()),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        timings.encode_resolve(&mut encoder);
+        let submission = gpu.queue.submit([encoder.finish()]);
+        timings.begin_readback();
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("timestamp submission completes");
 
-            let deadline = Instant::now() + Duration::from_secs(5);
-            while timings.latest().is_none() && Instant::now() < deadline {
-                let _completed = timings
-                    .poll(&device, queue.get_timestamp_period())
-                    .expect("non-blocking timestamp poll succeeds");
-                std::thread::yield_now();
-            }
+        let sample = timings
+            .poll(&gpu.device, gpu.queue.get_timestamp_period())
+            .expect("timestamp readback succeeds")
+            .expect("timestamp readback completed after its submission");
 
-            assert!(timings.latest().is_some());
-            assert!(!timings.has_pending_readback());
-        });
+        assert_eq!(timings.latest(), Some(sample));
+        assert!(!timings.has_pending_readback());
     }
 }
