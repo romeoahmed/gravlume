@@ -14,11 +14,15 @@ mod timing;
 mod test_gpu;
 
 #[doc(hidden)]
+pub use capabilities::CapabilityError;
+#[doc(hidden)]
 pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
 #[doc(hidden)]
 pub use gpu_error::{
     DeviceEvent, DeviceEventKind, RenderInitError, RenderRuntimeError, ResizeError,
 };
+#[doc(hidden)]
+pub use timing::TimingError;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("gravlume-render supports only native macOS, Windows, and Linux targets");

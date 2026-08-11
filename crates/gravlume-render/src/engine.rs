@@ -219,8 +219,7 @@ impl GpuEngine {
             adapter: adapter_info.name.clone(),
             reason: reason.to_string(),
         })?;
-        let selection = select_surface(&surface.get_capabilities(&adapter))
-            .map_err(|error| RenderInitError::SurfaceCapabilities(error.to_string()))?;
+        let selection = select_surface(&surface.get_capabilities(&adapter))?;
         let diagnostic_labels = DiagnosticLabels::new(&adapter_info, selection);
         let adapter_limits = adapter.limits();
         let required_limits = wgpu::Limits::default()
@@ -295,8 +294,7 @@ impl GpuEngine {
                 validate_extent_limit(extent, self.device.limits().max_texture_dimension_2d)?;
                 let selection = if let Some(surface) = &self.surface {
                     let capabilities = surface.get_capabilities(&self.adapter);
-                    select_surface(&capabilities)
-                        .map_err(|error| ResizeError::SurfaceCapabilities(error.to_string()))?
+                    select_surface(&capabilities)?
                 } else {
                     self.selection
                 };
@@ -443,8 +441,7 @@ impl GpuEngine {
     pub fn poll(&mut self) -> Result<PollOutcome, RenderRuntimeError> {
         let completed_readback = if self.timings.has_pending_readback() {
             self.timings
-                .poll(&self.device, self.queue.get_timestamp_period())
-                .map_err(|error| RenderRuntimeError::Timing(error.to_string()))?
+                .poll(&self.device, self.queue.get_timestamp_period())?
                 .is_some()
         } else {
             self.device.poll(wgpu::PollType::Poll)?;
@@ -589,8 +586,7 @@ impl GpuEngine {
         &self,
         capabilities: &wgpu::SurfaceCapabilities,
     ) -> Result<Option<SurfaceUpdate>, RenderRuntimeError> {
-        let selection = select_surface(capabilities)
-            .map_err(|error| RenderRuntimeError::SurfaceCapabilities(error.to_string()))?;
+        let selection = select_surface(capabilities)?;
         match self.create_presentation_pipeline_if_needed(selection) {
             Ok(presentation_pipeline) => Ok(Some(SurfaceUpdate {
                 selection,
