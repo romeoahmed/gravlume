@@ -166,7 +166,7 @@ fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
         Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
     )
     .expect("projection is valid");
-    let observation = Observation::new(scene_with_frequency(1.0e12), projection)
+    let observation = Observation::new(scene_with_frequency(1.0e200), projection)
         .expect("observation invariants hold");
     let sample = projection
         .sample(317, 509, 0.25, 0.75)
@@ -179,4 +179,28 @@ fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
             .normalized_null_residual()
             < 2.0e-12
     );
+}
+
+#[test]
+fn initial_ray_rejects_non_finite_derived_momentum() {
+    let projection = ViewportProjection::perspective(
+        NonZeroU32::new(1280).expect("width is nonzero"),
+        NonZeroU32::new(720).expect("height is nonzero"),
+        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
+    )
+    .expect("projection is valid");
+    let observation = Observation::new(scene_with_frequency(f64::MAX), projection)
+        .expect("observation invariants hold before ray construction");
+    let sample = projection
+        .sample(317, 509, 0.25, 0.75)
+        .expect("sample is valid");
+
+    let report = observation
+        .initial_ray(sample)
+        .expect_err("overflowing derived momentum is rejected at the ray seam");
+
+    assert!(report.issues().iter().any(|issue| {
+        issue.code() == ValidationIssueCode::NonFinite
+            && issue.field_path() == "observation.initial_ray"
+    }));
 }

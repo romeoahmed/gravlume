@@ -1,4 +1,8 @@
-use std::{fmt, num::NonZeroU32};
+use std::{
+    f64::consts::{FRAC_PI_3, FRAC_PI_4},
+    fmt,
+    num::NonZeroU32,
+};
 
 use gravlume_domain::{
     Angle, GeodesicState, KerrNewmanSpacetime, Observation, ParameterState, PhysicalScene,
@@ -13,6 +17,9 @@ use crate::{
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
+const V1_PRODUCER_PRECISION_DIGITS: u32 = 80;
+const V1_GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
+const V1_OBSERVATION_ID: &str = "kerr-exterior-observation-v1";
 
 #[derive(Clone, Debug)]
 pub enum FixtureDocument {
@@ -251,6 +258,8 @@ pub enum FixtureError {
     InconsistentExpectedObservables,
     #[error("fixture applicability is internally inconsistent")]
     InconsistentApplicability,
+    #[error("fixture field {field} does not match the baseline-v1 preset")]
+    PresetMismatch { field: &'static str },
 }
 
 #[derive(Deserialize)]
@@ -266,10 +275,8 @@ struct RawObservationFixture {
     schema_version: u32,
     profile: String,
     id: String,
-    #[serde(rename = "evidence")]
-    _evidence: Evidence,
-    #[serde(rename = "producer")]
-    _producer: RawProducer,
+    evidence: Evidence,
+    producer: RawProducer,
     spacetime: RawSpacetime,
     observer: RawObserver,
     viewport: RawViewport,
@@ -284,10 +291,8 @@ struct RawGeodesicFixture {
     schema_version: u32,
     profile: String,
     id: String,
-    #[serde(rename = "evidence")]
-    _evidence: Evidence,
-    #[serde(rename = "producer")]
-    _producer: RawProducer,
+    evidence: Evidence,
+    producer: RawProducer,
     spacetime: RawSpacetime,
     initial: RawInitial,
     events: RawGeodesicEvents,
@@ -299,12 +304,9 @@ struct RawGeodesicFixture {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawProducer {
-    #[serde(rename = "method")]
-    _method: String,
-    #[serde(rename = "precision_digits")]
-    _precision_digits: u32,
-    #[serde(rename = "cross_form_azimuth_disagreement")]
-    _cross_form_azimuth_disagreement: Option<DecimalString>,
+    method: String,
+    precision_digits: u32,
+    cross_form_azimuth_disagreement: Option<DecimalString>,
 }
 
 #[derive(Deserialize)]
@@ -486,6 +488,7 @@ impl TryFrom<RawObservationFixture> for FixtureDocument {
     fn try_from(raw: RawObservationFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
         validate_conventions(&raw.spacetime);
+        validate_observation_v1_profile(&raw)?;
         let observation = build_observation(&raw)?;
         validate_observation_expected(&raw, &observation)?;
         Ok(Self::Observation(ObservationFixture {
@@ -503,6 +506,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
     fn try_from(raw: RawGeodesicFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
         validate_conventions(&raw.spacetime);
+        validate_geodesic_evidence(&raw)?;
         let spacetime = KerrNewmanSpacetime::new(
             raw.spacetime.mass_m.value,
             raw.spacetime.spin_m.value,
@@ -523,6 +527,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             || (initial_invariants.energy() - 1.0).abs() > 32.0 * f64::EPSILON
             || initial_invariants.normalized_null_residual() > 2.0e-12
             || raw.expected.initial_null_abs.value < 0.0
+            || raw.expected.initial_null_abs.value > V1_GEODESIC_INITIAL_NULL_ABS_MAX
         {
             return Err(FixtureError::InvalidPhysicalData(
                 "initial energy/null contract is inconsistent".to_owned(),
@@ -565,6 +570,126 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             applicability,
             expected,
         }))
+    }
+}
+
+fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), FixtureError> {
+    require_profile(raw.id == V1_OBSERVATION_ID, "id")?;
+    require_profile(
+        matches!(raw.evidence, Evidence::AlgebraicAndNumeric),
+        "evidence",
+    )?;
+    require_profile(
+        raw.producer.precision_digits == V1_PRODUCER_PRECISION_DIGITS
+            && !raw.producer.method.trim().is_empty()
+            && raw.producer.cross_form_azimuth_disagreement.is_none(),
+        "producer",
+    )?;
+    require_decimal(&raw.spacetime.mass_m, 1.0, "spacetime.mass_m")?;
+    require_decimal(&raw.spacetime.spin_m, 0.8, "spacetime.spin_m")?;
+    require_decimal(&raw.spacetime.charge_m, 0.0, "spacetime.charge_m")?;
+    require_decimal(
+        &raw.observer.coordinate_time_m,
+        0.0,
+        "observer.coordinate_time_m",
+    )?;
+    require_decimal(
+        &raw.observer.oblate_radius_m,
+        30.0,
+        "observer.oblate_radius_m",
+    )?;
+    require_decimal(
+        &raw.observer.polar_angle_rad,
+        FRAC_PI_3,
+        "observer.polar_angle_rad",
+    )?;
+    require_decimal(&raw.observer.azimuth_rad, 0.0, "observer.azimuth_rad")?;
+    require_decimal_array(
+        &raw.observer.target_txyz_m,
+        [0.0; 4],
+        "observer.target_txyz_m",
+    )?;
+    require_decimal(
+        &raw.observer.measured_frequency,
+        1.0,
+        "observer.measured_frequency",
+    )?;
+    require_profile(raw.viewport.width == 1280, "viewport.width")?;
+    require_profile(raw.viewport.height == 720, "viewport.height")?;
+    require_decimal(
+        &raw.viewport.vertical_fov_rad,
+        FRAC_PI_4,
+        "viewport.vertical_fov_rad",
+    )?;
+    require_decimal_array(
+        &raw.viewport.default_subpixel,
+        [0.5, 0.5],
+        "viewport.default_subpixel",
+    )?;
+    require_decimal(
+        &raw.tolerance.radius_abs_m,
+        2.0e-13,
+        "tolerance.radius_abs_m",
+    )?;
+    require_decimal(
+        &raw.tolerance.frame_gram_max_abs,
+        2.0e-12,
+        "tolerance.frame_gram_max_abs",
+    )?;
+    require_decimal(
+        &raw.tolerance.initial_null_normalized_abs,
+        2.0e-12,
+        "tolerance.initial_null_normalized_abs",
+    )
+}
+
+fn validate_geodesic_evidence(raw: &RawGeodesicFixture) -> Result<(), FixtureError> {
+    let cross_form_is_valid = raw
+        .producer
+        .cross_form_azimuth_disagreement
+        .as_ref()
+        .is_some_and(|value| {
+            value.value >= 0.0 && value.value <= raw.tolerance.azimuth_advance_abs_rad.value
+        });
+    if !matches!(raw.evidence, Evidence::Numeric)
+        || raw.producer.precision_digits != V1_PRODUCER_PRECISION_DIGITS
+        || raw.producer.method.trim().is_empty()
+        || !cross_form_is_valid
+    {
+        return Err(FixtureError::InvalidPhysicalData(
+            "geodesic producer evidence is inconsistent with baseline-v1".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+const fn require_decimal(
+    actual: &DecimalString,
+    expected: f64,
+    field: &'static str,
+) -> Result<(), FixtureError> {
+    require_profile(actual.value.to_bits() == expected.to_bits(), field)
+}
+
+fn require_decimal_array<const N: usize>(
+    actual: &[DecimalString; N],
+    expected: [f64; N],
+    field: &'static str,
+) -> Result<(), FixtureError> {
+    require_profile(
+        actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| actual.value.to_bits() == expected.to_bits()),
+        field,
+    )
+}
+
+const fn require_profile(matches: bool, field: &'static str) -> Result<(), FixtureError> {
+    if matches {
+        Ok(())
+    } else {
+        Err(FixtureError::PresetMismatch { field })
     }
 }
 

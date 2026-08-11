@@ -112,4 +112,11 @@ fn ring_singularity_and_nonnegative_radius_branch_disk_are_distinct_failures() {
         spacetime.radius(branch_disk),
         Err(GeometryError::ChartBoundary)
     );
+
+    let point_just_inside_ring =
+        SpacetimeEvent::from_txyz([0.0, 0.8_f64.next_down(), 0.0, 0.0]).expect("event is finite");
+    assert_eq!(
+        spacetime.radius(point_just_inside_ring),
+        Err(GeometryError::ChartBoundary)
+    );
 }
