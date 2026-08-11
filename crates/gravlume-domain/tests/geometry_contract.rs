@@ -5,7 +5,7 @@ use gravlume_domain::{
 #[test]
 fn parameter_state_and_horizon_are_classified_without_clamping() {
     let subextremal = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("parameters are valid");
-    let extremal = KerrNewmanSpacetime::new(1.0, 0.8, 0.6).expect("parameters are valid");
+    let extremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.0).expect("parameters are valid");
     let superextremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.5).expect("parameters are valid");
 
     assert_eq!(subextremal.parameter_state(), ParameterState::Subextremal);
@@ -28,6 +28,27 @@ fn finite_extreme_scales_preserve_extremality_and_horizon_classification() {
         assert_eq!(extremal.parameter_state(), ParameterState::Extremal);
         assert_eq!(extremal.outer_horizon_radius(), Some(mass_m));
     }
+}
+
+#[test]
+fn near_extremal_state_uses_the_exact_binary64_parameter_values() {
+    let spin_m = 1.0_f64.next_down();
+    let charge_m = 2.0_f64.powi(-26);
+    let superextremal =
+        KerrNewmanSpacetime::new(1.0, spin_m, charge_m).expect("finite parameters are valid");
+    let subextremal =
+        KerrNewmanSpacetime::new(1.0, spin_m, 0.0).expect("finite parameters are valid");
+
+    assert_eq!(
+        superextremal.parameter_state(),
+        ParameterState::Superextremal
+    );
+    assert_eq!(superextremal.outer_horizon_radius(), None);
+    assert_eq!(subextremal.parameter_state(), ParameterState::Subextremal);
+    assert_eq!(
+        subextremal.outer_horizon_radius(),
+        Some(2.0_f64.powi(-26) + 1.0)
+    );
 }
 
 #[test]
@@ -128,6 +149,15 @@ fn representable_far_field_coordinates_do_not_overflow_internal_squares() {
             "guard side failed at {coordinate:e}"
         );
     }
+}
+
+#[test]
+fn representable_axis_radius_does_not_require_a_representable_square() {
+    let spacetime = KerrNewmanSpacetime::new(1.0, 1.0, 0.0).expect("parameters are valid");
+    let event = SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, 1.0e-200]).expect("event is finite");
+
+    assert_eq!(spacetime.radius(event), Ok(1.0e-200));
+    assert_eq!(spacetime.metric_component_tt(event), Ok(-1.0));
 }
 
 #[test]

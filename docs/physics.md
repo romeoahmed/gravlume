@@ -34,7 +34,7 @@ a^2+q_e^2
 
 superextremal 是理想化、无事件视界的解，不是一般意义上的“无效参数”，但默认产品不把它称为黑洞。$q_e$ 是几何化电荷参数；没有明确 SI 转换和天体模型时，只能解释为对解族的研究。
 
-实现判别上述状态和计算 horizon discriminant 时必须先按 $\max(|M|,|a|,|q_e|)$ 无量纲化，不能直接平方有限输入而让 overflow/underflow 改变物理分类。
+参数状态按 canonical binary64 输入的实际 bit pattern 判定，不按十进制显示值或已舍入的平方和判定。实现必须用指数对齐的整数 significand 等等价方法精确比较 $M^2$ 与 $a^2+q_e^2$，并从同一精确差值计算 horizon discriminant；只按 $\max(|M|,|a|,|q_e|)$ 缩放后再做普通浮点平方仍不足以保护近极端离散分类。Rust `f64` 的 binary64 布局与 [`to_bits`](https://doc.rust-lang.org/stable/std/primitive.f64.html#method.to_bits) 是这一 seam 的语言合同。
 
 ## 2. Cartesian Kerr–Schild geometry
 
@@ -62,7 +62,7 @@ u=
 \end{cases}
 \]
 
-第二式避免 $b<0$ 时大数相消。测试必须覆盖 $a=0$、轴线、赤道面、远场和接近 ring 的条件数；不能以 `max(epsilon, ...)` 后的值替代未截断恒等式。
+第二式避免 $b<0$ 时大数相消。轴线上必须先用解析恒等式 $r=|z|$ 及其导数极限，不能要求可表示的 $r$ 还必须有可表示的 $r^2$。测试必须覆盖 $a=0$、轴线、赤道面、远场和接近 ring 的条件数；不能以 `max(epsilon, ...)` 后的值替代未截断恒等式。
 
 隐式微分给出
 

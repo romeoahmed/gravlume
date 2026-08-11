@@ -1,10 +1,12 @@
+use std::cmp::Ordering;
+
 use glam::DVec3;
 
 use crate::{
     GeodesicState, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
     math::{
-        FourVector, normalized_inner_product_residual, normalized_quadratic_form_residual,
-        positive_product,
+        FourVector, binary_power, normalized_inner_product_residual,
+        normalized_quadratic_form_residual, positive_product,
     },
     validation::validate_finite,
 };
@@ -143,20 +145,12 @@ impl KerrNewmanSpacetime {
             return Err(report);
         }
 
-        let extremality = scaled_extremality(mass_m, spin_m, charge_m);
-        // A nonzero orthogonal component makes exact M=|a| or M=|q| superextremal even when
-        // its normalized square is too small to survive binary64 multiplication.
-        let parameter_state = if (mass_m.to_bits() == spin_m.abs().to_bits()
-            && charge_m.abs() > 0.0)
-            || (mass_m.to_bits() == charge_m.abs().to_bits() && spin_m.abs() > 0.0)
-        {
-            ParameterState::Superextremal
-        } else if extremality > 0.0 {
-            ParameterState::Subextremal
-        } else if extremality == 0.0 {
-            ParameterState::Extremal
-        } else {
-            ParameterState::Superextremal
+        let mass_squared = ExactBinary::square(mass_m);
+        let angular_squared = ExactBinary::sum_of_squares(spin_m, charge_m);
+        let parameter_state = match mass_squared.cmp(&angular_squared) {
+            Ordering::Greater => ParameterState::Subextremal,
+            Ordering::Equal => ParameterState::Extremal,
+            Ordering::Less => ParameterState::Superextremal,
         };
         let spacetime = Self {
             mass_m,
@@ -203,9 +197,10 @@ impl KerrNewmanSpacetime {
             ParameterState::Superextremal => None,
             ParameterState::Extremal => Some(self.mass_m),
             ParameterState::Subextremal => {
-                let scale = parameter_scale(self.mass_m, self.spin_m, self.charge_m);
-                let extremality = scaled_extremality(self.mass_m, self.spin_m, self.charge_m);
-                Some(scale.mul_add(extremality.sqrt(), self.mass_m))
+                let mass_squared = ExactBinary::square(self.mass_m);
+                let angular_squared = ExactBinary::sum_of_squares(self.spin_m, self.charge_m);
+                let discriminant_root = mass_squared.subtract(&angular_squared).square_root();
+                Some(self.mass_m + discriminant_root)
             }
         }
     }
@@ -460,6 +455,9 @@ impl KerrNewmanSpacetime {
 
     fn geometry(self, event: SpacetimeEvent) -> Result<Geometry, GeometryError> {
         let scaled = self.scaled_coordinates(event)?;
+        if scaled.x == 0.0 && scaled.y == 0.0 {
+            return self.axis_geometry(scaled);
+        }
         let ScaledCoordinates {
             scale,
             x,
@@ -537,6 +535,58 @@ impl KerrNewmanSpacetime {
         validate_geometry(geometry)
     }
 
+    fn axis_geometry(self, scaled: ScaledCoordinates) -> Result<Geometry, GeometryError> {
+        let ScaledCoordinates {
+            scale,
+            z,
+            spin,
+            radius: scaled_radius,
+            sigma,
+            ..
+        } = scaled;
+        let radius = scale * scaled_radius;
+        if !radius.is_finite() || scaled_radius <= 0.0 || sigma <= 0.0 {
+            return Err(GeometryError::InvalidDenominator);
+        }
+        let axis_sign = z.signum();
+        let radius_gradient = DVec3::new(0.0, 0.0, axis_sign);
+        let mass = self.mass_m / scale;
+        let charge = self.charge_m / scale;
+        let numerator = (-charge).mul_add(charge, 2.0 * mass * scaled_radius);
+        let scalar_f = numerator / sigma;
+        let sigma_gradient = DVec3::new(0.0, 0.0, 2.0 * scaled_radius * axis_sign);
+        let numerator_gradient = radius_gradient * (2.0 * mass);
+        let scalar_f_gradient =
+            (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
+        let null_covector = [1.0, 0.0, 0.0, axis_sign];
+        let null_vector = [-1.0, 0.0, 0.0, axis_sign];
+        let inverse_denominator_scale = sigma.recip() / scale;
+        let null_vector_gradient = [
+            [
+                0.0,
+                scaled_radius * inverse_denominator_scale,
+                -spin * inverse_denominator_scale,
+                0.0,
+            ],
+            [
+                0.0,
+                spin * inverse_denominator_scale,
+                scaled_radius * inverse_denominator_scale,
+                0.0,
+            ],
+            [0.0; 4],
+        ];
+        validate_geometry(Geometry {
+            radius,
+            radius_gradient,
+            scalar_f,
+            scalar_f_gradient,
+            null_covector,
+            null_vector,
+            null_vector_gradient,
+        })
+    }
+
     fn scaled_coordinates(self, event: SpacetimeEvent) -> Result<ScaledCoordinates, GeometryError> {
         let [_, physical_x, physical_y, physical_z] = event.to_txyz();
         if ![physical_x, physical_y, physical_z]
@@ -557,8 +607,25 @@ impl KerrNewmanSpacetime {
         let y = physical_y / scale;
         let z = physical_z / scale;
         let spin = self.spin_m / scale;
-        let radius_squared_3d = x.mul_add(x, y.mul_add(y, z * z));
         let spin_squared = spin * spin;
+        if physical_x == 0.0 && physical_y == 0.0 && physical_z != 0.0 {
+            let radius = z.abs();
+            let radius_squared = radius * radius;
+            let sigma = radius_squared + spin_squared;
+            if radius > 0.0 && sigma.is_finite() && sigma > 0.0 {
+                return Ok(ScaledCoordinates {
+                    scale,
+                    x,
+                    y,
+                    z,
+                    spin,
+                    radius_squared,
+                    radius,
+                    sigma,
+                });
+            }
+        }
+        let radius_squared_3d = x.mul_add(x, y.mul_add(y, z * z));
         let b = radius_squared_3d - spin_squared;
         let discriminant = b.mul_add(b, 4.0 * spin_squared * z * z);
         if !discriminant.is_finite() || discriminant < 0.0 {
@@ -598,19 +665,157 @@ impl KerrNewmanSpacetime {
     }
 }
 
-const fn parameter_scale(mass_m: f64, spin_m: f64, charge_m: f64) -> f64 {
-    mass_m.max(spin_m.abs()).max(charge_m.abs())
+// A finite binary64 magnitude is `significand * 2^exponent` with a 53-bit
+// significand and exponent in `[-1074, 971]`. Sixty-six limbs therefore hold
+// the exact sum of any two squared magnitudes, including its carry bit.
+const EXACT_BINARY_LIMBS: usize = 66;
+const MINIMUM_SQUARED_EXPONENT: i32 = -2148;
+const BINARY_WORD_BITS: usize = 64;
+
+#[derive(Clone, Eq, PartialEq)]
+struct ExactBinary {
+    limbs: [u64; EXACT_BINARY_LIMBS],
 }
 
-fn scaled_extremality(mass_m: f64, spin_m: f64, charge_m: f64) -> f64 {
-    let scale = parameter_scale(mass_m, spin_m, charge_m);
-    let normalized_mass = mass_m / scale;
-    let normalized_spin = spin_m / scale;
-    let normalized_charge = charge_m / scale;
-    normalized_mass.mul_add(
-        normalized_mass,
-        -normalized_spin.mul_add(normalized_spin, normalized_charge * normalized_charge),
-    )
+impl ExactBinary {
+    fn square(value: f64) -> Self {
+        let mut result = Self::default();
+        result.add_square(value);
+        result
+    }
+
+    fn sum_of_squares(first: f64, second: f64) -> Self {
+        let mut result = Self::default();
+        result.add_square(first);
+        result.add_square(second);
+        result
+    }
+
+    fn add_square(&mut self, value: f64) {
+        let (significand, exponent) = binary64_magnitude(value.abs());
+        if significand == 0 {
+            return;
+        }
+        let coefficient = u128::from(significand) * u128::from(significand);
+        let shift = usize::try_from(2 * exponent - MINIMUM_SQUARED_EXPONENT).unwrap_or_default();
+        self.add_shifted(coefficient, shift);
+    }
+
+    fn add_shifted(&mut self, coefficient: u128, shift: usize) {
+        let word = shift / BINARY_WORD_BITS;
+        let bit = shift % BINARY_WORD_BITS;
+        let low = u64::try_from(coefficient & u128::from(u64::MAX)).unwrap_or_default();
+        let high = u64::try_from(coefficient >> BINARY_WORD_BITS).unwrap_or_default();
+        if bit == 0 {
+            self.add_word(word, low);
+            self.add_word(word + 1, high);
+        } else {
+            self.add_word(word, low << bit);
+            self.add_word(word + 1, low >> (BINARY_WORD_BITS - bit));
+            self.add_word(word + 1, high << bit);
+            self.add_word(word + 2, high >> (BINARY_WORD_BITS - bit));
+        }
+    }
+
+    fn add_word(&mut self, mut index: usize, mut value: u64) {
+        while value != 0 {
+            let (sum, carry) = self.limbs[index].overflowing_add(value);
+            self.limbs[index] = sum;
+            value = u64::from(carry);
+            index += 1;
+        }
+    }
+
+    fn subtract(&self, smaller: &Self) -> Self {
+        let mut result = Self::default();
+        let mut borrow = false;
+        for index in 0..EXACT_BINARY_LIMBS {
+            let (difference, first_borrow) =
+                self.limbs[index].overflowing_sub(smaller.limbs[index]);
+            let (difference, second_borrow) = difference.overflowing_sub(u64::from(borrow));
+            result.limbs[index] = difference;
+            borrow = first_borrow || second_borrow;
+        }
+        debug_assert!(!borrow);
+        result
+    }
+
+    fn square_root(&self) -> f64 {
+        let highest_bit = self.highest_bit().unwrap_or_default();
+        let mut significand = 0_u64;
+        for offset in 0..f64::MANTISSA_DIGITS as usize {
+            significand <<= 1;
+            if highest_bit >= offset && self.bit(highest_bit - offset) {
+                significand |= 1;
+            }
+        }
+        let discarded_bits = highest_bit.saturating_sub(f64::MANTISSA_DIGITS as usize - 1);
+        if discarded_bits > 0 {
+            let guard = self.bit(discarded_bits - 1);
+            let sticky = (0..discarded_bits - 1).any(|bit| self.bit(bit));
+            if guard && (sticky || significand & 1 == 1) {
+                significand += 1;
+            }
+        }
+        let high = u32::try_from(significand >> 32).unwrap_or_default();
+        let low = u32::try_from(significand & u64::from(u32::MAX)).unwrap_or_default();
+        let normalized =
+            f64::from(high).mul_add(2.0_f64.powi(32), f64::from(low)) / 2.0_f64.powi(52);
+        let exponent = MINIMUM_SQUARED_EXPONENT + i32::try_from(highest_bit).unwrap_or_default();
+        if exponent & 1 == 0 {
+            normalized.sqrt() * binary_power(exponent / 2)
+        } else {
+            (2.0 * normalized).sqrt() * binary_power((exponent - 1) / 2)
+        }
+    }
+
+    fn highest_bit(&self) -> Option<usize> {
+        self.limbs.iter().rposition(|limb| *limb != 0).map(|word| {
+            word * BINARY_WORD_BITS
+                + usize::try_from(u64::BITS - 1 - self.limbs[word].leading_zeros())
+                    .unwrap_or_default()
+        })
+    }
+
+    const fn bit(&self, index: usize) -> bool {
+        let word = index / BINARY_WORD_BITS;
+        let bit = index % BINARY_WORD_BITS;
+        self.limbs[word] & (1_u64 << bit) != 0
+    }
+}
+
+impl Default for ExactBinary {
+    fn default() -> Self {
+        Self {
+            limbs: [0; EXACT_BINARY_LIMBS],
+        }
+    }
+}
+
+impl PartialOrd for ExactBinary {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ExactBinary {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.limbs.iter().rev().cmp(other.limbs.iter().rev())
+    }
+}
+
+fn binary64_magnitude(value: f64) -> (u64, i32) {
+    let bits = value.to_bits();
+    let stored_exponent = (bits >> 52) & 0x7ff;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    if stored_exponent == 0 {
+        (fraction, -1074)
+    } else {
+        (
+            (1_u64 << 52) | fraction,
+            i32::try_from(stored_exponent).unwrap_or_default() - 1075,
+        )
+    }
 }
 
 const fn classify_zero_radius(b: f64) -> GeometryError {
