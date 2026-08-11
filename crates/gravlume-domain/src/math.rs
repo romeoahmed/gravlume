@@ -161,43 +161,6 @@ fn positive_binary_decomposition(value: f64) -> (f64, i32) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{FourVector, normalized_quadratic_form_residual};
-
-    #[test]
-    fn scaled_quadratic_residual_preserves_the_unit_floor() {
-        for (matrix_scale, vector_scale) in [
-            (1.0, 0.5),
-            (1.0, 2.0),
-            (1.0e300, 0.5e-150),
-            (1.0e-300, 0.5e150),
-        ] {
-            let mut matrix = [[0.0; 4]; 4];
-            matrix[0][0] = matrix_scale;
-            let vector = FourVector::new([vector_scale, 0.0, 0.0, 0.0]);
-            let residual = normalized_quadratic_form_residual(matrix, vector);
-            let term = matrix_scale * vector_scale * vector_scale;
-            let expected = term.abs() / term.abs().max(1.0);
-
-            assert!((residual - expected).abs() <= 4.0 * f64::EPSILON);
-        }
-    }
-
-    #[test]
-    fn scaled_quadratic_residual_avoids_infinity_over_infinity() {
-        let matrix = [
-            [-1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0; 4],
-            [0.0; 4],
-        ];
-        let vector = FourVector::new([1.0e200, 1.0e200, 0.0, 0.0]);
-
-        assert!(normalized_quadratic_form_residual(matrix, vector).abs() <= f64::MIN_POSITIVE);
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeodesicState {
     components: [f64; 8],

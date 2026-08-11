@@ -5,21 +5,44 @@ use gravlume_reference::{
 };
 
 #[test]
-fn reference_policies_are_versioned_and_strict_is_a_real_refinement() {
+fn reference_policy_ids_are_stable_and_strict_refines_every_bound() {
     let regular = ReferencePolicy::regular_v1();
     let strict = ReferencePolicy::strict_v1();
 
     assert_eq!(regular.id(), "reference-regular-v1");
     assert_eq!(strict.id(), "reference-strict-v1");
-    assert!(
-        (strict.position_relative_tolerance() - regular.position_relative_tolerance() / 16.0).abs()
-            <= f64::EPSILON
-    );
-    assert!((strict.maximum_step_m() - 0.25).abs() <= f64::EPSILON);
-    assert_eq!(
-        strict.maximum_accepted_steps(),
-        2 * regular.maximum_accepted_steps()
-    );
+
+    for (regular_tolerance, strict_tolerance) in [
+        (
+            regular.position_relative_tolerance(),
+            strict.position_relative_tolerance(),
+        ),
+        (
+            regular.position_absolute_tolerance(),
+            strict.position_absolute_tolerance(),
+        ),
+        (
+            regular.momentum_relative_tolerance(),
+            strict.momentum_relative_tolerance(),
+        ),
+        (
+            regular.momentum_absolute_tolerance(),
+            strict.momentum_absolute_tolerance(),
+        ),
+        (
+            regular.event_affine_tolerance_m(),
+            strict.event_affine_tolerance_m(),
+        ),
+        (
+            regular.event_tie_tolerance_m(),
+            strict.event_tie_tolerance_m(),
+        ),
+    ] {
+        assert!(strict_tolerance < regular_tolerance);
+    }
+    assert!(strict.maximum_step_m() < regular.maximum_step_m());
+    assert!(strict.maximum_accepted_steps() > regular.maximum_accepted_steps());
+    assert!(strict.maximum_consecutive_rejects() > regular.maximum_consecutive_rejects());
 }
 
 #[test]

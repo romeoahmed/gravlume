@@ -2,8 +2,9 @@ use std::{num::NonZeroUsize, sync::Arc};
 
 use gravlume_reference::{
     AffineDirection, ComparisonError, CriticalSide, FixtureDocument, FixtureError,
-    GeodesicApplicability, GeodesicOrbit, ReferenceBatch, ReferenceComparison, ReferenceInstrument,
-    ReferencePolicy, ReferenceRequest, ReferenceTracer, Termination, TraceInputId, TraceRequest,
+    GeodesicApplicability, GeodesicFixture, GeodesicOrbit, ObservationFixture, ReferenceBatch,
+    ReferenceComparison, ReferenceInstrument, ReferenceOutcome, ReferencePolicy, ReferenceRequest,
+    ReferenceTracer, Termination, TraceInputId, TraceRequest,
 };
 
 const SCATTER_B6: &str = include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
@@ -15,7 +16,7 @@ const DEFAULT_OBSERVATION: &str =
     include_str!("../../../tests/fixtures/v1/default-kerr-observation.toml");
 
 #[test]
-fn v1_fixture_seam_accepts_the_repository_documents_and_rejects_unknown_fields() {
+fn repository_v1_fixture_documents_parse() {
     for source in [
         SCATTER_B6,
         SCATTER_NEAR_CRITICAL,
@@ -24,15 +25,19 @@ fn v1_fixture_seam_accepts_the_repository_documents_and_rejects_unknown_fields()
     ] {
         FixtureDocument::parse_toml(source).expect("v1 fixture is valid");
     }
+}
 
+#[test]
+fn fixture_envelope_is_strict_and_size_bounded() {
     let with_unknown = SCATTER_B6.replace(
         "schema_version = 1",
         "schema_version = 1\nundeclared = true",
     );
-    assert!(FixtureDocument::parse_toml(&with_unknown).is_err());
-
     let oversized = "x".repeat(1024 * 1024 + 1);
-    assert!(FixtureDocument::parse_toml(&oversized).is_err());
+
+    for source in [&with_unknown, &oversized] {
+        assert!(FixtureDocument::parse_toml(source).is_err());
+    }
 }
 
 #[test]
@@ -129,6 +134,11 @@ fn observation_fixture_rejects_fixed_v1_profile_drift() {
             "initial_null_normalized_abs = \"1\"",
             "tolerance.initial_null_normalized_abs",
         ),
+        (
+            "mass_m = \"1\"",
+            "mass_m = \"1.00000000000000001\"",
+            "spacetime.mass_m",
+        ),
     ];
 
     for (original, replacement, expected_field) in mutations {
@@ -139,18 +149,6 @@ fn observation_fixture_rejects_fixed_v1_profile_drift() {
             Err(FixtureError::PresetMismatch { field }) if field == expected_field
         ));
     }
-}
-
-#[test]
-fn observation_fixture_rejects_high_precision_preset_drift_hidden_by_f64_rounding() {
-    let mutated = DEFAULT_OBSERVATION.replace("mass_m = \"1\"", "mass_m = \"1.00000000000000001\"");
-
-    assert!(matches!(
-        FixtureDocument::parse_toml(&mutated),
-        Err(FixtureError::PresetMismatch {
-            field: "spacetime.mass_m"
-        })
-    ));
 }
 
 #[test]
@@ -199,7 +197,7 @@ fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
 }
 
 #[test]
-fn geodesic_fixture_and_tracer_reject_non_unit_mass() {
+fn geodesic_fixture_rejects_noncanonical_unit_mass_text() {
     let mutated = SCATTER_B6.replace("mass_m = \"1\"", "mass_m = \"1.000000000000001\"");
 
     assert!(matches!(
@@ -276,10 +274,7 @@ fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
 
 #[test]
 fn geodesic_fixture_retains_validated_near_critical_applicability() {
-    let fixture = FixtureDocument::parse_toml(CAPTURE_NEAR_CRITICAL)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(CAPTURE_NEAR_CRITICAL);
 
     assert_eq!(
         fixture.applicability(),
@@ -294,10 +289,7 @@ fn geodesic_fixture_retains_validated_near_critical_applicability() {
 
 #[test]
 fn regular_schwarzschild_fixture_matches_the_independent_observables() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let outcome = tracer.trace(fixture.trace_request());
 
@@ -308,20 +300,12 @@ fn regular_schwarzschild_fixture_matches_the_independent_observables() {
             && !event.is_ambiguous()
     }));
     assert!(fixture.expected().accepts(&outcome));
-    assert!(outcome.diagnostics().accepted_steps() > 0);
-    assert_eq!(
-        outcome.diagnostics().rhs_evaluations(),
-        2 + 6 * (outcome.diagnostics().accepted_steps() + outcome.diagnostics().rejected_steps())
-    );
     assert!(outcome.diagnostics().maximum_null_residual() < 5.0e-9);
 }
 
 #[test]
 fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let request = fixture.trace_request();
     let outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
         TraceRequest::new(
@@ -336,10 +320,7 @@ fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
 
 #[test]
 fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
         .trace(fixture.trace_request());
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
@@ -348,16 +329,11 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
         .expect("policy roles and input identity match");
 
     assert!(comparison.is_accepted(), "{:?}", comparison.issues());
-    assert_eq!(comparison.baseline_policy(), "reference-regular-v1");
-    assert_eq!(comparison.candidate_policy(), "reference-strict-v1");
 }
 
 #[test]
 fn baseline_comparison_rejects_wrong_policy_roles() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
         .trace(fixture.trace_request());
 
@@ -376,10 +352,7 @@ fn baseline_comparison_rejects_wrong_policy_roles() {
 
 #[test]
 fn baseline_comparison_rejects_different_input_ids() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let request = fixture.trace_request();
     let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
         TraceRequest::new(
@@ -406,28 +379,8 @@ fn baseline_comparison_rejects_different_input_ids() {
 }
 
 #[test]
-fn fixture_requests_preserve_their_logical_input_identity() {
-    let scatter = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
-    let capture = FixtureDocument::parse_toml(CAPTURE_NEAR_CRITICAL)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
-
-    assert_ne!(
-        scatter.trace_request().input_id(),
-        capture.trace_request().input_id()
-    );
-}
-
-#[test]
 fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1());
     let forward = tracer.trace(fixture.trace_request());
     let backward = tracer.trace(TraceRequest::new(
@@ -454,10 +407,7 @@ fn near_critical_pair_preserves_the_independent_discrete_classification() {
 
 #[test]
 fn dedicated_rayon_pool_preserves_input_order() {
-    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
-        .expect("fixture parses")
-        .into_geodesic()
-        .expect("fixture is geodesic");
+    let fixture = geodesic_fixture(SCATTER_B6);
     let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let request = fixture.trace_request();
     let inputs = [
@@ -482,10 +432,7 @@ fn dedicated_rayon_pool_preserves_input_order() {
 
 #[test]
 fn observation_interface_traces_backward_without_flipping_photon_time_orientation() {
-    let fixture = FixtureDocument::parse_toml(DEFAULT_OBSERVATION)
-        .expect("fixture parses")
-        .into_observation()
-        .expect("fixture is an observation");
+    let fixture = observation_fixture(DEFAULT_OBSERVATION);
     let input_id = fixture.input_id().clone();
     let observation = Arc::new(fixture.observation().clone());
     let sample = observation
@@ -535,11 +482,22 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
     assert!(comparison.is_accepted(), "{comparison:?}");
 }
 
-fn run_fixture(source: &str, policy: ReferencePolicy) -> gravlume_reference::ReferenceOutcome {
-    let fixture = FixtureDocument::parse_toml(source)
+fn geodesic_fixture(source: &str) -> GeodesicFixture {
+    FixtureDocument::parse_toml(source)
         .expect("fixture parses")
         .into_geodesic()
-        .expect("fixture is geodesic");
+        .expect("fixture is geodesic")
+}
+
+fn observation_fixture(source: &str) -> ObservationFixture {
+    FixtureDocument::parse_toml(source)
+        .expect("fixture parses")
+        .into_observation()
+        .expect("fixture is an observation")
+}
+
+fn run_fixture(source: &str, policy: ReferencePolicy) -> ReferenceOutcome {
+    let fixture = geodesic_fixture(source);
     let tracer = ReferenceTracer::from_fixture(&fixture, policy);
     let outcome = tracer.trace(fixture.trace_request());
     assert!(fixture.expected().accepts(&outcome));

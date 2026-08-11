@@ -20,7 +20,6 @@
 
 - oblate radius identity、rank-one inverse、Schwarzschild、Reissner–Nordström、Kerr–Newman、extremal/superextremal 与趋近 Minkowski 的特殊极限；
 - 默认 Kerr stationary observer 的 horizon、`g_tt`、frame Gram/orientation，以及跨 projection sample 重新解析和 frequency-scale-invariant viewport null/frequency seam；
-- DP5(4) tableau row sum、两组 weights 与 dense endpoint identity；
 - weak-field Schwarzschild deflection 对 leading `4M/b`、regular `b=6` 80 位 fixture、`sqrt(27)±10^-3` near-critical escape/capture 分类；
 - regular/strict 的 policy/input identity、termination、event position、escape direction、travel time 与 invariant drift comparison gate；
 - horizon、escape、equatorial surface、singularity guard、step exhaustion 和 same-step ambiguity；

@@ -26,6 +26,15 @@ fn scene_with_frequency(measured_frequency: f64) -> PhysicalScene {
     .expect("the versioned default scene is valid")
 }
 
+fn default_projection() -> ViewportProjection {
+    ViewportProjection::perspective(
+        NonZeroU32::new(1280).expect("width is nonzero"),
+        NonZeroU32::new(720).expect("height is nonzero"),
+        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
+    )
+    .expect("the versioned projection is valid")
+}
+
 #[test]
 fn invalid_scene_reports_stable_codes_and_field_paths() {
     let result = PhysicalScene::commit(PhysicalSceneDraft::new(
@@ -88,12 +97,7 @@ fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
 #[test]
 fn viewport_samples_produce_future_directed_null_rays() {
     let scene = default_scene();
-    let projection = ViewportProjection::perspective(
-        NonZeroU32::new(1280).expect("width is nonzero"),
-        NonZeroU32::new(720).expect("height is nonzero"),
-        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
-    )
-    .expect("the versioned projection is valid");
+    let projection = default_projection();
     let observation = Observation::new(scene, projection);
 
     for (x, y, offset_x, offset_y) in [
@@ -133,12 +137,7 @@ fn viewport_rejects_pixels_and_subpixels_outside_the_seam() {
 
 #[test]
 fn initial_ray_resolves_a_sample_against_the_observation_projection() {
-    let observation_projection = ViewportProjection::perspective(
-        NonZeroU32::new(1280).expect("width is nonzero"),
-        NonZeroU32::new(720).expect("height is nonzero"),
-        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
-    )
-    .expect("projection is valid");
+    let observation_projection = default_projection();
     let foreign_projection = ViewportProjection::perspective(
         NonZeroU32::new(1280).expect("width is nonzero"),
         NonZeroU32::new(720).expect("height is nonzero"),
@@ -167,12 +166,7 @@ fn initial_ray_resolves_a_sample_against_the_observation_projection() {
 
 #[test]
 fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
-    let projection = ViewportProjection::perspective(
-        NonZeroU32::new(1280).expect("width is nonzero"),
-        NonZeroU32::new(720).expect("height is nonzero"),
-        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
-    )
-    .expect("projection is valid");
+    let projection = default_projection();
     let observation = Observation::new(scene_with_frequency(1.0e200), projection);
     let sample = projection
         .sample(317, 509, 0.25, 0.75)
@@ -189,12 +183,7 @@ fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
 
 #[test]
 fn initial_ray_rejects_non_finite_derived_momentum() {
-    let projection = ViewportProjection::perspective(
-        NonZeroU32::new(1280).expect("width is nonzero"),
-        NonZeroU32::new(720).expect("height is nonzero"),
-        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
-    )
-    .expect("projection is valid");
+    let projection = default_projection();
     let observation = Observation::new(scene_with_frequency(f64::MAX), projection);
     let sample = projection
         .sample(317, 509, 0.25, 0.75)
