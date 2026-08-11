@@ -113,6 +113,7 @@ pub struct GeodesicFixture {
     initial_state: GeodesicState,
     affine_direction: AffineDirection,
     escape_radius_m: Option<f64>,
+    applicability: GeodesicApplicability,
     expected: ExpectedOutcome,
 }
 
@@ -149,9 +150,39 @@ impl GeodesicFixture {
     }
 
     #[must_use]
+    pub const fn applicability(&self) -> GeodesicApplicability {
+        self.applicability
+    }
+
+    #[must_use]
     pub const fn expected(&self) -> &ExpectedOutcome {
         &self.expected
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeodesicOrbit {
+    EquatorialSingleTurnScatter,
+    EquatorialCapture,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CriticalSide {
+    Escape,
+    Capture,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GeodesicApplicability {
+    Regular {
+        orbit: GeodesicOrbit,
+    },
+    NearCritical {
+        orbit: GeodesicOrbit,
+        critical_impact_parameter_m: f64,
+        impact_parameter_offset_m: f64,
+        side: CriticalSide,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -175,14 +206,15 @@ impl ExpectedOutcome {
         {
             return false;
         }
-        if let (Some(expected), Some(tolerance)) = (
+        match (
             self.turning_radius_m,
             self.turning_radius_absolute_tolerance_m,
-        ) && outcome
-            .turning_radius_m()
-            .is_none_or(|actual| (actual - expected).abs() > tolerance)
-        {
-            return false;
+            outcome.turning_radius_m(),
+        ) {
+            (None, None, None) => {}
+            (Some(expected), Some(tolerance), Some(actual))
+                if (actual - expected).abs() <= tolerance => {}
+            _ => return false,
         }
         if let (Some(expected), Some(tolerance)) =
             (self.event_radius_m, self.event_radius_absolute_tolerance_m)
@@ -217,6 +249,8 @@ pub enum FixtureError {
     InconsistentEventEnvelope,
     #[error("fixture expected observables are internally inconsistent")]
     InconsistentExpectedObservables,
+    #[error("fixture applicability is internally inconsistent")]
+    InconsistentApplicability,
 }
 
 #[derive(Deserialize)]
@@ -257,8 +291,7 @@ struct RawGeodesicFixture {
     spacetime: RawSpacetime,
     initial: RawInitial,
     events: RawGeodesicEvents,
-    #[serde(rename = "applicability")]
-    _applicability: RawApplicability,
+    applicability: RawApplicability,
     expected: RawGeodesicExpected,
     tolerance: RawGeodesicTolerance,
 }
@@ -356,18 +389,17 @@ struct RawGeodesicEvents {
 }
 
 #[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawApplicability {
-    #[serde(rename = "class")]
-    _class: ApplicabilityClass,
-    #[serde(rename = "orbit")]
-    _orbit: Orbit,
-    #[serde(rename = "critical_impact_parameter_m")]
-    _critical_impact_parameter_m: Option<DecimalString>,
-    #[serde(rename = "impact_parameter_offset_m")]
-    _impact_parameter_offset_m: Option<DecimalString>,
-    #[serde(rename = "side")]
-    _side: Option<CriticalSide>,
+#[serde(tag = "class", rename_all = "kebab-case", deny_unknown_fields)]
+enum RawApplicability {
+    Regular {
+        orbit: RawOrbit,
+    },
+    NearCritical {
+        orbit: RawOrbit,
+        critical_impact_parameter_m: DecimalString,
+        impact_parameter_offset_m: DecimalString,
+        side: RawCriticalSide,
+    },
 }
 
 #[derive(Deserialize)]
@@ -441,12 +473,11 @@ fixture_enum!(Projection { Perspective => "perspective" });
 fixture_enum!(ViewportOrigin { TopLeft => "top-left" });
 fixture_enum!(ParameterStateName { Subextremal => "subextremal" });
 fixture_enum!(AffineDirectionName { Positive => "positive", Negative => "negative" });
-fixture_enum!(ApplicabilityClass { Regular => "regular", NearCritical => "near-critical" });
-fixture_enum!(Orbit {
+fixture_enum!(RawOrbit {
     EquatorialSingleTurnScatter => "equatorial-single-turn-scatter",
     EquatorialCapture => "equatorial-capture"
 });
-fixture_enum!(CriticalSide { Escape => "escape", Capture => "capture" });
+fixture_enum!(RawCriticalSide { Escape => "escape", Capture => "capture" });
 fixture_enum!(ExpectedTermination { Escape => "escape", HorizonCrossing => "horizon-crossing" });
 
 impl TryFrom<RawObservationFixture> for FixtureDocument {
@@ -488,8 +519,8 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
         let initial_invariants = spacetime
             .invariants(initial_state)
             .map_err(invalid_physical_data)?;
-        if (initial_invariants.energy() - raw.initial.energy_at_infinity.value).abs()
-            > 32.0 * f64::EPSILON
+        if raw.initial.energy_at_infinity.value.to_bits() != 1.0_f64.to_bits()
+            || (initial_invariants.energy() - 1.0).abs() > 32.0 * f64::EPSILON
             || initial_invariants.normalized_null_residual() > 2.0e-12
             || raw.expected.initial_null_abs.value < 0.0
         {
@@ -497,6 +528,12 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
                 "initial energy/null contract is inconsistent".to_owned(),
             ));
         }
+        let applicability = validate_geodesic_applicability(
+            &raw.applicability,
+            termination,
+            initial_invariants.energy(),
+            initial_invariants.angular_momentum_z(),
+        )?;
         let affine_direction = match raw.initial.affine_direction {
             AffineDirectionName::Positive => AffineDirection::Positive,
             AffineDirectionName::Negative => AffineDirection::Negative,
@@ -525,8 +562,104 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             initial_state,
             affine_direction,
             escape_radius_m: raw.events.escape_radius_m.map(|value| value.value),
+            applicability,
             expected,
         }))
+    }
+}
+
+fn validate_geodesic_applicability(
+    raw: &RawApplicability,
+    termination: Termination,
+    energy: f64,
+    angular_momentum_z: f64,
+) -> Result<GeodesicApplicability, FixtureError> {
+    match raw {
+        RawApplicability::Regular { orbit } => {
+            let orbit = GeodesicOrbit::from(*orbit);
+            if !orbit_matches_termination(orbit, termination) {
+                return Err(FixtureError::InconsistentApplicability);
+            }
+            Ok(GeodesicApplicability::Regular { orbit })
+        }
+        RawApplicability::NearCritical {
+            orbit,
+            critical_impact_parameter_m,
+            impact_parameter_offset_m,
+            side,
+        } => {
+            let orbit = GeodesicOrbit::from(*orbit);
+            let side = CriticalSide::from(*side);
+            let critical_impact_parameter_m = critical_impact_parameter_m.value;
+            let impact_parameter_offset_m = impact_parameter_offset_m.value;
+            let labeled_impact_parameter_m =
+                critical_impact_parameter_m + impact_parameter_offset_m;
+            let actual_impact_parameter_m = angular_momentum_z / energy;
+            let side_matches_offset = match side {
+                CriticalSide::Escape => impact_parameter_offset_m > 0.0,
+                CriticalSide::Capture => impact_parameter_offset_m < 0.0,
+            };
+            let side_matches_orbit = matches!(
+                (side, orbit),
+                (
+                    CriticalSide::Escape,
+                    GeodesicOrbit::EquatorialSingleTurnScatter
+                ) | (CriticalSide::Capture, GeodesicOrbit::EquatorialCapture)
+            );
+            if critical_impact_parameter_m <= 0.0
+                || !side_matches_offset
+                || !side_matches_orbit
+                || !orbit_matches_termination(orbit, termination)
+                || !approximately_equal(actual_impact_parameter_m, labeled_impact_parameter_m)
+            {
+                return Err(FixtureError::InconsistentApplicability);
+            }
+            Ok(GeodesicApplicability::NearCritical {
+                orbit,
+                critical_impact_parameter_m,
+                impact_parameter_offset_m,
+                side,
+            })
+        }
+    }
+}
+
+const fn orbit_matches_termination(orbit: GeodesicOrbit, termination: Termination) -> bool {
+    matches!(
+        (orbit, termination),
+        (
+            GeodesicOrbit::EquatorialSingleTurnScatter,
+            Termination::Escape
+        ) | (
+            GeodesicOrbit::EquatorialCapture,
+            Termination::HorizonCrossing
+        )
+    )
+}
+
+fn approximately_equal(left: f64, right: f64) -> bool {
+    if !left.is_finite() || !right.is_finite() {
+        return false;
+    }
+    let scale = left.abs().max(right.abs()).max(1.0);
+    (left - right).abs() <= 64.0 * f64::EPSILON * scale
+}
+
+impl From<RawOrbit> for GeodesicOrbit {
+    fn from(value: RawOrbit) -> Self {
+        match value {
+            RawOrbit::EquatorialSingleTurnScatter => Self::EquatorialSingleTurnScatter,
+            RawOrbit::EquatorialCapture => Self::EquatorialCapture,
+        }
+    }
+}
+
+impl From<RawCriticalSide> for CriticalSide {
+    fn from(value: RawCriticalSide) -> Self {
+        match value {
+            RawCriticalSide::Escape => Self::Escape,
+            RawCriticalSide::Capture => Self::Capture,
+        }
     }
 }
 
@@ -729,5 +862,28 @@ const fn validate_conventions(spacetime: &RawSpacetime) {
             MetricSignature::MostlyPlus,
             ComponentOrder::Txyz,
         ) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FixtureDocument;
+    use crate::{ReferencePolicy, ReferenceTracer};
+
+    const CAPTURE_NEAR_CRITICAL: &str =
+        include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
+
+    #[test]
+    fn capture_expectation_rejects_an_unexpected_turning_radius() {
+        let fixture = FixtureDocument::parse_toml(CAPTURE_NEAR_CRITICAL)
+            .expect("fixture parses")
+            .into_geodesic()
+            .expect("fixture is geodesic");
+        let mut outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+            .expect("fixture event configuration is valid")
+            .trace(fixture.trace_request());
+        outcome.turning_radius_m = Some(3.0);
+
+        assert!(!fixture.expected().accepts(&outcome));
     }
 }

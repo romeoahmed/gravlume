@@ -62,6 +62,22 @@ fn default_kerr_observer_matches_the_versioned_contract() {
 }
 
 #[test]
+fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
+    let spin = 0.8_f64;
+    let radius = 2.0_f64 + 1.0e-8;
+    let x = radius.mul_add(radius, spin * spin).sqrt();
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
+        1.0,
+        spin,
+        0.0,
+        StationaryObserverDraft::new([0.0, x, 0.0, 0.0], [0.0; 4], [0.0, 0.0, 1.0], 1.0),
+    ))
+    .expect("a finite stationary observer remains representable near g_tt = 0");
+
+    assert!(scene.observer_frame().gram_residual() < 2.0e-12);
+}
+
+#[test]
 fn viewport_samples_produce_future_directed_null_rays() {
     let scene = default_scene();
     let projection = ViewportProjection::perspective(

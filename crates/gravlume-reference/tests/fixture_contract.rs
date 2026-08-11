@@ -1,9 +1,9 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use gravlume_reference::{
-    AffineDirection, ComparisonError, FixtureDocument, FixtureError, ReferenceBatch,
-    ReferenceComparison, ReferenceInstrument, ReferencePolicy, ReferenceRequest, ReferenceTracer,
-    Termination, TraceInputId, TraceRequest,
+    AffineDirection, ComparisonError, CriticalSide, FixtureDocument, FixtureError,
+    GeodesicApplicability, GeodesicOrbit, ReferenceBatch, ReferenceComparison, ReferenceInstrument,
+    ReferencePolicy, ReferenceRequest, ReferenceTracer, Termination, TraceInputId, TraceRequest,
 };
 
 const SCATTER_B6: &str = include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
@@ -46,6 +46,97 @@ fn observation_fixture_rejects_an_escape_radius_outside_the_v1_profile() {
         FixtureDocument::parse_toml(&wrong_escape_radius),
         Err(FixtureError::InconsistentEventEnvelope)
     ));
+}
+
+#[test]
+fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
+    let scaled = SCATTER_B6
+        .replace(
+            concat!(
+                "momentum_covariant = [\n",
+                "  \"-1\",\n",
+                "  \"-0.99277494330677424337355254840577841602316427996638407416694633896574636965694494\",\n",
+                "  \"0.12\",\n",
+                "  \"0\",\n",
+                "]",
+            ),
+            concat!(
+                "momentum_covariant = [\n",
+                "  \"-2\",\n",
+                "  \"-1.98554988661354848674710509681155683204632855993276814833389267793149273931388988\",\n",
+                "  \"0.24\",\n",
+                "  \"0\",\n",
+                "]",
+            ),
+        )
+        .replace("energy_at_infinity = \"1\"", "energy_at_infinity = \"2\"");
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&scaled),
+        Err(FixtureError::InvalidPhysicalData(_))
+    ));
+}
+
+#[test]
+fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
+    let wrong_side = CAPTURE_NEAR_CRITICAL.replace("side = \"capture\"", "side = \"escape\"");
+    let wrong_offset = CAPTURE_NEAR_CRITICAL.replace(
+        "impact_parameter_offset_m = \"-0.001\"",
+        "impact_parameter_offset_m = \"0.001\"",
+    );
+    let missing_distance = CAPTURE_NEAR_CRITICAL.replace(
+        "critical_impact_parameter_m = \"5.196152422706631880582339024517617100829\"\n",
+        "",
+    );
+    let overflowing_distance = SCATTER_NEAR_CRITICAL
+        .replace(
+            "critical_impact_parameter_m = \"5.196152422706631880582339024517617100829\"",
+            "critical_impact_parameter_m = \"1.7976931348623157e308\"",
+        )
+        .replace(
+            "impact_parameter_offset_m = \"0.001\"",
+            "impact_parameter_offset_m = \"1.7976931348623157e308\"",
+        );
+    let regular_with_critical_fields = SCATTER_B6.replace(
+        "orbit = \"equatorial-single-turn-scatter\"",
+        concat!(
+            "orbit = \"equatorial-single-turn-scatter\"\n",
+            "critical_impact_parameter_m = \"5.196152422706632\"\n",
+            "impact_parameter_offset_m = \"0.803847577293368\"\n",
+            "side = \"escape\"",
+        ),
+    );
+
+    for source in [&wrong_side, &wrong_offset, &overflowing_distance] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(source),
+            Err(FixtureError::InconsistentApplicability)
+        ));
+    }
+    for source in [&missing_distance, &regular_with_critical_fields] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(source),
+            Err(FixtureError::Toml(_))
+        ));
+    }
+}
+
+#[test]
+fn geodesic_fixture_retains_validated_near_critical_applicability() {
+    let fixture = FixtureDocument::parse_toml(CAPTURE_NEAR_CRITICAL)
+        .expect("fixture parses")
+        .into_geodesic()
+        .expect("fixture is geodesic");
+
+    assert_eq!(
+        fixture.applicability(),
+        GeodesicApplicability::NearCritical {
+            orbit: GeodesicOrbit::EquatorialCapture,
+            critical_impact_parameter_m: 5.196_152_422_706_632,
+            impact_parameter_offset_m: -0.001,
+            side: CriticalSide::Capture,
+        }
+    );
 }
 
 #[test]

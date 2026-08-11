@@ -16,7 +16,8 @@ pub use batch::{ReferenceBatch, ReferenceBatchError};
 pub use comparison::{ComparisonError, ComparisonIssue, ReferenceComparison};
 pub use events::{EventConfiguration, EventConfigurationError, EventKind};
 pub use fixture::{
-    ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture,
+    CriticalSide, ExpectedOutcome, FixtureDocument, FixtureError, GeodesicApplicability,
+    GeodesicFixture, GeodesicOrbit, ObservationFixture,
 };
 pub use instrument::{ReferenceInstrument, ReferenceRequest, ReferenceRuntimeError};
 pub use outcome::{
