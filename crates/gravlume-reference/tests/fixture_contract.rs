@@ -15,46 +15,80 @@ const CAPTURE_NEAR_CRITICAL: &str =
 const DEFAULT_OBSERVATION: &str =
     include_str!("../../../tests/fixtures/v1/default-kerr-observation.toml");
 
-#[test]
-fn repository_v1_fixture_documents_parse() {
-    for source in [
-        SCATTER_B6,
-        SCATTER_NEAR_CRITICAL,
-        CAPTURE_NEAR_CRITICAL,
-        DEFAULT_OBSERVATION,
-    ] {
-        FixtureDocument::parse_toml(source).expect("v1 fixture is valid");
+fn edit_fixture(source: &str, edit: impl FnOnce(&mut toml::Value)) -> String {
+    let mut document = toml::from_str(source).expect("repository fixture is valid TOML");
+    edit(&mut document);
+    toml::to_string(&document).expect("edited fixture remains representable as TOML")
+}
+
+fn table_at_mut<'a>(mut value: &'a mut toml::Value, path: &[&str]) -> &'a mut toml::Table {
+    for segment in path {
+        value = value
+            .get_mut(*segment)
+            .unwrap_or_else(|| panic!("fixture path segment {segment:?} exists"));
     }
+    value.as_table_mut().expect("fixture path names a table")
+}
+
+fn set_field(source: &str, path: &[&str], value: toml::Value) -> String {
+    edit_fixture(source, |document| {
+        let (field, parent) = path.split_last().expect("field path is nonempty");
+        table_at_mut(document, parent).insert((*field).to_owned(), value);
+    })
+}
+
+fn remove_field(source: &str, path: &[&str]) -> String {
+    edit_fixture(source, |document| {
+        let (field, parent) = path.split_last().expect("field path is nonempty");
+        table_at_mut(document, parent)
+            .remove(*field)
+            .unwrap_or_else(|| panic!("fixture field {field:?} exists"));
+    })
+}
+
+fn set_array_item(source: &str, path: &[&str], index: usize, value: toml::Value) -> String {
+    edit_fixture(source, |document| {
+        let mut array = document;
+        for segment in path {
+            array = array
+                .get_mut(*segment)
+                .unwrap_or_else(|| panic!("fixture path segment {segment:?} exists"));
+        }
+        array.as_array_mut().expect("fixture path names an array")[index] = value;
+    })
+}
+
+fn decimal(value: &str) -> toml::Value {
+    toml::Value::String(value.to_owned())
 }
 
 #[test]
 fn fixture_envelope_is_strict_and_size_bounded() {
-    let with_unknown = SCATTER_B6.replace(
-        "schema_version = 1",
-        "schema_version = 1\nundeclared = true",
-    );
+    let with_unknown = set_field(SCATTER_B6, &["undeclared"], toml::Value::Boolean(true));
     let oversized = "x".repeat(1024 * 1024 + 1);
 
-    for source in [&with_unknown, &oversized] {
-        assert!(FixtureDocument::parse_toml(source).is_err());
-    }
+    assert!(matches!(
+        FixtureDocument::parse_toml(&with_unknown),
+        Err(FixtureError::Toml(_))
+    ));
+    assert!(matches!(
+        FixtureDocument::parse_toml(&oversized),
+        Err(FixtureError::TooLarge { .. })
+    ));
 }
 
 #[test]
 fn observation_fixture_requires_the_exact_canonical_artifact() {
     let mutations = [
-        ("id = \"kerr-exterior-observation-v1\"", "id = \"other\""),
-        ("mass_m = \"1\"", "mass_m = \"1.00000000000000001\""),
-        ("escape_radius_m = \"200\"", "escape_radius_m = \"123\""),
+        (&["spacetime", "mass_m"][..], decimal("1.00000000000000001")),
         (
-            "observer_g_tt = \"-0.93334518307856381087806612157838606469960895840739424102381798791325986491290437\"",
-            "observer_g_tt = \"-0.9333451830784638\"",
+            &["expected", "observer_g_tt"][..],
+            decimal("-0.9333451830784638"),
         ),
     ];
 
-    for (original, replacement) in mutations {
-        let mutated = DEFAULT_OBSERVATION.replace(original, replacement);
-        assert_ne!(mutated, DEFAULT_OBSERVATION, "mutation target must exist");
+    for (path, value) in mutations {
+        let mutated = set_field(DEFAULT_OBSERVATION, path, value);
         assert!(matches!(
             FixtureDocument::parse_toml(&mutated),
             Err(FixtureError::PresetMismatch {
@@ -66,11 +100,12 @@ fn observation_fixture_requires_the_exact_canonical_artifact() {
 
 #[test]
 fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
-    let invalid_oracle = SCATTER_B6.replace(
-        "initial_null_abs = \"4.91454214841681154173676126201e-81\"",
-        "initial_null_abs = \"1\"",
+    let invalid_oracle = set_field(SCATTER_B6, &["expected", "initial_null_abs"], decimal("1"));
+    let wrong_precision = set_field(
+        SCATTER_B6,
+        &["producer", "precision_digits"],
+        toml::Value::Integer(16),
     );
-    let wrong_precision = SCATTER_B6.replace("precision_digits = 80", "precision_digits = 16");
 
     for source in [&invalid_oracle, &wrong_precision] {
         assert!(matches!(
@@ -82,66 +117,45 @@ fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
 
 #[test]
 fn geodesic_fixture_rejects_versioned_oracle_drift() {
-    let mutated = SCATTER_B6
-        .replace(
-            "azimuth_advance_rad = \"4.620418726881239063416504280864374022974\"",
-            "azimuth_advance_rad = \"5.5\"",
-        )
-        .replace(
-            "azimuth_advance_abs_rad = \"5e-10\"",
-            "azimuth_advance_abs_rad = \"1\"",
-        );
-
-    assert!(matches!(
-        FixtureDocument::parse_toml(&mutated),
-        Err(FixtureError::PresetMismatch {
-            field: "geodesic artifact"
-        })
-    ));
+    for (path, value) in [
+        (&["expected", "azimuth_advance_rad"][..], decimal("5.5")),
+        (&["tolerance", "azimuth_advance_abs_rad"][..], decimal("1")),
+    ] {
+        let mutated = set_field(SCATTER_B6, path, value);
+        assert!(matches!(
+            FixtureDocument::parse_toml(&mutated),
+            Err(FixtureError::PresetMismatch {
+                field: "geodesic artifact"
+            })
+        ));
+    }
 }
 
 #[test]
-fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
-    let scaled = SCATTER_B6
-        .replace(
-            concat!(
-                "momentum_covariant = [\n",
-                "  \"-1\",\n",
-                "  \"-0.99277494330677424337355254840577841602316427996638407416694633896574636965694494\",\n",
-                "  \"0.12\",\n",
-                "  \"0\",\n",
-                "]",
-            ),
-            concat!(
-                "momentum_covariant = [\n",
-                "  \"-2\",\n",
-                "  \"-1.98554988661354848674710509681155683204632855993276814833389267793149273931388988\",\n",
-                "  \"0.24\",\n",
-                "  \"0\",\n",
-                "]",
-            ),
-        )
-        .replace("energy_at_infinity = \"1\"", "energy_at_infinity = \"2\"");
+fn geodesic_fixture_requires_exact_unit_energy() {
+    let wrong_declaration = set_field(SCATTER_B6, &["initial", "energy_at_infinity"], decimal("2"));
+    let one_ulp_drift = set_array_item(
+        SCATTER_B6,
+        &["initial", "momentum_covariant"],
+        0,
+        decimal("-1.0000000000000002"),
+    );
 
-    assert!(matches!(
-        FixtureDocument::parse_toml(&scaled),
-        Err(FixtureError::InvalidPhysicalData(_))
-    ));
-}
-
-#[test]
-fn geodesic_fixture_rejects_one_ulp_of_unit_energy_drift() {
-    let mutated = SCATTER_B6.replace("  \"-1\",", "  \"-1.0000000000000002\",");
-
-    assert!(matches!(
-        FixtureDocument::parse_toml(&mutated),
-        Err(FixtureError::InvalidPhysicalData(_))
-    ));
+    for source in [&wrong_declaration, &one_ulp_drift] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(source),
+            Err(FixtureError::InvalidPhysicalData(_))
+        ));
+    }
 }
 
 #[test]
 fn geodesic_fixture_rejects_noncanonical_unit_mass_text() {
-    let mutated = SCATTER_B6.replace("mass_m = \"1\"", "mass_m = \"1.000000000000001\"");
+    let mutated = set_field(
+        SCATTER_B6,
+        &["spacetime", "mass_m"],
+        decimal("1.000000000000001"),
+    );
 
     assert!(matches!(
         FixtureDocument::parse_toml(&mutated),
@@ -154,10 +168,11 @@ fn geodesic_fixture_rejects_noncanonical_unit_mass_text() {
 #[test]
 fn geodesic_fixture_validates_declared_initial_escape_arming() {
     let initially_inside_escape_surface =
-        SCATTER_B6.replace("escape_radius_m = \"50\"", "escape_radius_m = \"100\"");
-    let arming_without_escape_event = CAPTURE_NEAR_CRITICAL.replace(
-        "outer_horizon_radius_m = \"2\"",
-        "outer_horizon_radius_m = \"2\"\nescape_event_initially_armed = false",
+        set_field(SCATTER_B6, &["events", "escape_radius_m"], decimal("100"));
+    let arming_without_escape_event = set_field(
+        CAPTURE_NEAR_CRITICAL,
+        &["events", "escape_event_initially_armed"],
+        toml::Value::Boolean(false),
     );
 
     for source in [
@@ -173,32 +188,33 @@ fn geodesic_fixture_validates_declared_initial_escape_arming() {
 
 #[test]
 fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
-    let wrong_side = CAPTURE_NEAR_CRITICAL.replace("side = \"capture\"", "side = \"escape\"");
-    let wrong_offset = CAPTURE_NEAR_CRITICAL.replace(
-        "impact_parameter_offset_m = \"-0.001\"",
-        "impact_parameter_offset_m = \"0.001\"",
+    let wrong_side = set_field(
+        CAPTURE_NEAR_CRITICAL,
+        &["applicability", "side"],
+        toml::Value::String("escape".to_owned()),
     );
-    let missing_distance = CAPTURE_NEAR_CRITICAL.replace(
-        "critical_impact_parameter_m = \"5.196152422706631880582339024517617100829\"\n",
-        "",
+    let wrong_offset = set_field(
+        CAPTURE_NEAR_CRITICAL,
+        &["applicability", "impact_parameter_offset_m"],
+        decimal("0.001"),
     );
-    let overflowing_distance = SCATTER_NEAR_CRITICAL
-        .replace(
-            "critical_impact_parameter_m = \"5.196152422706631880582339024517617100829\"",
-            "critical_impact_parameter_m = \"1.7976931348623157e308\"",
-        )
-        .replace(
-            "impact_parameter_offset_m = \"0.001\"",
-            "impact_parameter_offset_m = \"1.7976931348623157e308\"",
-        );
-    let regular_with_critical_fields = SCATTER_B6.replace(
-        "orbit = \"equatorial-single-turn-scatter\"",
-        concat!(
-            "orbit = \"equatorial-single-turn-scatter\"\n",
-            "critical_impact_parameter_m = \"5.196152422706632\"\n",
-            "impact_parameter_offset_m = \"0.803847577293368\"\n",
-            "side = \"escape\"",
+    let missing_distance = remove_field(
+        CAPTURE_NEAR_CRITICAL,
+        &["applicability", "critical_impact_parameter_m"],
+    );
+    let overflowing_distance = set_field(
+        &set_field(
+            SCATTER_NEAR_CRITICAL,
+            &["applicability", "critical_impact_parameter_m"],
+            decimal("1.7976931348623157e308"),
         ),
+        &["applicability", "impact_parameter_offset_m"],
+        decimal("1.7976931348623157e308"),
+    );
+    let regular_with_critical_field = set_field(
+        SCATTER_B6,
+        &["applicability", "side"],
+        toml::Value::String("escape".to_owned()),
     );
 
     for source in [&wrong_side, &wrong_offset, &overflowing_distance] {
@@ -207,7 +223,7 @@ fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
             Err(FixtureError::InconsistentApplicability)
         ));
     }
-    for source in [&missing_distance, &regular_with_critical_fields] {
+    for source in [&missing_distance, &regular_with_critical_field] {
         assert!(matches!(
             FixtureDocument::parse_toml(source),
             Err(FixtureError::Toml(_))
