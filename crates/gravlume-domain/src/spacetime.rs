@@ -2,7 +2,10 @@ use glam::DVec3;
 
 use crate::{
     GeodesicState, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
-    math::{FourVector, normalized_inner_product_residual, normalized_quadratic_form_residual},
+    math::{
+        FourVector, normalized_inner_product_residual, normalized_quadratic_form_residual,
+        positive_product,
+    },
     validation::validate_finite,
 };
 
@@ -72,7 +75,32 @@ struct Geometry {
     null_covector: [f64; 4],
     null_vector: [f64; 4],
     null_vector_gradient: [[f64; 4]; 3],
-    singularity_measure: f64,
+}
+
+#[derive(Clone, Copy)]
+struct ScaledCoordinates {
+    scale: f64,
+    x: f64,
+    y: f64,
+    z: f64,
+    spin: f64,
+    radius_squared: f64,
+    radius: f64,
+    sigma: f64,
+}
+
+impl ScaledCoordinates {
+    fn singularity_measure(self) -> f64 {
+        let spin_squared = self.spin * self.spin;
+        positive_product([
+            self.scale,
+            self.scale,
+            self.scale,
+            self.scale,
+            self.radius_squared
+                .mul_add(self.radius_squared, spin_squared * self.z * self.z),
+        ])
+    }
 }
 
 impl KerrNewmanSpacetime {
@@ -360,8 +388,35 @@ impl KerrNewmanSpacetime {
     ///
     /// Returns a typed numerical error when the metric is undefined.
     pub fn singularity_measure(self, event: SpacetimeEvent) -> Result<f64, GeometryError> {
-        self.geometry(event)
-            .map(|geometry| geometry.singularity_measure)
+        let measure = self.scaled_coordinates(event)?.singularity_measure();
+        measure
+            .is_finite()
+            .then_some(measure)
+            .ok_or(GeometryError::NonFinite)
+    }
+
+    /// Returns the finite signed residual of the canonical singularity guard observable.
+    ///
+    /// Values above the representable `f64` range saturate positively. This preserves the event
+    /// side without weakening exact evaluation near the finite guard surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed numerical error for an invalid guard or undefined geometry.
+    pub fn singularity_guard_residual(
+        self,
+        event: SpacetimeEvent,
+        guard: f64,
+    ) -> Result<f64, GeometryError> {
+        if !guard.is_finite() || guard <= 0.0 {
+            return Err(GeometryError::InvalidDenominator);
+        }
+        let measure = self.scaled_coordinates(event)?.singularity_measure();
+        if measure.is_infinite() {
+            Ok(f64::MAX)
+        } else {
+            Ok(measure - guard)
+        }
     }
 
     pub(super) fn metric_dot(
@@ -404,12 +459,106 @@ impl KerrNewmanSpacetime {
     }
 
     fn geometry(self, event: SpacetimeEvent) -> Result<Geometry, GeometryError> {
-        let [_, x, y, z] = event.to_txyz();
-        if ![x, y, z].into_iter().all(f64::is_finite) {
+        let scaled = self.scaled_coordinates(event)?;
+        let ScaledCoordinates {
+            scale,
+            x,
+            y,
+            z,
+            spin,
+            radius_squared,
+            radius: scaled_radius,
+            sigma,
+        } = scaled;
+        let radius = scale * scaled_radius;
+        if !radius.is_finite() {
+            return Err(GeometryError::InvalidDenominator);
+        }
+        let spin_squared = spin * spin;
+        let radius_gradient = DVec3::new(
+            x * scaled_radius / sigma,
+            y * scaled_radius / sigma,
+            z * (radius_squared + spin_squared) / (scaled_radius * sigma),
+        );
+        let mass = self.mass_m / scale;
+        let charge = self.charge_m / scale;
+        let numerator = (-charge).mul_add(charge, 2.0 * mass * scaled_radius);
+        let scalar_f = numerator / sigma;
+        let vertical_sigma = spin_squared * z * z / radius_squared;
+        let sigma_radius_factor = 2.0 * (scaled_radius - vertical_sigma / scaled_radius);
+        let sigma_gradient = DVec3::new(
+            sigma_radius_factor * radius_gradient.x,
+            sigma_radius_factor * radius_gradient.y,
+            sigma_radius_factor.mul_add(radius_gradient.z, 2.0 * spin_squared * z / radius_squared),
+        );
+        let numerator_gradient = radius_gradient * (2.0 * mass);
+        let scalar_f_gradient =
+            (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
+        let radial_denominator = radius_squared + spin_squared;
+        if radial_denominator <= 0.0 || !radial_denominator.is_finite() {
+            return Err(GeometryError::InvalidDenominator);
+        }
+        let null_spatial = DVec3::new(
+            spin.mul_add(y, scaled_radius * x) / radial_denominator,
+            spin.mul_add(-x, scaled_radius * y) / radial_denominator,
+            z / scaled_radius,
+        );
+        let null_covector = [1.0, null_spatial.x, null_spatial.y, null_spatial.z];
+        let null_vector = [-1.0, null_spatial.x, null_spatial.y, null_spatial.z];
+        let coordinates = [x, y, z];
+        let radius_gradients = radius_gradient.to_array();
+        let null_vector_gradient = std::array::from_fn(|index| {
+            let radius_i = radius_gradients[index];
+            let delta_x = f64::from(index == 0);
+            let delta_y = f64::from(index == 1);
+            let delta_z = f64::from(index == 2);
+            let numerator_x = spin.mul_add(delta_y, radius_i.mul_add(x, scaled_radius * delta_x));
+            let numerator_y = spin.mul_add(-delta_x, radius_i.mul_add(y, scaled_radius * delta_y));
+            let radial_derivative = 2.0 * scaled_radius * radius_i;
+            let derivative_x = ((-null_spatial.x * radial_derivative)
+                .mul_add(radial_denominator.recip(), numerator_x / radial_denominator))
+                / scale;
+            let derivative_y = ((-null_spatial.y * radial_derivative)
+                .mul_add(radial_denominator.recip(), numerator_y / radial_denominator))
+                / scale;
+            let derivative_z =
+                (delta_z / scaled_radius - coordinates[2] * radius_i / radius_squared) / scale;
+            [0.0, derivative_x, derivative_y, derivative_z]
+        });
+        let geometry = Geometry {
+            radius,
+            radius_gradient,
+            scalar_f,
+            scalar_f_gradient,
+            null_covector,
+            null_vector,
+            null_vector_gradient,
+        };
+        validate_geometry(geometry)
+    }
+
+    fn scaled_coordinates(self, event: SpacetimeEvent) -> Result<ScaledCoordinates, GeometryError> {
+        let [_, physical_x, physical_y, physical_z] = event.to_txyz();
+        if ![physical_x, physical_y, physical_z]
+            .into_iter()
+            .all(f64::is_finite)
+        {
             return Err(GeometryError::NonFinite);
         }
+        let scale = physical_x
+            .abs()
+            .max(physical_y.abs())
+            .max(physical_z.abs())
+            .max(self.spin_m.abs());
+        if scale == 0.0 {
+            return Err(GeometryError::RingSingularity);
+        }
+        let x = physical_x / scale;
+        let y = physical_y / scale;
+        let z = physical_z / scale;
+        let spin = self.spin_m / scale;
         let radius_squared_3d = x.mul_add(x, y.mul_add(y, z * z));
-        let spin_squared = self.spin_m * self.spin_m;
+        let spin_squared = spin * spin;
         let b = radius_squared_3d - spin_squared;
         let discriminant = b.mul_add(b, 4.0 * spin_squared * z * z);
         if !discriminant.is_finite() || discriminant < 0.0 {
@@ -432,75 +581,20 @@ impl KerrNewmanSpacetime {
             return Err(classify_zero_radius(b));
         }
         let radius = radius_squared.sqrt();
-        let radius_fourth = radius_squared * radius_squared;
-        let singularity_measure = (spin_squared * z).mul_add(z, radius_fourth);
-        if singularity_measure <= 0.0 || !singularity_measure.is_finite() {
+        let sigma = radius_squared + spin_squared * z * z / radius_squared;
+        if !sigma.is_finite() || sigma <= 0.0 {
             return Err(GeometryError::InvalidDenominator);
         }
-        let radius_gradient = DVec3::new(
-            x * radius.powi(3) / singularity_measure,
-            y * radius.powi(3) / singularity_measure,
-            z * radius * (radius_squared + spin_squared) / singularity_measure,
-        );
-        let radius_cubed = radius.powi(3);
-        let charge_squared = self.charge_m * self.charge_m;
-        let numerator = (-charge_squared).mul_add(radius_squared, 2.0 * self.mass_m * radius_cubed);
-        let scalar_f = numerator / singularity_measure;
-        let numerator_factor =
-            (-2.0 * charge_squared).mul_add(radius, 6.0 * self.mass_m * radius_squared);
-        let numerator_gradient = radius_gradient * numerator_factor;
-        let denominator_gradient = DVec3::new(
-            4.0 * radius_cubed * radius_gradient.x,
-            4.0 * radius_cubed * radius_gradient.y,
-            (4.0 * radius_cubed).mul_add(radius_gradient.z, 2.0 * spin_squared * z),
-        );
-        let denominator_squared = singularity_measure * singularity_measure;
-        let scalar_f_gradient = (numerator_gradient * singularity_measure
-            - denominator_gradient * numerator)
-            / denominator_squared;
-        let radial_denominator = radius_squared + spin_squared;
-        if radial_denominator <= 0.0 || !radial_denominator.is_finite() {
-            return Err(GeometryError::InvalidDenominator);
-        }
-        let null_spatial = DVec3::new(
-            self.spin_m.mul_add(y, radius * x) / radial_denominator,
-            self.spin_m.mul_add(-x, radius * y) / radial_denominator,
-            z / radius,
-        );
-        let null_covector = [1.0, null_spatial.x, null_spatial.y, null_spatial.z];
-        let null_vector = [-1.0, null_spatial.x, null_spatial.y, null_spatial.z];
-        let coordinates = [x, y, z];
-        let radius_gradients = radius_gradient.to_array();
-        let null_vector_gradient = std::array::from_fn(|index| {
-            let radius_i = radius_gradients[index];
-            let delta_x = f64::from(index == 0);
-            let delta_y = f64::from(index == 1);
-            let delta_z = f64::from(index == 2);
-            let numerator_x = self
-                .spin_m
-                .mul_add(delta_y, radius_i.mul_add(x, radius * delta_x));
-            let numerator_y = self
-                .spin_m
-                .mul_add(-delta_x, radius_i.mul_add(y, radius * delta_y));
-            let radial_derivative = 2.0 * radius * radius_i;
-            let derivative_x = (-null_spatial.x * radial_derivative)
-                .mul_add(radial_denominator.recip(), numerator_x / radial_denominator);
-            let derivative_y = (-null_spatial.y * radial_derivative)
-                .mul_add(radial_denominator.recip(), numerator_y / radial_denominator);
-            let derivative_z = delta_z / radius - coordinates[2] * radius_i / radius_squared;
-            [0.0, derivative_x, derivative_y, derivative_z]
-        });
-        let geometry = Geometry {
+        Ok(ScaledCoordinates {
+            scale,
+            x,
+            y,
+            z,
+            spin,
+            radius_squared,
             radius,
-            radius_gradient,
-            scalar_f,
-            scalar_f_gradient,
-            null_covector,
-            null_vector,
-            null_vector_gradient,
-            singularity_measure,
-        };
-        validate_geometry(geometry)
+            sigma,
+        })
     }
 }
 

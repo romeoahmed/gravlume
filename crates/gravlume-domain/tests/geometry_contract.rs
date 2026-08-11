@@ -105,6 +105,32 @@ fn schwarzschild_limit_is_spherical_and_stationary() {
 }
 
 #[test]
+fn representable_far_field_coordinates_do_not_overflow_internal_squares() {
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("parameters are valid");
+
+    for coordinate in [1.0e100, 1.0e200] {
+        let event =
+            SpacetimeEvent::from_txyz([0.0, coordinate, 0.0, 0.0]).expect("event is finite");
+
+        assert_eq!(
+            spacetime.radius(event),
+            Ok(coordinate),
+            "radius failed at {coordinate:e}"
+        );
+        assert_eq!(
+            spacetime.metric_component_tt(event),
+            Ok(-1.0),
+            "metric failed at {coordinate:e}"
+        );
+        assert_eq!(
+            spacetime.singularity_guard_residual(event, 1.0),
+            Ok(f64::MAX),
+            "guard side failed at {coordinate:e}"
+        );
+    }
+}
+
+#[test]
 fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
     let event = SpacetimeEvent::from_txyz([0.0, 10.0, 0.0, 0.0]).expect("event is finite");
     let reissner_nordstrom = KerrNewmanSpacetime::new(1.0, 0.0, 0.6).expect("parameters are valid");

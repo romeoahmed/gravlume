@@ -168,6 +168,13 @@ pub fn normalized_inner_product_residual<const N: usize>(
 }
 
 fn positive_product_capped_at_one(factors: [f64; 4]) -> f64 {
+    positive_product(factors).min(1.0)
+}
+
+pub fn positive_product<const N: usize>(factors: [f64; N]) -> f64 {
+    if factors.contains(&0.0) {
+        return 0.0;
+    }
     let mut significand = 1.0;
     let mut exponent = 0_i32;
     for factor in factors {
@@ -179,27 +186,13 @@ fn positive_product_capped_at_one(factors: [f64; 4]) -> f64 {
             exponent += 1;
         }
     }
-    if exponent >= 0 {
-        return 1.0;
-    }
     if exponent < -1075 {
         return 0.0;
     }
     if exponent == -1075 {
         return (significand * 0.5) * f64::from_bits(1);
     }
-    let power_of_two = if exponent >= -1022 {
-        let Ok(stored_exponent) = u64::try_from(exponent + 1023) else {
-            return 0.0;
-        };
-        f64::from_bits(stored_exponent << 52)
-    } else {
-        let Ok(fraction_bit) = u32::try_from(exponent + 1074) else {
-            return 0.0;
-        };
-        f64::from_bits(1_u64 << fraction_bit)
-    };
-    significand * power_of_two
+    significand * binary_power(exponent)
 }
 
 fn positive_binary_decomposition(value: f64) -> (f64, i32) {

@@ -273,11 +273,11 @@ azimuth_advance_abs_rad = "5e-10"
 - tolerance：每个 continuous observable 独立 abs/rel 规则；
 - applicability：regular/near-critical、参数域和不适用条件。
 
-持久化 enum 名称是 versioned protocol，不由 UI label 或 `strum` iteration order 生成。NaN/Inf、负零、重复 logical ID 和未声明单位在 input seam 拒绝。artifact 额外记录 producer revision、policy、dtype、adapter/backend、shader digest 与实际 resource counters。
+持久化 enum 名称是 versioned protocol，不由 UI label 或 `strum` iteration order 生成。NaN/Inf、负零和未声明单位在 input seam 拒绝；同一 logical label 若绑定到不同 canonical bits，comparison 返回 identity collision，不能进入数值验收。artifact 额外记录 producer revision、policy、dtype、adapter/backend、shader digest 与实际 resource counters。
 
 ## 7. 80 位 Schwarzschild 基准
 
-三个 fixture 均取 $M=E=1$、equatorial、$r_0=50M$ 和 future-directed inbound state，沿正 affine parameter 积分。$b>b_c=\sqrt{27}M$ 的两条 ray 在 exterior turning point 后返回 $r=50M$；$b<b_c$ 的配对 ray 穿过 $r_+=2M$。radial potential 是
+三个 fixture 均取 binary64 bits 精确的 $M=E=1$、equatorial、$r_0=50M$ 和 future-directed inbound state，沿正 affine parameter 积分；直接输入不得用 epsilon 接受另一 affine 尺度。$b>b_c=\sqrt{27}M$ 的两条 ray 在 exterior turning point 后返回 $r=50M$；$b<b_c$ 的配对 ray 穿过 $r_+=2M$。radial potential 是
 
 \[
 R(r)=r^4-b^2r^2+2b^2r.

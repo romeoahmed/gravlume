@@ -51,7 +51,13 @@ impl ReferenceTracer {
     }
 
     #[must_use]
-    pub fn trace(&self, request: TraceRequest) -> ReferenceOutcome {
+    pub fn trace(&self, mut request: TraceRequest) -> ReferenceOutcome {
+        request.input_id = request.input_id.bind(
+            self.spacetime,
+            request.initial_state,
+            request.affine_direction,
+            self.events,
+        );
         TraceExecution::new(self, request).run()
     }
 }
@@ -430,7 +436,8 @@ impl<'tracer> TraceExecution<'tracer> {
             escape_direction_xyz,
             turning_radius_m: self.turning_radius_m,
             azimuth_advance_rad: self.azimuth_advance_rad,
-            travel_time_m: state.components()[0] - self.initial_time_m,
+            travel_time_m: self.request.affine_direction.sign()
+                * (state.components()[0] - self.initial_time_m),
             diagnostics: TraceDiagnostics {
                 accepted_steps: self.accepted_steps,
                 rejected_steps: self.rejected_steps,
@@ -491,7 +498,7 @@ impl EventArming {
         let value = |kind| event_value_for(tracer, kind, state).unwrap_or_default();
         Self {
             armed: [
-                value(EventKind::SingularityGuard) > 0.0,
+                value(EventKind::SingularityGuard) > band,
                 value(EventKind::Horizon) > band,
                 value(EventKind::EquatorialSurface).abs() > band,
                 escape_event_is_armed(value(EventKind::Escape), band),
@@ -507,7 +514,7 @@ impl EventArming {
         let band = tracer.policy.event_arming_band_m();
         if !self.is_armed(EventKind::SingularityGuard)
             && event_value_for(tracer, EventKind::SingularityGuard, state)
-                .is_ok_and(|value| value > 0.0)
+                .is_ok_and(|value| value > band)
         {
             self.arm(EventKind::SingularityGuard);
         }
@@ -604,7 +611,7 @@ fn event_value_for(
         EventKind::SingularityGuard => {
             let mass_squared = spacetime.mass_m() * spacetime.mass_m();
             let guard = tracer.policy.singularity_guard_d_over_m4() * mass_squared * mass_squared;
-            Ok(spacetime.singularity_measure(state.event())? - guard)
+            spacetime.singularity_guard_residual(state.event(), guard)
         }
         EventKind::Horizon => {
             Ok(spacetime.radius(state.event())?
@@ -672,8 +679,8 @@ mod tests {
     use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
 
     use super::{
-        EventConfiguration, EventKind, ReferencePolicy, ReferenceTracer, Termination, TraceRequest,
-        event_value_for, select_earliest_event,
+        EventArming, EventConfiguration, EventKind, ReferencePolicy, ReferenceTracer, Termination,
+        TraceRequest, event_value_for, select_earliest_event,
     };
     use crate::{AffineDirection, TraceInputId};
 
@@ -713,6 +720,30 @@ mod tests {
 
         assert!(event_value(1.1) > 0.0);
         assert!(event_value(0.9) < 0.0);
+    }
+
+    #[test]
+    fn singularity_guard_arms_only_after_leaving_the_full_band() {
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0).expect("spacetime is valid");
+        let policy = ReferencePolicy::regular_v1();
+        let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
+            .expect("mass is normalized");
+        let state_at_measure = |measure: f64| {
+            let radius = measure.sqrt().sqrt();
+            let x = radius.mul_add(radius, 4.0).sqrt();
+            GeodesicState::new([0.0, x, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0]).expect("state is finite")
+        };
+        let guard = policy.singularity_guard_d_over_m4();
+        let band = policy.event_arming_band_m();
+        let surface = state_at_measure(guard);
+        let inside_band = state_at_measure(0.5_f64.mul_add(band, guard));
+        let outside_band = state_at_measure(2.0_f64.mul_add(band, guard));
+        let mut arming = EventArming::new(&tracer, surface);
+
+        arming.update(&tracer, inside_band);
+        assert!(!arming.is_armed(EventKind::SingularityGuard));
+        arming.update(&tracer, outside_band);
+        assert!(arming.is_armed(EventKind::SingularityGuard));
     }
 
     #[test]

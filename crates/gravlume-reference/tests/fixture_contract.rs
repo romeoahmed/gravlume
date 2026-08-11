@@ -146,6 +146,21 @@ fn observation_fixture_rejects_fixed_v1_profile_drift() {
 }
 
 #[test]
+fn observation_fixture_rejects_fixed_oracle_drift() {
+    let mutated = DEFAULT_OBSERVATION.replace(
+        "observer_g_tt = \"-0.93334518307856381087806612157838606469960895840739424102381798791325986491290437\"",
+        "observer_g_tt = \"-0.9333451830784638\"",
+    );
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&mutated),
+        Err(FixtureError::PresetMismatch {
+            field: "expected.observer_g_tt"
+        })
+    ));
+}
+
+#[test]
 fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
     let invalid_oracle = SCATTER_B6.replace(
         "initial_null_abs = \"4.91454214841681154173676126201e-81\"",
@@ -186,6 +201,16 @@ fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
 
     assert!(matches!(
         FixtureDocument::parse_toml(&scaled),
+        Err(FixtureError::InvalidPhysicalData(_))
+    ));
+}
+
+#[test]
+fn geodesic_fixture_rejects_one_ulp_of_unit_energy_drift() {
+    let mutated = SCATTER_B6.replace("  \"-1\",", "  \"-1.0000000000000002\",");
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&mutated),
         Err(FixtureError::InvalidPhysicalData(_))
     ));
 }
@@ -330,6 +355,26 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
 }
 
 #[test]
+fn same_fixture_label_cannot_alias_different_canonical_inputs() {
+    let shifted_source = SCATTER_B6.replace(
+        "position_txyz_m = [\"0\", \"50\", \"0\", \"0\"]",
+        "position_txyz_m = [\"1\", \"50\", \"0\", \"0\"]",
+    );
+    let original = geodesic_fixture(SCATTER_B6);
+    let shifted = geodesic_fixture(&shifted_source);
+    let regular = ReferenceTracer::from_fixture(&original, ReferencePolicy::regular_v1())
+        .trace(original.trace_request());
+    let strict = ReferenceTracer::from_fixture(&shifted, ReferencePolicy::strict_v1())
+        .trace(shifted.trace_request());
+
+    assert!(matches!(
+        ReferenceComparison::baseline_v1(&regular, &strict),
+        Err(ComparisonError::InputIdentityCollision { input_id })
+            if input_id == TraceInputId::new("schwarzschild-scatter-b6-v1")
+    ));
+}
+
+#[test]
 fn baseline_comparison_rejects_wrong_policy_roles() {
     let fixture = geodesic_fixture(SCATTER_B6);
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
@@ -450,7 +495,8 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
 
     assert_eq!(regular.termination(), Termination::Escape, "{regular:?}");
     assert!(regular.affine_parameter_m() < 0.0);
-    assert_eq!(regular.input_id(), fixture.input_id());
+    assert!(regular.travel_time_m() > 0.0);
+    assert_eq!(regular.input_id().as_str(), fixture.input_id().as_str());
     let escape_direction = regular
         .escape_direction_xyz()
         .expect("escape has a traversal direction");
