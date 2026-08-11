@@ -214,12 +214,7 @@ fn weighted_increment(
     weights: [f64; STAGES],
     component: usize,
 ) -> f64 {
-    let weighted_derivative = stages
-        .iter()
-        .zip(weights)
-        .map(|(stage, weight)| weight * stage[component])
-        .sum::<f64>();
-    step * weighted_derivative
+    step * weighted_derivative(stages, weights, component)
 }
 
 fn weighted_state(
@@ -229,11 +224,21 @@ fn weighted_state(
     weights: [f64; STAGES],
 ) -> [f64; STATE_COMPONENTS] {
     std::array::from_fn(|component| {
-        let weighted = stages
-            .iter()
-            .zip(weights)
-            .map(|(stage, weight)| weight * stage[component])
-            .sum::<f64>();
-        step.mul_add(weighted, start[component])
+        step.mul_add(
+            weighted_derivative(stages, weights, component),
+            start[component],
+        )
     })
+}
+
+fn weighted_derivative(
+    stages: &[[f64; STATE_COMPONENTS]; STAGES],
+    weights: [f64; STAGES],
+    component: usize,
+) -> f64 {
+    stages
+        .iter()
+        .zip(weights)
+        .map(|(stage, weight)| weight * stage[component])
+        .sum()
 }
