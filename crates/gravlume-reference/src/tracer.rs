@@ -523,14 +523,11 @@ struct EventArming {
 impl EventArming {
     fn new(tracer: &ReferenceTracer, state: GeodesicState) -> Self {
         let band = tracer.policy.event_arming_band_m();
-        let value = |kind| event_value_for(tracer, kind, state).unwrap_or_default();
         Self {
-            armed: [
-                value(EventKind::SingularityGuard) > band,
-                value(EventKind::Horizon) > band,
-                value(EventKind::EquatorialSurface).abs() > band,
-                escape_event_is_armed(value(EventKind::Escape), band),
-            ],
+            armed: EventKind::ordered().map(|kind| {
+                event_value_for(tracer, kind, state)
+                    .is_ok_and(|value| clears_arming_band(kind, value, band))
+            }),
         }
     }
 
@@ -540,33 +537,26 @@ impl EventArming {
 
     fn update(&mut self, tracer: &ReferenceTracer, state: GeodesicState) {
         let band = tracer.policy.event_arming_band_m();
-        if !self.is_armed(EventKind::SingularityGuard)
-            && event_value_for(tracer, EventKind::SingularityGuard, state)
-                .is_ok_and(|value| value > band)
-        {
-            self.arm(EventKind::SingularityGuard);
-        }
-        if !self.is_armed(EventKind::Horizon)
-            && event_value_for(tracer, EventKind::Horizon, state).is_ok_and(|value| value > band)
-        {
-            self.arm(EventKind::Horizon);
-        }
-        if !self.is_armed(EventKind::EquatorialSurface)
-            && event_value_for(tracer, EventKind::EquatorialSurface, state)
-                .is_ok_and(|value| value.abs() > band)
-        {
-            self.arm(EventKind::EquatorialSurface);
-        }
-        if !self.is_armed(EventKind::Escape)
-            && event_value_for(tracer, EventKind::Escape, state)
-                .is_ok_and(|value| escape_event_is_armed(value, band))
-        {
-            self.arm(EventKind::Escape);
+        for kind in EventKind::ordered() {
+            if !self.is_armed(kind)
+                && event_value_for(tracer, kind, state)
+                    .is_ok_and(|value| clears_arming_band(kind, value, band))
+            {
+                self.arm(kind);
+            }
         }
     }
 
     const fn arm(&mut self, kind: EventKind) {
         self.armed[kind.index()] = true;
+    }
+}
+
+const fn clears_arming_band(kind: EventKind, value: f64, band: f64) -> bool {
+    match kind {
+        EventKind::SingularityGuard | EventKind::Horizon => value > band,
+        EventKind::EquatorialSurface => value.abs() > band,
+        EventKind::Escape => escape_event_is_armed(value, band),
     }
 }
 
