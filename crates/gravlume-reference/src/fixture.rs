@@ -935,7 +935,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
     {
         return Err(FixtureError::InconsistentEventEnvelope);
     }
-    Observation::new(scene, projection).map_err(invalid_physical_data)
+    Ok(Observation::new(scene, projection))
 }
 
 fn validate_observation_expected(
@@ -956,6 +956,7 @@ fn validate_observation_expected(
     };
     let expected_horizon = raw.expected.outer_horizon_radius_m.value;
     let horizon_matches = scene
+        .spacetime()
         .outer_horizon_radius()
         .is_some_and(|actual| (actual - expected_horizon).abs() <= radius_tolerance);
     let position_matches = actual_xyz[1..]

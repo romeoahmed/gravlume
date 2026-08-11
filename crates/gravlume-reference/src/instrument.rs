@@ -78,12 +78,6 @@ impl ReferenceInstrument {
             initial_ray,
             policy,
         } = request;
-        if !initial_ray.is_future_directed()
-            || !initial_ray.normalized_null_residual().is_finite()
-            || initial_ray.normalized_null_residual() > 2.0e-12
-        {
-            return Err(ReferenceRuntimeError::InvalidInitialRay);
-        }
         let spacetime = *observation.scene().spacetime();
         if spacetime.mass_m().to_bits() != 1.0_f64.to_bits()
             || (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON
@@ -102,8 +96,6 @@ impl ReferenceInstrument {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ReferenceRuntimeError {
-    #[error("validated observation produced an invalid initial ray")]
-    InvalidInitialRay,
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
 }

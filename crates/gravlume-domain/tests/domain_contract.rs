@@ -55,7 +55,15 @@ fn default_kerr_observer_matches_the_versioned_contract() {
     let scene = default_scene();
 
     assert_eq!(scene.parameter_state(), ParameterState::Subextremal);
-    assert!((scene.outer_horizon_radius().expect("horizon exists") - 1.6).abs() < 2.0e-15);
+    assert!(
+        (scene
+            .spacetime()
+            .outer_horizon_radius()
+            .expect("horizon exists")
+            - 1.6)
+            .abs()
+            < 2.0e-15
+    );
     assert!((scene.observer_metric_g_tt() + 0.933_345_183_078_563_8).abs() < 2.0e-15);
     assert!(scene.observer_frame().gram_residual() < 2.0e-12);
     assert!(scene.observer_frame().orientation_determinant() > 0.0);
@@ -86,7 +94,7 @@ fn viewport_samples_produce_future_directed_null_rays() {
         Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
     )
     .expect("the versioned projection is valid");
-    let observation = Observation::new(scene, projection).expect("observation invariants hold");
+    let observation = Observation::new(scene, projection);
 
     for (x, y, offset_x, offset_y) in [
         (640, 360, 0.5, 0.5),
@@ -104,7 +112,7 @@ fn viewport_samples_produce_future_directed_null_rays() {
 
         assert!(ray.normalized_null_residual() < 2.0e-12);
         assert!((ray.observer_frequency() - 1.0).abs() < 2.0e-12);
-        assert!(ray.is_future_directed());
+        assert!(ray.observer_frequency() > 0.0);
     }
 }
 
@@ -137,8 +145,7 @@ fn initial_ray_resolves_a_sample_against_the_observation_projection() {
         Angle::from_radians(2.0 * FRAC_PI_4).expect("angle is finite"),
     )
     .expect("projection is valid");
-    let observation = Observation::new(default_scene(), observation_projection)
-        .expect("observation invariants hold");
+    let observation = Observation::new(default_scene(), observation_projection);
     let foreign_sample = foreign_projection
         .sample(100, 200, 0.25, 0.75)
         .expect("sample is valid for the foreign projection");
@@ -166,8 +173,7 @@ fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
         Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
     )
     .expect("projection is valid");
-    let observation = Observation::new(scene_with_frequency(1.0e200), projection)
-        .expect("observation invariants hold");
+    let observation = Observation::new(scene_with_frequency(1.0e200), projection);
     let sample = projection
         .sample(317, 509, 0.25, 0.75)
         .expect("sample is valid");
@@ -189,8 +195,7 @@ fn initial_ray_rejects_non_finite_derived_momentum() {
         Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
     )
     .expect("projection is valid");
-    let observation = Observation::new(scene_with_frequency(f64::MAX), projection)
-        .expect("observation invariants hold before ray construction");
+    let observation = Observation::new(scene_with_frequency(f64::MAX), projection);
     let sample = projection
         .sample(317, 509, 0.25, 0.75)
         .expect("sample is valid");
