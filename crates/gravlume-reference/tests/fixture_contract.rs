@@ -1,8 +1,9 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 use gravlume_reference::{
-    FixtureDocument, ReferenceBatch, ReferenceComparison, ReferenceInstrument, ReferencePolicy,
-    ReferenceRequest, ReferenceTracer, Termination, TraceRequest,
+    AffineDirection, ComparisonError, FixtureDocument, FixtureError, ReferenceBatch,
+    ReferenceComparison, ReferenceInstrument, ReferencePolicy, ReferenceRequest, ReferenceTracer,
+    Termination, TraceRequest,
 };
 
 const SCATTER_B6: &str = include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
@@ -34,6 +35,17 @@ fn v1_fixture_seam_accepts_the_repository_documents_and_rejects_unknown_fields()
 
     let oversized = "x".repeat(1024 * 1024 + 1);
     assert!(FixtureDocument::parse_toml(&oversized).is_err());
+}
+
+#[test]
+fn observation_fixture_rejects_an_escape_radius_outside_the_v1_profile() {
+    let wrong_escape_radius =
+        DEFAULT_OBSERVATION.replace("escape_radius_m = \"200\"", "escape_radius_m = \"123\"");
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&wrong_escape_radius),
+        Err(FixtureError::InconsistentEventEnvelope)
+    ));
 }
 
 #[test]
@@ -73,11 +85,88 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
         .expect("fixture config is valid")
         .trace(fixture.trace_request());
-    let comparison = ReferenceComparison::baseline_v1(&regular, &strict);
+    let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
+        .expect("policy roles and input identity match");
 
     assert!(comparison.is_accepted(), "{:?}", comparison.issues());
     assert_eq!(comparison.baseline_policy(), "reference-regular-v1");
     assert_eq!(comparison.candidate_policy(), "reference-strict-v1");
+}
+
+#[test]
+fn baseline_comparison_rejects_wrong_policy_roles() {
+    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
+        .expect("fixture parses")
+        .into_geodesic()
+        .expect("fixture is geodesic");
+    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+        .expect("fixture config is valid")
+        .trace(fixture.trace_request());
+
+    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+        .expect("fixture config is valid")
+        .trace(fixture.trace_request());
+
+    assert!(matches!(
+        ReferenceComparison::baseline_v1(&strict, &strict),
+        Err(ComparisonError::UnexpectedBaselinePolicy { .. })
+    ));
+    assert!(matches!(
+        ReferenceComparison::baseline_v1(&regular, &regular),
+        Err(ComparisonError::UnexpectedCandidatePolicy { .. })
+    ));
+}
+
+#[test]
+fn baseline_comparison_rejects_different_input_ids() {
+    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
+        .expect("fixture parses")
+        .into_geodesic()
+        .expect("fixture is geodesic");
+    let request = fixture.trace_request();
+    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+        .expect("fixture config is valid")
+        .trace(TraceRequest::new(
+            1,
+            request.initial_state(),
+            request.affine_direction(),
+        ));
+    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+        .expect("fixture config is valid")
+        .trace(TraceRequest::new(
+            2,
+            request.initial_state(),
+            request.affine_direction(),
+        ));
+
+    assert_eq!(
+        ReferenceComparison::baseline_v1(&regular, &strict),
+        Err(ComparisonError::InputMismatch {
+            baseline_input_id: 1,
+            candidate_input_id: 2,
+        })
+    );
+}
+
+#[test]
+fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
+    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
+        .expect("fixture parses")
+        .into_geodesic()
+        .expect("fixture is geodesic");
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+        .expect("fixture config is valid");
+    let forward = tracer.trace(fixture.trace_request());
+    let backward = tracer.trace(TraceRequest::new(
+        0,
+        forward.state(),
+        AffineDirection::Negative,
+    ));
+
+    assert_eq!(backward.termination(), Termination::Escape);
+    let forward_turning_radius = forward.turning_radius_m().expect("forward ray turns");
+    let backward_turning_radius = backward.turning_radius_m().expect("backward ray turns");
+    assert!((backward_turning_radius - forward_turning_radius).abs() <= 5.0e-11);
 }
 
 #[test]
@@ -125,7 +214,8 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
         Arc::clone(&observation),
         sample,
         ReferencePolicy::regular_v1(),
-    );
+    )
+    .expect("sample is valid for the request observation");
     let regular = ReferenceInstrument::baseline_v1()
         .trace(regular_request)
         .expect("validated observation preserves internal invariants");
@@ -133,11 +223,13 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
     assert_eq!(regular.termination(), Termination::Escape, "{regular:?}");
     assert!(regular.affine_parameter_m() < 0.0);
 
-    let strict_request = ReferenceRequest::new(observation, sample, ReferencePolicy::strict_v1());
+    let strict_request = ReferenceRequest::new(observation, sample, ReferencePolicy::strict_v1())
+        .expect("sample is valid for the request observation");
     let strict = ReferenceInstrument::baseline_v1()
         .trace(strict_request)
         .expect("validated observation preserves internal invariants");
-    let comparison = ReferenceComparison::baseline_v1(&regular, &strict);
+    let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
+        .expect("policy roles and input identity match");
     assert!(comparison.is_accepted(), "{comparison:?}");
 }
 

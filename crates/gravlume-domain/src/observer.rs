@@ -1,6 +1,7 @@
 use crate::{
     KerrNewmanSpacetime, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
-    math::FourVector, validation::validate_finite_array,
+    math::{FourVector, normalized_quadratic_form_residual},
+    validation::validate_finite_array,
 };
 
 const BASIS_TOLERANCE: f64 = 1.0e-12;
@@ -290,13 +291,8 @@ impl StationaryObserver {
         })
     }
 
-    pub(super) fn dot(&self, left: FourVector, right: FourVector) -> f64 {
-        let left = left.to_array();
-        let right = right.to_array();
-        (0..4)
-            .flat_map(|row| (0..4).map(move |column| (row, column)))
-            .map(|(row, column)| self.metric_covariant[row][column] * left[row] * right[column])
-            .sum()
+    pub(super) fn normalized_null_residual(&self, momentum: FourVector) -> f64 {
+        normalized_quadratic_form_residual(self.metric_covariant, momentum)
     }
 }
 

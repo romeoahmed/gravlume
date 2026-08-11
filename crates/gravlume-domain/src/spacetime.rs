@@ -2,7 +2,8 @@ use glam::DVec3;
 
 use crate::{
     GeodesicState, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
-    math::FourVector, validation::validate_finite,
+    math::{FourVector, normalized_quadratic_form_residual},
+    validation::validate_finite,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -299,17 +300,8 @@ impl KerrNewmanSpacetime {
     /// Returns a typed numerical error when the metric is undefined.
     pub fn normalized_null_residual(self, state: GeodesicState) -> Result<f64, GeometryError> {
         let inverse = metric_inverse(self.geometry(state.event())?);
-        let momentum = state.momentum_covariant_txyz();
-        let mut contraction = 0.0;
-        let mut scale = 1.0_f64;
-        for row in 0..4 {
-            for column in 0..4 {
-                let term = inverse[row][column] * momentum[row] * momentum[column];
-                contraction += term;
-                scale += term.abs();
-            }
-        }
-        Ok(contraction.abs() / scale)
+        let momentum = FourVector::new(state.momentum_covariant_txyz());
+        Ok(normalized_quadratic_form_residual(inverse, momentum))
     }
 
     /// Returns `dr/dlambda` for the canonical Hamilton traversal direction.

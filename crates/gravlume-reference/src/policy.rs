@@ -1,3 +1,6 @@
+pub const REGULAR_V1_ID: &str = "reference-regular-v1";
+pub const STRICT_V1_ID: &str = "reference-strict-v1";
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReferencePolicy {
     id: &'static str,
@@ -23,7 +26,7 @@ impl ReferencePolicy {
     #[must_use]
     pub const fn regular_v1() -> Self {
         Self {
-            id: "reference-regular-v1",
+            id: REGULAR_V1_ID,
             position_relative_tolerance: 2.0e-12,
             position_absolute_tolerance: 2.0e-13,
             momentum_relative_tolerance: 2.0e-12,
@@ -47,7 +50,7 @@ impl ReferencePolicy {
     pub const fn strict_v1() -> Self {
         let regular = Self::regular_v1();
         Self {
-            id: "reference-strict-v1",
+            id: STRICT_V1_ID,
             position_relative_tolerance: regular.position_relative_tolerance / 16.0,
             position_absolute_tolerance: regular.position_absolute_tolerance / 16.0,
             momentum_relative_tolerance: regular.momentum_relative_tolerance / 16.0,

@@ -339,8 +339,17 @@ impl<'tracer> TraceExecution<'tracer> {
         end_state: GeodesicState,
         maximum_theta: f64,
     ) {
-        let start_velocity = self.tracer.spacetime.radial_velocity(self.state);
-        let end_velocity = self.tracer.spacetime.radial_velocity(end_state);
+        let traversal_sign = self.request.affine_direction.sign();
+        let start_velocity = self
+            .tracer
+            .spacetime
+            .radial_velocity(self.state)
+            .map(|velocity| traversal_sign * velocity);
+        let end_velocity = self
+            .tracer
+            .spacetime
+            .radial_velocity(end_state)
+            .map(|velocity| traversal_sign * velocity);
         if let (Ok(start), Ok(end)) = (start_velocity, end_velocity)
             && start < 0.0
             && end >= 0.0
@@ -369,7 +378,8 @@ impl<'tracer> TraceExecution<'tracer> {
             }
             let middle = 0.5 * (lower + upper);
             let state = state_from_dense(dense, middle)?;
-            let value = self.tracer.spacetime.radial_velocity(state)?;
+            let value = self.request.affine_direction.sign()
+                * self.tracer.spacetime.radial_velocity(state)?;
             if same_sign(lower_value, value) {
                 lower = middle;
                 lower_value = value;

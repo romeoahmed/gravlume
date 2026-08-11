@@ -83,7 +83,7 @@ impl ViewportProjection {
         self.vertical_fov
     }
 
-    /// Validates a pixel/subpixel seam and resolves its oriented sight-plane coordinates.
+    /// Validates and stores projection-independent pixel/subpixel coordinates.
     ///
     /// # Errors
     ///
@@ -95,6 +95,40 @@ impl ViewportProjection {
         subpixel_x: f64,
         subpixel_y: f64,
     ) -> Result<ViewportSample, ValidationReport> {
+        self.validate_sample(pixel_x, pixel_y, subpixel_x, subpixel_y)?;
+        Ok(ViewportSample {
+            pixel_x,
+            pixel_y,
+            subpixel_x,
+            subpixel_y,
+        })
+    }
+
+    pub(super) fn sight_plane(self, sample: ViewportSample) -> Result<[f64; 2], ValidationReport> {
+        self.validate_sample(
+            sample.pixel_x,
+            sample.pixel_y,
+            sample.subpixel_x,
+            sample.subpixel_y,
+        )?;
+        let width = f64::from(self.width.get());
+        let height = f64::from(self.height.get());
+        let normalized_x = 2.0 * (f64::from(sample.pixel_x) + sample.subpixel_x) / width - 1.0;
+        let normalized_y = 1.0 - 2.0 * (f64::from(sample.pixel_y) + sample.subpixel_y) / height;
+        let aspect = width / height;
+        Ok([
+            aspect * self.tangent_half_fov * normalized_x,
+            self.tangent_half_fov * normalized_y,
+        ])
+    }
+
+    fn validate_sample(
+        self,
+        pixel_x: u32,
+        pixel_y: u32,
+        subpixel_x: f64,
+        subpixel_y: f64,
+    ) -> Result<(), ValidationReport> {
         let mut report = ValidationReport::default();
         if pixel_x >= self.width.get() {
             report.push(ValidationIssue::error(
@@ -112,22 +146,7 @@ impl ViewportProjection {
         }
         validate_subpixel(&mut report, subpixel_x, "viewport_sample.subpixel_x");
         validate_subpixel(&mut report, subpixel_y, "viewport_sample.subpixel_y");
-        if !report.is_empty() {
-            return Err(report);
-        }
-        let width = f64::from(self.width.get());
-        let height = f64::from(self.height.get());
-        let normalized_x = 2.0 * (f64::from(pixel_x) + subpixel_x) / width - 1.0;
-        let normalized_y = 1.0 - 2.0 * (f64::from(pixel_y) + subpixel_y) / height;
-        let aspect = width / height;
-        Ok(ViewportSample {
-            pixel_x,
-            pixel_y,
-            subpixel_x,
-            subpixel_y,
-            sight_x: aspect * self.tangent_half_fov * normalized_x,
-            sight_y: self.tangent_half_fov * normalized_y,
-        })
+        report.into_result(())
     }
 }
 
@@ -137,8 +156,6 @@ pub struct ViewportSample {
     pixel_y: u32,
     subpixel_x: f64,
     subpixel_y: f64,
-    sight_x: f64,
-    sight_y: f64,
 }
 
 impl ViewportSample {
@@ -150,10 +167,6 @@ impl ViewportSample {
     #[must_use]
     pub const fn subpixel(self) -> [f64; 2] {
         [self.subpixel_x, self.subpixel_y]
-    }
-
-    pub(super) const fn sight_plane(self) -> [f64; 2] {
-        [self.sight_x, self.sight_y]
     }
 }
 

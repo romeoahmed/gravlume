@@ -13,7 +13,7 @@ mod policy;
 mod tracer;
 
 pub use batch::{ReferenceBatch, ReferenceBatchError};
-pub use comparison::{ComparisonIssue, ReferenceComparison};
+pub use comparison::{ComparisonError, ComparisonIssue, ReferenceComparison};
 pub use events::{EventConfiguration, EventConfigurationError, EventKind};
 pub use fixture::{
     ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture,

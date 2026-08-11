@@ -1,4 +1,28 @@
-use crate::{ReferenceOutcome, Termination};
+use crate::{
+    ReferenceOutcome, Termination,
+    policy::{REGULAR_V1_ID, STRICT_V1_ID},
+};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ComparisonError {
+    #[error("baseline policy must be {expected}, got {actual}")]
+    UnexpectedBaselinePolicy {
+        expected: &'static str,
+        actual: &'static str,
+    },
+    #[error("candidate policy must be {expected}, got {actual}")]
+    UnexpectedCandidatePolicy {
+        expected: &'static str,
+        actual: &'static str,
+    },
+    #[error(
+        "comparison inputs differ: baseline {baseline_input_id}, candidate {candidate_input_id}"
+    )]
+    InputMismatch {
+        baseline_input_id: u64,
+        candidate_input_id: u64,
+    },
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComparisonIssue {
@@ -23,8 +47,33 @@ pub struct ReferenceComparison {
 }
 
 impl ReferenceComparison {
-    #[must_use]
-    pub fn baseline_v1(baseline: &ReferenceOutcome, candidate: &ReferenceOutcome) -> Self {
+    /// Compares regular and strict outcomes for the same input under the v1 budget.
+    ///
+    /// # Errors
+    ///
+    /// Rejects outcomes with the wrong policy roles or different input identities.
+    pub fn baseline_v1(
+        baseline: &ReferenceOutcome,
+        candidate: &ReferenceOutcome,
+    ) -> Result<Self, ComparisonError> {
+        if baseline.policy_id() != REGULAR_V1_ID {
+            return Err(ComparisonError::UnexpectedBaselinePolicy {
+                expected: REGULAR_V1_ID,
+                actual: baseline.policy_id(),
+            });
+        }
+        if candidate.policy_id() != STRICT_V1_ID {
+            return Err(ComparisonError::UnexpectedCandidatePolicy {
+                expected: STRICT_V1_ID,
+                actual: candidate.policy_id(),
+            });
+        }
+        if baseline.input_id() != candidate.input_id() {
+            return Err(ComparisonError::InputMismatch {
+                baseline_input_id: baseline.input_id(),
+                candidate_input_id: candidate.input_id(),
+            });
+        }
         let mut issues = Vec::new();
         if baseline.termination() != candidate.termination() {
             issues.push(ComparisonIssue::TerminationMismatch);
@@ -77,14 +126,14 @@ impl ReferenceComparison {
         {
             issues.push(ComparisonIssue::CarterDriftBudgetExceeded);
         }
-        Self {
+        Ok(Self {
             baseline_policy: baseline.policy_id(),
             candidate_policy: candidate.policy_id(),
             event_position_distance_m,
             escape_direction_angle_rad,
             travel_time_difference_m,
             issues,
-        }
+        })
     }
 
     #[must_use]

@@ -1,5 +1,7 @@
 use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
 
+pub const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M: f64 = 200.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EventKind {
     SingularityGuard,
@@ -15,6 +17,14 @@ pub struct EventConfiguration {
 }
 
 impl EventConfiguration {
+    #[must_use]
+    pub const fn observation_baseline_v1() -> Self {
+        Self {
+            escape_radius_m: Some(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M),
+            equatorial_surface: None,
+        }
+    }
+
     #[must_use]
     pub const fn horizon_only() -> Self {
         Self {

@@ -146,10 +146,13 @@ impl Observation {
         &self.projection
     }
 
-    /// Maps one validated viewport sample to its physical future-directed photon momentum.
-    #[must_use]
-    pub fn initial_ray(&self, sample: ViewportSample) -> InitialViewRay {
-        let [sight_x, sight_y] = sample.sight_plane();
+    /// Maps one viewport sample to its physical future-directed photon momentum.
+    ///
+    /// # Errors
+    ///
+    /// Revalidates the sample against this observation's projection and returns every seam issue.
+    pub fn initial_ray(&self, sample: ViewportSample) -> Result<InitialViewRay, ValidationReport> {
+        let [sight_x, sight_y] = self.projection.sight_plane(sample)?;
         let frame = self.scene.observer.frame();
         let normalization = 1.0_f64.hypot(sight_x.hypot(sight_y)).recip();
         let sight_direction = frame
@@ -169,27 +172,20 @@ impl Observation {
         components[..4].copy_from_slice(&event.to_txyz());
         components[4..].copy_from_slice(&momentum_covariant);
         let state = GeodesicState::from_validated(components);
-        let null_contraction = self
-            .scene
-            .observer
-            .dot(momentum_contravariant, momentum_contravariant);
         let observer_frequency = -momentum_covariant
             .into_iter()
             .zip(frame.four_velocity().to_array())
             .map(|(covector, vector)| covector * vector)
             .sum::<f64>();
-        InitialViewRay {
+        Ok(InitialViewRay {
             state,
             sight_direction,
             observer_frequency,
-            normalized_null_residual: null_contraction.abs()
-                / momentum_contravariant
-                    .to_array()
-                    .into_iter()
-                    .map(f64::abs)
-                    .sum::<f64>()
-                    .max(1.0),
-        }
+            normalized_null_residual: self
+                .scene
+                .observer
+                .normalized_null_residual(momentum_contravariant),
+        })
     }
 }
 
