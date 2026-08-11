@@ -4,6 +4,7 @@ use gravlume_domain::{GeodesicInvariants, GeodesicState, GeometryError, KerrNewm
 
 use crate::{
     events::{EventConfiguration, EventKind},
+    fixture::GeodesicFixture,
     integrator::{DenseOutput, attempt_step, derivative},
     outcome::{
         LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination, TraceDiagnostics,
@@ -39,6 +40,21 @@ impl ReferenceTracer {
         })
     }
 
+    /// Creates a tracer from a validated geodesic fixture.
+    ///
+    /// # Errors
+    ///
+    /// Returns a configuration error if the fixture is not normalized or its events are invalid.
+    pub fn from_fixture(
+        fixture: &GeodesicFixture,
+        policy: ReferencePolicy,
+    ) -> Result<Self, ReferenceConfigurationError> {
+        let events = fixture
+            .event_configuration()
+            .map_err(|_| ReferenceConfigurationError::InvalidEvents)?;
+        Self::new(fixture.spacetime(), policy, events)
+    }
+
     #[must_use]
     pub fn trace(&self, request: TraceRequest) -> ReferenceOutcome {
         TraceExecution::new(self, request).run()
@@ -49,6 +65,8 @@ impl ReferenceTracer {
 pub enum ReferenceConfigurationError {
     #[error("reference-v1 inputs must be normalized to M = 1")]
     NonNormalizedMass,
+    #[error("fixture event configuration is invalid")]
+    InvalidEvents,
 }
 
 struct TraceExecution<'tracer> {

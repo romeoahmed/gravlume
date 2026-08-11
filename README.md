@@ -6,7 +6,7 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 
 ## 当前状态
 
-项目目前处于 **Phase 0：桌面栈闭环**。现有程序展示的是验证渲染链路的诊断画面，**还不是物理光线追迹器**。
+项目目前已进入 **Phase 1：领域与 CPU reference**。原生窗口仍展示验证渲染链路的诊断画面，**还不是 GPU 物理光线追迹器**；科学追迹当前通过无 GPU 的 Rust reference 测试与接口运行。
 
 已经实现：
 
@@ -16,8 +16,12 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 - resize、zero extent、suspend/resume 与 surface recovery；
 - 结构化 GPU 错误、提交后纹理释放和非阻塞 timestamp readback；
 - 覆盖能力选择、资源代际、显示变换和 GPU 合同的测试。
+- 私有字段、原子提交的 validated `Observation`、Observer Event/Frame 与 viewport 初始光线；
+- Cartesian Kerr–Schild `f64` Hamilton RHS、DP5(4) FSAL、自适应误差控制与 quartic dense output；
+- typed horizon/escape/equatorial/singularity/resource terminal、事件 bracket/残差、守恒量 drift 与 baseline/strict comparison report；
+- 严格 v1 TOML fixture seam、Schwarzschild 80 位 fixture 回归及保持输入顺序的专用 Rayon pool。
 
-尚未实现：Observation 领域模型、CPU `f64` reference、Kerr–Schild geodesic tracer、吸积盘/天空成像、自适应重建和研究工作台。这些能力在路线图中有明确退出条件，不能从当前诊断画面外推。
+尚未实现：GPU `f32` geodesic tracer、吸积盘/天空成像、自适应重建和研究工作台。CPU reference 的当前证据范围与未覆盖 oracle 梯级见 [Phase 1 实现与证据](docs/phase-1.md)，不能从当前 fixture 外推。
 
 macOS 使用 Metal；Windows 与 Linux 使用 Vulkan。Windows/Linux 发布支持仍需在具名系统、adapter 与 driver 上补齐验证证据。
 
@@ -51,9 +55,11 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 |---|---|
 | `src/main.rs` | 日志初始化与桌面程序入口 |
 | `crates/gravlume-desktop` | winit/egui 生命周期、事件与重绘调度 |
+| `crates/gravlume-domain` | validated scene、observer/frame、viewport ray 与 Kerr–Schild `f64` 领域数学 |
+| `crates/gravlume-reference` | 独立 DP5(4) CPU oracle、dense events、fixture、并行 batch 与 comparison report |
 | `crates/gravlume-render` | wgpu 能力协商、frame graph、资源、计时与错误语义 |
 | `crates/gravlume-render/src/shaders` | 运行时加载的已审查 WGSL |
-| `tests/fixtures/v1` | 后续 reference/interactive comparison 的版本化科学输入 |
+| `tests/fixtures/v1` | reference/interactive comparison 的版本化科学输入 |
 | `docs` | 产品、物理、验证、架构、平台和实施合同 |
 
 ## 设计与验证原则
@@ -66,7 +72,7 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 ## 路线图
 
-Phase 1 建立领域模型与 CPU reference；Phase 2 实现可诊断的 GPU geodesic tracing；Phase 3 加入辐射传输与可解释图像；Phase 4 完成重建、预算与性能门槛。资产广度、实验加速器和偏振等研究能力位于后续阶段。完整交付物与退出条件见[实施路线](docs/roadmap.md)。
+Phase 1 当前建立领域模型与 CPU reference；Phase 2 实现可诊断的 GPU geodesic tracing；Phase 3 加入辐射传输与可解释图像；Phase 4 完成重建、预算与性能门槛。资产广度、实验加速器和偏振等研究能力位于后续阶段。完整交付物与退出条件见[实施路线](docs/roadmap.md)。
 
 ## 文档
 

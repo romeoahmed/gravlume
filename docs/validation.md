@@ -1,6 +1,6 @@
 # 验证合同
 
-本文定义 CPU reference 方法、最低 fixture 矩阵和 Phase 1–3 的首个版本化验收 profile。所有阈值都是待实现必须通过的条件，不是当前仓库已经达到的性能或正确性声明。
+本文定义 CPU reference 方法、最低 fixture 矩阵和 Phase 1–3 的首个版本化验收 profile。阈值是持续验收合同；当前 Rust reference 已覆盖的证据和仍未闭合的 oracle 梯级单独记录在 [Phase 1 实现与证据](phase-1.md)，不得把局部通过外推为整个矩阵已完成。
 
 `baseline-v1` 是 Validation Profile；它引用 `reference-regular-v1` 与 `reference-strict-v1` 两个 Reference Policy。任一标识用于 artifact 后都不可原地改义；修正输入、阈值或枚举必须产生新 ID，并保留旧 fixture 的读取或明确拒绝策略。
 
