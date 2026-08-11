@@ -4,6 +4,8 @@ use crate::{
     ViewportProjection, ViewportSample, math::FourVector, observer::StationaryObserver,
 };
 
+const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
+
 #[derive(Clone, Debug)]
 pub struct PhysicalSceneDraft {
     mass_m: f64,
@@ -82,11 +84,6 @@ impl PhysicalScene {
     }
 
     #[must_use]
-    pub fn outer_horizon_radius(&self) -> Option<f64> {
-        self.spacetime.outer_horizon_radius()
-    }
-
-    #[must_use]
     pub const fn observer_event(&self) -> SpacetimeEvent {
         self.observer.event()
     }
@@ -110,30 +107,9 @@ pub struct Observation {
 
 impl Observation {
     /// Binds a validated physical scene to a validated viewport projection.
-    ///
-    /// # Errors
-    ///
-    /// Returns a report if a corrupted internal frame reaches this boundary.
-    pub fn new(
-        scene: PhysicalScene,
-        projection: ViewportProjection,
-    ) -> Result<Self, ValidationReport> {
-        let frame = scene.observer_frame();
-        if frame.gram_residual().is_finite()
-            && frame.gram_residual() <= 1.0e-12
-            && frame.orientation_determinant().is_finite()
-            && frame.orientation_determinant() > 0.0
-        {
-            Ok(Self { scene, projection })
-        } else {
-            let mut report = ValidationReport::default();
-            report.push(ValidationIssue::error(
-                ValidationIssueCode::InternalInvariant,
-                "observation.scene.observer_frame",
-                "observer frame is not orthonormal and positively oriented",
-            ));
-            Err(report)
-        }
+    #[must_use]
+    pub const fn new(scene: PhysicalScene, projection: ViewportProjection) -> Self {
+        Self { scene, projection }
     }
 
     #[must_use]
@@ -186,6 +162,9 @@ impl Observation {
         {
             return Err(non_finite_initial_ray());
         }
+        if observer_frequency <= 0.0 || normalized_null_residual > INITIAL_RAY_NULL_TOLERANCE {
+            return Err(invalid_initial_ray());
+        }
         let mut components = [0.0; 8];
         components[..4].copy_from_slice(&event.to_txyz());
         components[4..].copy_from_slice(&momentum_covariant);
@@ -205,6 +184,16 @@ fn non_finite_initial_ray() -> ValidationReport {
         ValidationIssueCode::NonFinite,
         "observation.initial_ray",
         "derived photon momentum and diagnostics must be finite",
+    ));
+    report
+}
+
+fn invalid_initial_ray() -> ValidationReport {
+    let mut report = ValidationReport::default();
+    report.push(ValidationIssue::error(
+        ValidationIssueCode::InternalInvariant,
+        "observation.initial_ray",
+        "derived photon momentum must be future-directed and null within the domain budget",
     ));
     report
 }
@@ -236,10 +225,5 @@ impl InitialViewRay {
     #[must_use]
     pub const fn normalized_null_residual(self) -> f64 {
         self.normalized_null_residual
-    }
-
-    #[must_use]
-    pub const fn is_future_directed(self) -> bool {
-        self.observer_frequency.is_finite() && self.observer_frequency > 0.0
     }
 }
