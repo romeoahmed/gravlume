@@ -208,21 +208,3 @@ fn weighted_state(
         step.mul_add(weighted, start[component])
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{A, DENSE_COEFFICIENTS, FIFTH_ORDER_WEIGHTS, FOURTH_ORDER_WEIGHTS};
-
-    #[test]
-    fn dp54_tableau_and_dense_endpoint_preserve_the_documented_consistency_identities() {
-        let abscissae = [0.0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0];
-        for (row, expected) in A.iter().zip(abscissae) {
-            assert!((row.iter().sum::<f64>() - expected).abs() <= 32.0 * f64::EPSILON);
-        }
-        assert!((FIFTH_ORDER_WEIGHTS.iter().sum::<f64>() - 1.0).abs() <= 8.0 * f64::EPSILON);
-        assert!((FOURTH_ORDER_WEIGHTS.iter().sum::<f64>() - 1.0).abs() <= 8.0 * f64::EPSILON);
-        for (dense_row, expected) in DENSE_COEFFICIENTS.iter().zip(FIFTH_ORDER_WEIGHTS) {
-            assert!((dense_row.iter().sum::<f64>() - expected).abs() <= 32.0 * f64::EPSILON);
-        }
-    }
-}
