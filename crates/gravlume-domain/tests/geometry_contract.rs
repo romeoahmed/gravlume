@@ -59,6 +59,38 @@ fn schwarzschild_limit_is_spherical_and_stationary() {
 }
 
 #[test]
+fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
+    let event = SpacetimeEvent::from_txyz([0.0, 10.0, 0.0, 0.0]).expect("event is finite");
+    let reissner_nordstrom = KerrNewmanSpacetime::new(1.0, 0.0, 0.6).expect("parameters are valid");
+    let expected_g_tt = -1.0 + 2.0 / 10.0 - 0.6_f64.powi(2) / 10.0_f64.powi(2);
+    assert!(
+        (reissner_nordstrom
+            .metric_component_tt(event)
+            .expect("metric is finite")
+            - expected_g_tt)
+            .abs()
+            < 4.0 * f64::EPSILON
+    );
+
+    let minkowski_limit =
+        KerrNewmanSpacetime::new(1.0e-12, 0.0, 0.0).expect("positive mass is valid");
+    assert!(
+        (minkowski_limit
+            .metric_component_tt(event)
+            .expect("metric is finite")
+            + 1.0)
+            .abs()
+            < 2.1e-13
+    );
+    assert!(
+        minkowski_limit
+            .metric_inverse_residual(event)
+            .expect("metric is finite")
+            < 4.0 * f64::EPSILON
+    );
+}
+
+#[test]
 fn ring_singularity_and_nonnegative_radius_branch_disk_are_distinct_failures() {
     let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("parameters are valid");
     let ring = SpacetimeEvent::from_txyz([0.0, 0.8, 0.0, 0.0]).expect("event is finite");
