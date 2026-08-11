@@ -14,7 +14,7 @@ pub enum EventKind {
     Escape,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct EventConfiguration {
     escape_radius_m: Option<f64>,
     equatorial_surface: Option<EquatorialSurface>,

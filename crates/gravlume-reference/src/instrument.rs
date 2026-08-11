@@ -39,35 +39,21 @@ impl ReferenceRequest {
 
 #[derive(Clone, Copy, Debug)]
 pub struct ReferenceInstrument {
-    events: EventConfiguration,
-}
-
-impl Default for ReferenceInstrument {
-    fn default() -> Self {
-        Self::baseline_v1()
-    }
+    _private: (),
 }
 
 impl ReferenceInstrument {
     #[must_use]
     pub const fn baseline_v1() -> Self {
-        Self {
-            events: EventConfiguration::observation_baseline_v1(),
-        }
-    }
-
-    #[must_use]
-    pub const fn with_events(events: EventConfiguration) -> Self {
-        Self { events }
+        Self { _private: () }
     }
 
     /// Traces a viewport sample backward while preserving future-directed photon momentum.
     ///
     /// # Errors
     ///
-    /// Returns an error if an impossible internal initial-ray invariant is observed or the
-    /// observation is not normalized for reference-v1. Numerical integration failures are
-    /// successful, typed outcomes.
+    /// Returns an error if the observation is not normalized for reference-v1. Numerical
+    /// integration failures are successful, typed outcomes.
     pub fn trace(
         &self,
         request: ReferenceRequest,
@@ -84,8 +70,12 @@ impl ReferenceInstrument {
         {
             return Err(ReferenceRuntimeError::NonNormalizedReferenceInput);
         }
-        let tracer = ReferenceTracer::new(spacetime, policy, self.events)
-            .map_err(|_| ReferenceRuntimeError::NonNormalizedReferenceInput)?;
+        let tracer = ReferenceTracer::new(
+            spacetime,
+            policy,
+            EventConfiguration::observation_baseline_v1(),
+        )
+        .map_err(|_| ReferenceRuntimeError::NonNormalizedReferenceInput)?;
         Ok(tracer.trace(TraceRequest::new(
             input_id,
             initial_ray.state(),

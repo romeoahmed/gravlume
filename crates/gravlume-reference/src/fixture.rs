@@ -7,8 +7,8 @@ use gravlume_domain::{
 use serde::{Deserialize, Deserializer, de};
 
 use crate::{
-    AffineDirection, EventConfiguration, EventConfigurationError, ReferenceOutcome,
-    ReferencePolicy, Termination, TraceInputId, TraceRequest,
+    AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, Termination,
+    TraceInputId, TraceRequest,
     events::{OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M, escape_event_is_armed},
 };
 
@@ -51,30 +51,6 @@ impl FixtureDocument {
     }
 
     #[must_use]
-    pub const fn schema_version(&self) -> u32 {
-        match self {
-            Self::Observation(fixture) => fixture.schema_version,
-            Self::Geodesic(fixture) => fixture.schema_version,
-        }
-    }
-
-    #[must_use]
-    pub fn profile(&self) -> &str {
-        match self {
-            Self::Observation(fixture) => &fixture.profile,
-            Self::Geodesic(fixture) => &fixture.profile,
-        }
-    }
-
-    #[must_use]
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Observation(fixture) => fixture.input_id.as_str(),
-            Self::Geodesic(fixture) => fixture.input_id.as_str(),
-        }
-    }
-
-    #[must_use]
     pub fn into_geodesic(self) -> Option<GeodesicFixture> {
         match self {
             Self::Geodesic(fixture) => Some(fixture),
@@ -93,8 +69,6 @@ impl FixtureDocument {
 
 #[derive(Clone, Debug)]
 pub struct ObservationFixture {
-    schema_version: u32,
-    profile: String,
     input_id: TraceInputId,
     observation: Observation,
 }
@@ -113,13 +87,11 @@ impl ObservationFixture {
 
 #[derive(Clone, Debug)]
 pub struct GeodesicFixture {
-    schema_version: u32,
-    profile: String,
     input_id: TraceInputId,
     spacetime: KerrNewmanSpacetime,
     initial_state: GeodesicState,
     affine_direction: AffineDirection,
-    escape_radius_m: Option<f64>,
+    events: EventConfiguration,
     applicability: GeodesicApplicability,
     expected: ExpectedOutcome,
 }
@@ -135,16 +107,8 @@ impl GeodesicFixture {
         self.spacetime
     }
 
-    /// Resolves the versioned event configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if a stored escape radius violates the runtime event seam.
-    pub fn event_configuration(&self) -> Result<EventConfiguration, EventConfigurationError> {
-        self.escape_radius_m.map_or_else(
-            || Ok(EventConfiguration::horizon_only()),
-            EventConfiguration::with_escape_radius,
-        )
+    pub(crate) const fn event_configuration(&self) -> EventConfiguration {
+        self.events
     }
 
     #[must_use]
@@ -314,10 +278,14 @@ struct RawProducer {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSpacetime {
-    family: SpacetimeFamily,
-    chart: CoordinateChart,
-    signature: MetricSignature,
-    component_order: ComponentOrder,
+    #[serde(rename = "family")]
+    _family: SpacetimeFamily,
+    #[serde(rename = "chart")]
+    _chart: CoordinateChart,
+    #[serde(rename = "signature")]
+    _signature: MetricSignature,
+    #[serde(rename = "component_order")]
+    _component_order: ComponentOrder,
     mass_m: DecimalString,
     spin_m: DecimalString,
     charge_m: DecimalString,
@@ -489,13 +457,10 @@ impl TryFrom<RawObservationFixture> for FixtureDocument {
 
     fn try_from(raw: RawObservationFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
-        validate_conventions(&raw.spacetime);
         validate_observation_v1_profile(&raw)?;
         let observation = build_observation(&raw)?;
         validate_observation_expected(&raw, &observation)?;
         Ok(Self::Observation(ObservationFixture {
-            schema_version: raw.schema_version,
-            profile: raw.profile,
             input_id: TraceInputId::new(raw.id),
             observation,
         }))
@@ -507,7 +472,6 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
 
     fn try_from(raw: RawGeodesicFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
-        validate_conventions(&raw.spacetime);
         require_decimal_source(&raw.spacetime.mass_m, "1", "spacetime.mass_m")?;
         validate_geodesic_evidence(&raw)?;
         let spacetime = KerrNewmanSpacetime::new(
@@ -521,7 +485,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             decimal_array(&raw.initial.momentum_covariant),
         )
         .map_err(|error| FixtureError::InvalidPhysicalData(error.to_string()))?;
-        validate_geodesic_events(&raw, spacetime, initial_state)?;
+        let events = validate_geodesic_events(&raw, spacetime, initial_state)?;
         let termination = validate_geodesic_expected(&raw)?;
         let initial_invariants = spacetime
             .invariants(initial_state)
@@ -565,13 +529,11 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             spacetime,
         };
         Ok(Self::Geodesic(GeodesicFixture {
-            schema_version: raw.schema_version,
-            profile: raw.profile,
             input_id,
             spacetime,
             initial_state,
             affine_direction,
-            escape_radius_m: raw.events.escape_radius_m.map(|value| value.value),
+            events,
             applicability,
             expected,
         }))
@@ -797,14 +759,14 @@ fn validate_geodesic_events(
     raw: &RawGeodesicFixture,
     spacetime: KerrNewmanSpacetime,
     initial_state: GeodesicState,
-) -> Result<(), FixtureError> {
-    match (
+) -> Result<EventConfiguration, FixtureError> {
+    let events = match (
         raw.events.escape_radius_m.as_ref(),
         raw.events.escape_event_initially_armed,
     ) {
-        (None, None) => {}
+        (None, None) => EventConfiguration::horizon_only(),
         (Some(escape_radius), Some(declared_armed)) => {
-            EventConfiguration::with_escape_radius(escape_radius.value)
+            let events = EventConfiguration::with_escape_radius(escape_radius.value)
                 .map_err(|_| FixtureError::InconsistentEventEnvelope)?;
             let initial_radius = spacetime
                 .radius(initial_state.event())
@@ -817,9 +779,10 @@ fn validate_geodesic_events(
             if declared_armed != actual_armed {
                 return Err(FixtureError::InconsistentEventEnvelope);
             }
+            events
         }
         _ => return Err(FixtureError::InconsistentEventEnvelope),
-    }
+    };
     if let Some(stored_horizon) = raw.events.outer_horizon_radius_m.as_ref() {
         let Some(actual_horizon) = spacetime.outer_horizon_radius() else {
             return Err(FixtureError::InconsistentEventEnvelope);
@@ -828,7 +791,7 @@ fn validate_geodesic_events(
             return Err(FixtureError::InconsistentEventEnvelope);
         }
     }
-    Ok(())
+    Ok(events)
 }
 
 fn validate_geodesic_expected(raw: &RawGeodesicFixture) -> Result<Termination, FixtureError> {
@@ -998,22 +961,6 @@ fn invalid_physical_data(error: impl fmt::Display) -> FixtureError {
     FixtureError::InvalidPhysicalData(error.to_string())
 }
 
-const fn validate_conventions(spacetime: &RawSpacetime) {
-    match (
-        spacetime.family,
-        spacetime.chart,
-        spacetime.signature,
-        spacetime.component_order,
-    ) {
-        (
-            SpacetimeFamily::KerrNewman,
-            CoordinateChart::IngoingCartesianKerrSchild,
-            MetricSignature::MostlyPlus,
-            ComponentOrder::Txyz,
-        ) => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::FixtureDocument;
@@ -1029,7 +976,6 @@ mod tests {
             .into_geodesic()
             .expect("fixture is geodesic");
         let mut outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-            .expect("fixture event configuration is valid")
             .trace(fixture.trace_request());
         outcome.turning_radius_m = Some(3.0);
 
