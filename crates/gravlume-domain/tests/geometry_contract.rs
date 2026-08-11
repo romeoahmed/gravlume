@@ -43,6 +43,17 @@ fn oblate_radius_and_rank_one_metric_inverse_satisfy_the_algebra_contract() {
 }
 
 #[test]
+fn metric_inverse_residual_is_term_normalized_under_strong_cancellation() {
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("parameters are valid");
+    let event = SpacetimeEvent::from_txyz([0.0, 1.0e-4, 2.0e-4, 3.0e-4]).expect("event is finite");
+    let residual = spacetime
+        .metric_inverse_residual(event)
+        .expect("metric is finite");
+
+    assert!(residual < 2.0e-12, "normalized residual was {residual:e}");
+}
+
+#[test]
 fn schwarzschild_limit_is_spherical_and_stationary() {
     let spacetime = KerrNewmanSpacetime::new(2.0, 0.0, 0.0).expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([7.0, 3.0, 4.0, 12.0]).expect("event is finite");

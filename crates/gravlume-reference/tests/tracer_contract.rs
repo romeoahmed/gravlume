@@ -1,7 +1,7 @@
 use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
 use gravlume_reference::{
     AffineDirection, EventConfiguration, ReferenceConfigurationError, ReferencePolicy,
-    ReferenceTracer, Termination, TraceRequest,
+    ReferenceTracer, Termination, TraceInputId, TraceRequest,
 };
 
 #[test]
@@ -57,7 +57,11 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
         EventConfiguration::with_escape_radius(boundary_radius_m).expect("escape surface is valid");
     let outcome = ReferenceTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
         .expect("mass is normalized")
-        .trace(TraceRequest::new(0, state, AffineDirection::Positive));
+        .trace(TraceRequest::new(
+            TraceInputId::new("weak-field-scattering"),
+            state,
+            AffineDirection::Positive,
+        ));
 
     assert_eq!(outcome.termination(), Termination::Escape);
     let flat_boundary_angle = 2.0_f64.mul_add(
@@ -79,7 +83,11 @@ fn equatorial_surface_is_localized_as_a_distinct_terminal_event() {
         .expect("surface is valid");
     let outcome = ReferenceTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
         .expect("mass is normalized")
-        .trace(TraceRequest::new(0, state, AffineDirection::Positive));
+        .trace(TraceRequest::new(
+            TraceInputId::new("equatorial-surface"),
+            state,
+            AffineDirection::Positive,
+        ));
 
     assert_eq!(outcome.termination(), Termination::EquatorialSurface);
     assert!(outcome.state().components()[3].abs() < 2.0e-11);

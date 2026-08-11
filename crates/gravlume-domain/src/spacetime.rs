@@ -193,7 +193,7 @@ impl KerrNewmanSpacetime {
             .map(|geometry| -1.0 + geometry.scalar_f)
     }
 
-    /// Measures the maximum residual of `g * g^-1 = I`.
+    /// Measures the term-normalized maximum residual of `g * g^-1 = I`.
     ///
     /// # Errors
     ///
@@ -205,13 +205,16 @@ impl KerrNewmanSpacetime {
         let mut residual = 0.0_f64;
         for (row, covariant_row) in covariant.iter().enumerate() {
             for (column, _) in inverse[0].iter().enumerate() {
-                let product = covariant_row
+                let (product, term_norm) = covariant_row
                     .iter()
                     .zip(inverse.iter())
                     .map(|(left, inverse_row)| left * inverse_row[column])
-                    .sum::<f64>();
+                    .fold((0.0, 0.0_f64), |(sum, norm), term| {
+                        (sum + term, norm + term.abs())
+                    });
                 let expected = if row == column { 1.0 } else { 0.0 };
-                residual = residual.max((product - expected).abs());
+                let normalized = (product - expected).abs() / term_norm.max(1.0);
+                residual = residual.max(normalized);
             }
         }
         Ok(residual)

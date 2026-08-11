@@ -4,29 +4,32 @@ use gravlume_domain::{InitialViewRay, Observation, ValidationReport, ViewportSam
 
 use crate::{
     AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, ReferenceTracer,
-    TraceRequest,
+    TraceInputId, TraceRequest,
 };
 
 #[derive(Clone, Debug)]
 pub struct ReferenceRequest {
+    input_id: TraceInputId,
     observation: Arc<Observation>,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
 }
 
 impl ReferenceRequest {
-    /// Binds a sample to the request observation and resolves its initial ray.
+    /// Binds a stable logical identity and sample to the observation, then resolves its initial ray.
     ///
     /// # Errors
     ///
     /// Rejects a sample that is invalid for the request observation's projection.
     pub fn new(
+        input_id: TraceInputId,
         observation: Arc<Observation>,
         sample: ViewportSample,
         policy: ReferencePolicy,
     ) -> Result<Self, ValidationReport> {
         let initial_ray = observation.initial_ray(sample)?;
         Ok(Self {
+            input_id,
             observation,
             initial_ray,
             policy,
@@ -70,6 +73,7 @@ impl ReferenceInstrument {
         request: ReferenceRequest,
     ) -> Result<ReferenceOutcome, ReferenceRuntimeError> {
         let ReferenceRequest {
+            input_id,
             observation,
             initial_ray,
             policy,
@@ -89,7 +93,7 @@ impl ReferenceInstrument {
         let tracer = ReferenceTracer::new(spacetime, policy, self.events)
             .map_err(|_| ReferenceRuntimeError::NonNormalizedReferenceInput)?;
         Ok(tracer.trace(TraceRequest::new(
-            0,
+            input_id,
             initial_ray.state(),
             AffineDirection::Negative,
         )))
