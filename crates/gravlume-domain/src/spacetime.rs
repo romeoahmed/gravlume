@@ -288,11 +288,23 @@ impl KerrNewmanSpacetime {
             let angular_term = (-spin_squared * energy).mul_add(energy, lz_over_sin * lz_over_sin);
             (cos_theta * cos_theta).mul_add(angular_term, p_theta * p_theta)
         };
+        let normalized_null_residual = self.normalized_null_residual(state)?;
+        if ![
+            energy,
+            angular_momentum_z,
+            carter_constant,
+            normalized_null_residual,
+        ]
+        .into_iter()
+        .all(f64::is_finite)
+        {
+            return Err(GeometryError::NonFinite);
+        }
         Ok(GeodesicInvariants {
             energy,
             angular_momentum_z,
             carter_constant,
-            normalized_null_residual: self.normalized_null_residual(state)?,
+            normalized_null_residual,
         })
     }
 
@@ -304,7 +316,11 @@ impl KerrNewmanSpacetime {
     pub fn normalized_null_residual(self, state: GeodesicState) -> Result<f64, GeometryError> {
         let inverse = metric_inverse(self.geometry(state.event())?);
         let momentum = FourVector::new(state.momentum_covariant_txyz());
-        Ok(normalized_quadratic_form_residual(inverse, momentum))
+        let residual = normalized_quadratic_form_residual(inverse, momentum);
+        residual
+            .is_finite()
+            .then_some(residual)
+            .ok_or(GeometryError::NonFinite)
     }
 
     /// Returns `dr/dlambda` for the canonical Hamilton traversal direction.
@@ -395,7 +411,7 @@ impl KerrNewmanSpacetime {
             return Err(GeometryError::InvalidDenominator);
         }
         if radius_squared <= 0.0 {
-            return Err(classify_zero_radius(b, radius_squared_3d, spin_squared));
+            return Err(classify_zero_radius(b));
         }
         let radius = radius_squared.sqrt();
         let radius_fourth = radius_squared * radius_squared;
@@ -470,9 +486,8 @@ impl KerrNewmanSpacetime {
     }
 }
 
-fn classify_zero_radius(b: f64, radius_squared_3d: f64, spin_squared: f64) -> GeometryError {
-    let ring_scale = radius_squared_3d.max(spin_squared).max(1.0);
-    if b.abs() <= 16.0 * f64::EPSILON * ring_scale {
+const fn classify_zero_radius(b: f64) -> GeometryError {
+    if b == 0.0 {
         GeometryError::RingSingularity
     } else {
         GeometryError::ChartBoundary

@@ -27,6 +27,7 @@ pub enum ComparisonError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ComparisonIssue {
     TerminationMismatch,
+    UnsuccessfulTermination,
     EventPositionBudgetExceeded,
     EscapeDirectionUnavailable,
     EscapeDirectionBudgetExceeded,
@@ -78,6 +79,9 @@ impl ReferenceComparison {
         let mut issues = Vec::new();
         if baseline.termination() != candidate.termination() {
             issues.push(ComparisonIssue::TerminationMismatch);
+        }
+        if is_unsuccessful(baseline.termination()) || is_unsuccessful(candidate.termination()) {
+            issues.push(ComparisonIssue::UnsuccessfulTermination);
         }
         let event_position_distance_m = event_position_distance(baseline, candidate);
         if event_position_distance_m.is_some_and(|distance| distance > 2.0e-9) {
@@ -181,6 +185,15 @@ impl ReferenceComparison {
     }
 }
 
+const fn is_unsuccessful(termination: Termination) -> bool {
+    matches!(
+        termination,
+        Termination::StepExhaustion
+            | Termination::RejectExhaustion
+            | Termination::NumericalFailure(_)
+    )
+}
+
 fn event_position_distance(left: &ReferenceOutcome, right: &ReferenceOutcome) -> Option<f64> {
     left.event().zip(right.event()).map(|_| {
         let left = left.state().components();
@@ -214,7 +227,28 @@ mod tests {
     use gravlume_domain::GeodesicState;
 
     use super::{ComparisonIssue, ReferenceComparison};
-    use crate::{ReferenceOutcome, Termination, TraceDiagnostics, TraceInputId};
+    use crate::{NumericalFailure, ReferenceOutcome, Termination, TraceDiagnostics, TraceInputId};
+
+    #[test]
+    fn matching_unsuccessful_terminations_are_not_convergence_evidence() {
+        for termination in [
+            Termination::StepExhaustion,
+            Termination::RejectExhaustion,
+            Termination::NumericalFailure(NumericalFailure::NonFinite),
+        ] {
+            let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
+            baseline.termination = termination;
+            baseline.escape_direction_xyz = None;
+            let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
+            candidate.termination = termination;
+            candidate.escape_direction_xyz = None;
+
+            let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+                .expect("policy roles and input identity match");
+
+            assert!(!comparison.is_accepted(), "accepted {termination:?}");
+        }
+    }
 
     #[test]
     fn escape_direction_gate_uses_terminal_momentum_not_event_position() {

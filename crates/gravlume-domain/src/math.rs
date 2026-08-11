@@ -72,16 +72,130 @@ impl FourVector {
 
 pub fn normalized_quadratic_form_residual(matrix: [[f64; 4]; 4], vector: FourVector) -> f64 {
     let vector = vector.to_array();
+    if !matrix.into_iter().flatten().all(f64::is_finite) || !vector.into_iter().all(f64::is_finite)
+    {
+        return f64::NAN;
+    }
+    let matrix_scale = matrix
+        .into_iter()
+        .flatten()
+        .map(f64::abs)
+        .fold(0.0_f64, f64::max);
+    let vector_scale = vector.into_iter().map(f64::abs).fold(0.0_f64, f64::max);
+    if matrix_scale == 0.0 || vector_scale == 0.0 {
+        return 0.0;
+    }
+    let scaled_vector = vector.map(|component| component / vector_scale);
     let mut contraction = 0.0;
     let mut term_norm = 0.0;
     for row in 0..4 {
         for column in 0..4 {
-            let term = matrix[row][column] * vector[row] * vector[column];
+            let term =
+                (matrix[row][column] / matrix_scale) * scaled_vector[row] * scaled_vector[column];
             contraction += term;
             term_norm += term.abs();
         }
     }
-    contraction.abs() / term_norm.max(1.0)
+    if term_norm == 0.0 {
+        return 0.0;
+    }
+    let relative_residual = contraction.abs() / term_norm;
+    let denominator_scale =
+        positive_product_capped_at_one([term_norm, matrix_scale, vector_scale, vector_scale]);
+    relative_residual * denominator_scale
+}
+
+fn positive_product_capped_at_one(factors: [f64; 4]) -> f64 {
+    let mut significand = 1.0;
+    let mut exponent = 0_i32;
+    for factor in factors {
+        let (factor_significand, factor_exponent) = positive_binary_decomposition(factor);
+        significand *= factor_significand;
+        exponent += factor_exponent;
+        if significand >= 2.0 {
+            significand *= 0.5;
+            exponent += 1;
+        }
+    }
+    if exponent >= 0 {
+        return 1.0;
+    }
+    if exponent < -1075 {
+        return 0.0;
+    }
+    if exponent == -1075 {
+        return (significand * 0.5) * f64::from_bits(1);
+    }
+    let power_of_two = if exponent >= -1022 {
+        let Ok(stored_exponent) = u64::try_from(exponent + 1023) else {
+            return 0.0;
+        };
+        f64::from_bits(stored_exponent << 52)
+    } else {
+        let Ok(fraction_bit) = u32::try_from(exponent + 1074) else {
+            return 0.0;
+        };
+        f64::from_bits(1_u64 << fraction_bit)
+    };
+    significand * power_of_two
+}
+
+fn positive_binary_decomposition(value: f64) -> (f64, i32) {
+    let bits = value.to_bits();
+    let stored_exponent = (bits >> 52) & 0x7ff;
+    let fraction = bits & ((1_u64 << 52) - 1);
+    if stored_exponent == 0 {
+        let highest_fraction_bit = fraction.ilog2();
+        let power_of_two = f64::from_bits(1_u64 << highest_fraction_bit);
+        let factor_exponent = match i32::try_from(highest_fraction_bit) {
+            Ok(bit) => bit - 1074,
+            Err(_) => return (f64::NAN, 0),
+        };
+        (value / power_of_two, factor_exponent)
+    } else {
+        let factor_exponent = match i32::try_from(stored_exponent) {
+            Ok(stored) => stored - 1023,
+            Err(_) => return (f64::NAN, 0),
+        };
+        (f64::from_bits((1023_u64 << 52) | fraction), factor_exponent)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FourVector, normalized_quadratic_form_residual};
+
+    #[test]
+    fn scaled_quadratic_residual_preserves_the_unit_floor() {
+        for (matrix_scale, vector_scale) in [
+            (1.0, 0.5),
+            (1.0, 2.0),
+            (1.0e300, 0.5e-150),
+            (1.0e-300, 0.5e150),
+        ] {
+            let mut matrix = [[0.0; 4]; 4];
+            matrix[0][0] = matrix_scale;
+            let vector = FourVector::new([vector_scale, 0.0, 0.0, 0.0]);
+            let residual = normalized_quadratic_form_residual(matrix, vector);
+            let term = matrix_scale * vector_scale * vector_scale;
+            let expected = term.abs() / term.abs().max(1.0);
+
+            assert!((residual - expected).abs() <= 4.0 * f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn scaled_quadratic_residual_avoids_infinity_over_infinity() {
+        let matrix = [
+            [-1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0; 4],
+            [0.0; 4],
+        ];
+        let vector = FourVector::new([1.0e200, 1.0e200, 0.0, 0.0]);
+
+        assert!(normalized_quadratic_form_residual(matrix, vector).abs() <= f64::MIN_POSITIVE);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

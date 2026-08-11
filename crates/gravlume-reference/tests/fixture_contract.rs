@@ -38,14 +38,125 @@ fn v1_fixture_seam_accepts_the_repository_documents_and_rejects_unknown_fields()
 }
 
 #[test]
-fn observation_fixture_rejects_an_escape_radius_outside_the_v1_profile() {
-    let wrong_escape_radius =
-        DEFAULT_OBSERVATION.replace("escape_radius_m = \"200\"", "escape_radius_m = \"123\"");
+fn observation_fixture_rejects_events_outside_the_v1_profile() {
+    for source in [
+        DEFAULT_OBSERVATION.replace("escape_radius_m = \"200\"", "escape_radius_m = \"123\""),
+        DEFAULT_OBSERVATION.replace(
+            "singularity_guard_d_over_m4 = \"9.094947017729282379150390625e-13\"",
+            "singularity_guard_d_over_m4 = \"1e-12\"",
+        ),
+    ] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(&source),
+            Err(FixtureError::InconsistentEventEnvelope)
+        ));
+    }
+}
 
-    assert!(matches!(
-        FixtureDocument::parse_toml(&wrong_escape_radius),
-        Err(FixtureError::InconsistentEventEnvelope)
-    ));
+#[test]
+fn observation_fixture_rejects_fixed_v1_profile_drift() {
+    let mutations = [
+        (
+            "id = \"kerr-exterior-observation-v1\"",
+            "id = \"other\"",
+            "id",
+        ),
+        (
+            "evidence = \"algebraic-and-numeric\"",
+            "evidence = \"numeric\"",
+            "evidence",
+        ),
+        ("precision_digits = 80", "precision_digits = 16", "producer"),
+        ("mass_m = \"1\"", "mass_m = \"2\"", "spacetime.mass_m"),
+        ("spin_m = \"0.8\"", "spin_m = \"0.7\"", "spacetime.spin_m"),
+        (
+            "charge_m = \"0\"",
+            "charge_m = \"0.1\"",
+            "spacetime.charge_m",
+        ),
+        (
+            "coordinate_time_m = \"0\"",
+            "coordinate_time_m = \"1\"",
+            "observer.coordinate_time_m",
+        ),
+        (
+            "oblate_radius_m = \"30\"",
+            "oblate_radius_m = \"31\"",
+            "observer.oblate_radius_m",
+        ),
+        (
+            "polar_angle_rad = \"1.0471975511965977461542144610931676280657231331250352736583148641026054687620697\"",
+            "polar_angle_rad = \"1\"",
+            "observer.polar_angle_rad",
+        ),
+        (
+            "azimuth_rad = \"0\"",
+            "azimuth_rad = \"0.1\"",
+            "observer.azimuth_rad",
+        ),
+        (
+            "target_txyz_m = [\"0\", \"0\", \"0\", \"0\"]",
+            "target_txyz_m = [\"0\", \"1\", \"0\", \"0\"]",
+            "observer.target_txyz_m",
+        ),
+        (
+            "measured_frequency = \"1\"",
+            "measured_frequency = \"2\"",
+            "observer.measured_frequency",
+        ),
+        ("width = 1280", "width = 640", "viewport.width"),
+        ("height = 720", "height = 360", "viewport.height"),
+        (
+            "vertical_fov_rad = \"0.78539816339744830961566084581987572104929234984377645524373614807695410157155225\"",
+            "vertical_fov_rad = \"1\"",
+            "viewport.vertical_fov_rad",
+        ),
+        (
+            "default_subpixel = [\"0.5\", \"0.5\"]",
+            "default_subpixel = [\"0.25\", \"0.5\"]",
+            "viewport.default_subpixel",
+        ),
+        (
+            "radius_abs_m = \"2e-13\"",
+            "radius_abs_m = \"1\"",
+            "tolerance.radius_abs_m",
+        ),
+        (
+            "frame_gram_max_abs = \"2e-12\"",
+            "frame_gram_max_abs = \"1\"",
+            "tolerance.frame_gram_max_abs",
+        ),
+        (
+            "initial_null_normalized_abs = \"2e-12\"",
+            "initial_null_normalized_abs = \"1\"",
+            "tolerance.initial_null_normalized_abs",
+        ),
+    ];
+
+    for (original, replacement, expected_field) in mutations {
+        let mutated = DEFAULT_OBSERVATION.replace(original, replacement);
+        assert_ne!(mutated, DEFAULT_OBSERVATION, "mutation target must exist");
+        assert!(matches!(
+            FixtureDocument::parse_toml(&mutated),
+            Err(FixtureError::PresetMismatch { field }) if field == expected_field
+        ));
+    }
+}
+
+#[test]
+fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
+    let invalid_oracle = SCATTER_B6.replace(
+        "initial_null_abs = \"4.91454214841681154173676126201e-81\"",
+        "initial_null_abs = \"1\"",
+    );
+    let wrong_precision = SCATTER_B6.replace("precision_digits = 80", "precision_digits = 16");
+
+    for source in [&invalid_oracle, &wrong_precision] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(source),
+            Err(FixtureError::InvalidPhysicalData(_))
+        ));
+    }
 }
 
 #[test]

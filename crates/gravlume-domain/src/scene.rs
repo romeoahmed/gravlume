@@ -166,27 +166,47 @@ impl Observation {
             .four_velocity()
             .add(arrival_direction)
             .scaled(self.scene.observer.measured_frequency());
+        if !momentum_contravariant.is_finite() {
+            return Err(non_finite_initial_ray());
+        }
         let momentum_covariant = self.scene.observer.lower(momentum_contravariant);
+        let normalized_null_residual = self
+            .scene
+            .observer
+            .normalized_null_residual(momentum_contravariant);
         let event = self.scene.observer.event();
-        let mut components = [0.0; 8];
-        components[..4].copy_from_slice(&event.to_txyz());
-        components[4..].copy_from_slice(&momentum_covariant);
-        let state = GeodesicState::from_validated(components);
         let observer_frequency = -momentum_covariant
             .into_iter()
             .zip(frame.four_velocity().to_array())
             .map(|(covector, vector)| covector * vector)
             .sum::<f64>();
+        if !momentum_covariant.into_iter().all(f64::is_finite)
+            || !observer_frequency.is_finite()
+            || !normalized_null_residual.is_finite()
+        {
+            return Err(non_finite_initial_ray());
+        }
+        let mut components = [0.0; 8];
+        components[..4].copy_from_slice(&event.to_txyz());
+        components[4..].copy_from_slice(&momentum_covariant);
+        let state = GeodesicState::from_validated(components);
         Ok(InitialViewRay {
             state,
             sight_direction,
             observer_frequency,
-            normalized_null_residual: self
-                .scene
-                .observer
-                .normalized_null_residual(momentum_contravariant),
+            normalized_null_residual,
         })
     }
+}
+
+fn non_finite_initial_ray() -> ValidationReport {
+    let mut report = ValidationReport::default();
+    report.push(ValidationIssue::error(
+        ValidationIssueCode::NonFinite,
+        "observation.initial_ray",
+        "derived photon momentum and diagnostics must be finite",
+    ));
+    report
 }
 
 #[derive(Clone, Copy, Debug)]
