@@ -1,6 +1,6 @@
 # 实施路线与退出条件
 
-当前实施起点是 Phase 0；实际仓库状态只由根 [README](../README.md#当前状态) 维护。阶段编号表达依赖关系，不是日历承诺。任一阶段必须以数据满足退出条件；“画面看起来正确”不能替代 machine-readable observable。
+实施阶段从 Phase 0 起；实际仓库状态只由根 [README](../README.md#当前状态) 维护。阶段编号表达依赖关系，不是日历承诺。任一阶段必须以数据满足退出条件；“画面看起来正确”不能替代 machine-readable observable。
 
 ## Phase 0 · 桌面栈闭环
 
@@ -17,6 +17,8 @@
 ## Phase 1 · 领域与 CPU reference
 
 **交付物**：validated Observation、Observer Event/Frame、Kerr–Schild `f64` DP5(4)、dense-output event localization、[验证合同](validation.md) fixture 和 comparison report。
+
+当前实现与适用域证据见 [Phase 1 实现与证据](phase-1.md)；未覆盖的 oracle 梯级不得因代码交付物存在而视为自动满足。
 
 **退出条件**：
 

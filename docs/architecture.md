@@ -137,13 +137,19 @@ impl Observation {
 }
 
 pub struct ReferenceInstrument { /* DP5(4), events, diagnostics */ }
-pub struct ReferenceRequest {
-    pub observation: Arc<Observation>,
-    pub sample: ViewportSample,
-    pub policy: ReferencePolicy,
+pub struct ReferenceRequest { /* Arc<Observation> + sample + policy */ }
+
+impl ReferenceRequest {
+    pub fn new(
+        observation: Arc<Observation>,
+        sample: ViewportSample,
+        policy: ReferencePolicy,
+    ) -> Self;
 }
 
 impl ReferenceInstrument {
+    pub fn baseline_v1() -> Self;
+
     pub fn trace(
         &self,
         request: ReferenceRequest,
@@ -153,7 +159,7 @@ impl ReferenceInstrument {
 
 `ViewportProjection::sample` 在 seam 检查 extent、pixel index、subpixel range 与 finite FOV；成功后的 `ViewportSample` 不能表示越界输入。`Observation::initial_ray` 是 Viewport Sample、projection、Observer Frame、Sight Direction 与 Photon Momentum 的唯一 CPU Interface；调用者不组合 tetrad 分量或反转符号。WGSL 独立实现同一数学合同并通过中心、四角和 jitter fixture，不复用 CPU 方程生成。`ReferenceInstrument::trace` 返回 typed termination 与 diagnostics；non-convergence、step exhaustion 和 numerical failure 是 `Ok(ReferenceOutcome)`，不是 panic 或伪黑色。只有损坏的内部 invariant 才返回 `ReferenceRuntimeError`。
 
-`ValidationReport` 的 issue code、field path 和 severity 是稳定 Interface；本地化 message 不是。未知 preset 字段、版本或枚举值在输入 seam 拒绝，不进入 domain。主线不公开 `Metric`、`Integrator`、`EventLocator` 或 `RenderPass` trait；它们没有需要调用者替换的第二个 adapter，公开只会泄漏实现选择。
+`ReferenceTracer` 是 fixture、收敛测试和研究批处理使用的低层 concrete API；它接收已经验证并按 v1 policy 归一化为 `M=1` 的 canonical `GeodesicState`、affine direction 和 event configuration，不公开可替换 solver trait。`ReferenceInstrument` 同时要求 `omega_obs=1`，未归一化输入在 seam 返回 typed configuration/runtime error。`ValidationReport` 的 issue code、field path 和 severity 是稳定 Interface；本地化 message 不是。未知 preset 字段、版本或枚举值在输入 seam 拒绝，不进入 domain。主线不公开 `Metric`、`Integrator`、`EventLocator` 或 `RenderPass` trait；它们没有需要调用者替换的第二个 adapter，公开只会泄漏实现选择。
 
 ### 4.2 Desktop Instrument
 

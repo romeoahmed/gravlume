@@ -7,7 +7,10 @@ publish.workspace = true
 
 [dependencies]
 gravlume-domain = { path = "../gravlume-domain" }
+rayon.workspace = true
+serde.workspace = true
 thiserror.workspace = true
+toml.workspace = true
 
 [lints]
 workspace = true

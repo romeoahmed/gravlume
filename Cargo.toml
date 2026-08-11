@@ -27,7 +27,10 @@ egui-wgpu = { version = "0.36", default-features = false }
 egui-winit = { version = "0.36", default-features = false }
 glam = { version = "0.33", default-features = false, features = ["f64", "std"] }
 pollster = "1.0"
+rayon = "1.12"
+serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 thiserror = "2.0"
+toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 wgpu = { version = "30.0", default-features = false, features = ["parking_lot", "std", "wgsl"] }
