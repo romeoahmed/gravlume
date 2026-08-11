@@ -113,12 +113,12 @@ impl<'tracer> TraceExecution<'tracer> {
     }
 
     fn run(mut self) -> ReferenceOutcome {
-        self.rhs_evaluations += 1;
-        let mut start_derivative = match derivative(self.tracer.spacetime, self.state.components())
-        {
-            Ok(derivative) => derivative,
-            Err(error) => return self.finish_failure(error.into()),
-        };
+        let initial_components = self.state.components();
+        let mut start_derivative =
+            match self.evaluate_rhs(|spacetime| derivative(spacetime, initial_components)) {
+                Ok(derivative) => derivative,
+                Err(error) => return self.finish_failure(error.into()),
+            };
         self.update_invariants(self.state);
         loop {
             if self.accepted_steps >= self.tracer.policy.maximum_accepted_steps() {
@@ -334,15 +334,12 @@ impl<'tracer> TraceExecution<'tracer> {
         maximum_theta: f64,
     ) {
         let traversal_sign = self.request.affine_direction.sign();
+        let start_state = self.state;
         let start_velocity = self
-            .tracer
-            .spacetime
-            .radial_velocity(self.state)
+            .evaluate_rhs(|spacetime| spacetime.radial_velocity(start_state))
             .map(|velocity| traversal_sign * velocity);
         let end_velocity = self
-            .tracer
-            .spacetime
-            .radial_velocity(end_state)
+            .evaluate_rhs(|spacetime| spacetime.radial_velocity(end_state))
             .map(|velocity| traversal_sign * velocity);
         if let (Ok(start), Ok(end)) = (start_velocity, end_velocity)
             && start < 0.0
@@ -359,7 +356,7 @@ impl<'tracer> TraceExecution<'tracer> {
     }
 
     fn localize_turning_point(
-        &self,
+        &mut self,
         dense: &DenseOutput,
         start_value: f64,
         end_value: f64,
@@ -375,8 +372,9 @@ impl<'tracer> TraceExecution<'tracer> {
             }
             let middle = 0.5 * (lower + upper);
             let state = state_from_dense(dense, middle)?;
-            let value = self.request.affine_direction.sign()
-                * self.tracer.spacetime.radial_velocity(state)?;
+            let traversal_sign = self.request.affine_direction.sign();
+            let value =
+                traversal_sign * self.evaluate_rhs(|spacetime| spacetime.radial_velocity(state))?;
             if same_sign(lower_value, value) {
                 lower = middle;
                 lower_value = value;
@@ -455,8 +453,9 @@ impl<'tracer> TraceExecution<'tracer> {
         if termination != Termination::Escape {
             return None;
         }
-        self.rhs_evaluations += 1;
-        let derivative = self.tracer.spacetime.hamiltonian_rhs(state).ok()?;
+        let derivative = self
+            .evaluate_rhs(|spacetime| spacetime.hamiltonian_rhs(state))
+            .ok()?;
         let traversal_sign = self.request.affine_direction.sign();
         let direction = [
             traversal_sign * derivative[1],
@@ -470,6 +469,14 @@ impl<'tracer> TraceExecution<'tracer> {
             )
             .sqrt();
         (norm > 0.0 && norm.is_finite()).then(|| direction.map(|component| component / norm))
+    }
+
+    fn evaluate_rhs<T>(
+        &mut self,
+        evaluate: impl FnOnce(KerrNewmanSpacetime) -> Result<T, GeometryError>,
+    ) -> Result<T, GeometryError> {
+        self.rhs_evaluations += 1;
+        evaluate(self.tracer.spacetime)
     }
 }
 

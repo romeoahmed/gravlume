@@ -2,7 +2,7 @@ use glam::DVec3;
 
 use crate::{
     GeodesicState, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
-    math::{FourVector, normalized_quadratic_form_residual},
+    math::{FourVector, normalized_inner_product_residual, normalized_quadratic_form_residual},
     validation::validate_finite,
 };
 
@@ -130,12 +130,23 @@ impl KerrNewmanSpacetime {
         } else {
             ParameterState::Superextremal
         };
-        Ok(Self {
+        let spacetime = Self {
             mass_m,
             spin_m,
             charge_m,
             parameter_state,
-        })
+        };
+        if spacetime
+            .outer_horizon_radius()
+            .is_some_and(|radius| !radius.is_finite())
+        {
+            report.push(ValidationIssue::error(
+                ValidationIssueCode::NonFinite,
+                format!("{prefix}.outer_horizon_radius_m"),
+                "outer horizon radius must be representable",
+            ));
+        }
+        report.into_result(spacetime)
     }
 
     #[must_use]
@@ -214,16 +225,14 @@ impl KerrNewmanSpacetime {
         let mut residual = 0.0_f64;
         for (row, covariant_row) in covariant.iter().enumerate() {
             for (column, _) in inverse[0].iter().enumerate() {
-                let (product, term_norm) = covariant_row
-                    .iter()
-                    .zip(inverse.iter())
-                    .map(|(left, inverse_row)| left * inverse_row[column])
-                    .fold((0.0, 0.0_f64), |(sum, norm), term| {
-                        (sum + term, norm + term.abs())
-                    });
                 let expected = if row == column { 1.0 } else { 0.0 };
-                let normalized = (product - expected).abs() / term_norm.max(1.0);
-                residual = residual.max(normalized);
+                let inverse_column = std::array::from_fn(|index| inverse[index][column]);
+                let normalized =
+                    normalized_inner_product_residual(*covariant_row, inverse_column, expected)
+                        .ok_or(GeometryError::NonFinite)?;
+                if normalized > residual {
+                    residual = normalized;
+                }
             }
         }
         Ok(residual)
