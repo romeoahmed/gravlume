@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gravlume_domain::{Observation, ViewportSample};
+use gravlume_domain::{InitialViewRay, Observation, ValidationReport, ViewportSample};
 
 use crate::{
     AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, ReferenceTracer,
@@ -10,61 +10,70 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct ReferenceRequest {
     observation: Arc<Observation>,
-    sample: ViewportSample,
+    initial_ray: InitialViewRay,
     policy: ReferencePolicy,
 }
 
 impl ReferenceRequest {
-    #[must_use]
-    pub const fn new(
+    /// Binds a sample to the request observation and resolves its initial ray.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a sample that is invalid for the request observation's projection.
+    pub fn new(
         observation: Arc<Observation>,
         sample: ViewportSample,
         policy: ReferencePolicy,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ValidationReport> {
+        let initial_ray = observation.initial_ray(sample)?;
+        Ok(Self {
             observation,
-            sample,
+            initial_ray,
             policy,
-        }
+        })
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ReferenceInstrument {
-    explicit_events: Option<EventConfiguration>,
+    events: EventConfiguration,
+}
+
+impl Default for ReferenceInstrument {
+    fn default() -> Self {
+        Self::baseline_v1()
+    }
 }
 
 impl ReferenceInstrument {
     #[must_use]
     pub const fn baseline_v1() -> Self {
         Self {
-            explicit_events: None,
+            events: EventConfiguration::observation_baseline_v1(),
         }
     }
 
     #[must_use]
     pub const fn with_events(events: EventConfiguration) -> Self {
-        Self {
-            explicit_events: Some(events),
-        }
+        Self { events }
     }
 
     /// Traces a viewport sample backward while preserving future-directed photon momentum.
     ///
     /// # Errors
     ///
-    /// Returns an error only if an impossible internal initial-ray or baseline event invariant is
-    /// observed. Numerical integration failures are successful, typed outcomes.
+    /// Returns an error if an impossible internal initial-ray invariant is observed or the
+    /// observation is not normalized for reference-v1. Numerical integration failures are
+    /// successful, typed outcomes.
     pub fn trace(
         &self,
         request: ReferenceRequest,
     ) -> Result<ReferenceOutcome, ReferenceRuntimeError> {
         let ReferenceRequest {
             observation,
-            sample,
+            initial_ray,
             policy,
         } = request;
-        let initial_ray = observation.initial_ray(sample);
         if !initial_ray.is_future_directed()
             || !initial_ray.normalized_null_residual().is_finite()
             || initial_ray.normalized_null_residual() > 2.0e-12
@@ -77,12 +86,7 @@ impl ReferenceInstrument {
         {
             return Err(ReferenceRuntimeError::NonNormalizedReferenceInput);
         }
-        let events = match self.explicit_events {
-            Some(events) => events,
-            None => EventConfiguration::with_escape_radius(200.0)
-                .map_err(|_| ReferenceRuntimeError::InvalidBaselineEvents)?,
-        };
-        let tracer = ReferenceTracer::new(spacetime, policy, events)
+        let tracer = ReferenceTracer::new(spacetime, policy, self.events)
             .map_err(|_| ReferenceRuntimeError::NonNormalizedReferenceInput)?;
         Ok(tracer.trace(TraceRequest::new(
             0,
@@ -96,8 +100,6 @@ impl ReferenceInstrument {
 pub enum ReferenceRuntimeError {
     #[error("validated observation produced an invalid initial ray")]
     InvalidInitialRay,
-    #[error("baseline event configuration could not be constructed")]
-    InvalidBaselineEvents,
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
 }

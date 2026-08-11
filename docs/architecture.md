@@ -102,7 +102,7 @@ pub struct PhysicalScene { /* private, validated f64 domain state */ }
 pub struct PhysicalSceneDraft { /* editable seam input */ }
 pub struct Observation { /* PhysicalScene + ViewportProjection */ }
 pub struct ViewportProjection { /* private, validated */ }
-pub struct ViewportSample { /* private, oriented subpixel sample */ }
+pub struct ViewportSample { /* private pixel/subpixel coordinates; no derived sight state */ }
 pub struct InitialViewRay { /* event + future-directed momentum */ }
 
 impl PhysicalScene {
@@ -133,7 +133,10 @@ impl Observation {
         projection: ViewportProjection,
     ) -> Result<Self, ValidationReport>;
 
-    pub fn initial_ray(&self, sample: ViewportSample) -> InitialViewRay;
+    pub fn initial_ray(
+        &self,
+        sample: ViewportSample,
+    ) -> Result<InitialViewRay, ValidationReport>;
 }
 
 pub struct ReferenceInstrument { /* DP5(4), events, diagnostics */ }
@@ -144,7 +147,7 @@ impl ReferenceRequest {
         observation: Arc<Observation>,
         sample: ViewportSample,
         policy: ReferencePolicy,
-    ) -> Self;
+    ) -> Result<Self, ValidationReport>;
 }
 
 impl ReferenceInstrument {
@@ -157,9 +160,9 @@ impl ReferenceInstrument {
 }
 ```
 
-`ViewportProjection::sample` 在 seam 检查 extent、pixel index、subpixel range 与 finite FOV；成功后的 `ViewportSample` 不能表示越界输入。`Observation::initial_ray` 是 Viewport Sample、projection、Observer Frame、Sight Direction 与 Photon Momentum 的唯一 CPU Interface；调用者不组合 tetrad 分量或反转符号。WGSL 独立实现同一数学合同并通过中心、四角和 jitter fixture，不复用 CPU 方程生成。`ReferenceInstrument::trace` 返回 typed termination 与 diagnostics；non-convergence、step exhaustion 和 numerical failure 是 `Ok(ReferenceOutcome)`，不是 panic 或伪黑色。只有损坏的内部 invariant 才返回 `ReferenceRuntimeError`。
+`ViewportProjection::sample` 在 seam 检查 extent、pixel index、subpixel range 与 finite FOV；成功后的 `ViewportSample` 只保存 projection-independent pixel/subpixel coordinates，不缓存 FOV/extent 派生的 sight-plane state。`Observation::initial_ray` 必须针对自己的 projection 重新验证并解析 sample；`ReferenceRequest::new` 在绑定 Observation 时完成这一步，因此跨 projection sample 不能把旧 sight state 带入新 Observation。该接口是 Viewport Sample、projection、Observer Frame、Sight Direction 与 Photon Momentum 的唯一 CPU Interface；调用者不组合 tetrad 分量或反转符号。WGSL 独立实现同一数学合同并通过中心、四角和 jitter fixture，不复用 CPU 方程生成。`ReferenceInstrument::trace` 返回 typed termination 与 diagnostics；non-convergence、step exhaustion 和 numerical failure 是 `Ok(ReferenceOutcome)`，不是 panic 或伪黑色。只有损坏的内部 invariant 才返回 `ReferenceRuntimeError`。
 
-`ReferenceTracer` 是 fixture、收敛测试和研究批处理使用的低层 concrete API；它接收已经验证并按 v1 policy 归一化为 `M=1` 的 canonical `GeodesicState`、affine direction 和 event configuration，不公开可替换 solver trait。`ReferenceInstrument` 同时要求 `omega_obs=1`，未归一化输入在 seam 返回 typed configuration/runtime error。`ValidationReport` 的 issue code、field path 和 severity 是稳定 Interface；本地化 message 不是。未知 preset 字段、版本或枚举值在输入 seam 拒绝，不进入 domain。主线不公开 `Metric`、`Integrator`、`EventLocator` 或 `RenderPass` trait；它们没有需要调用者替换的第二个 adapter，公开只会泄漏实现选择。
+`ReferenceTracer` 是 fixture、收敛测试和研究批处理使用的低层 concrete API；它接收已经验证并按 v1 policy 归一化为 `M=1` 的 canonical `GeodesicState`、affine direction 和 event configuration，不公开可替换 solver trait。`ReferenceInstrument` 同时要求 `omega_obs=1`，未归一化输入在 seam 返回 typed configuration/runtime error。`ReferenceComparison::baseline_v1` 只接受同一 input ID 的 `reference-regular-v1`/`reference-strict-v1` 角色组合；角色或 identity 错误返回 `ComparisonError`，数值预算失败才进入 `ComparisonIssue`。`ValidationReport` 的 issue code、field path 和 severity 是稳定 Interface；本地化 message 不是。未知 preset 字段、版本、枚举值或与 profile 不一致的固定值在输入 seam 拒绝，不进入 domain。主线不公开 `Metric`、`Integrator`、`EventLocator` 或 `RenderPass` trait；它们没有需要调用者替换的第二个 adapter，公开只会泄漏实现选择。
 
 ### 4.2 Desktop Instrument
 

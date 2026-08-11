@@ -70,6 +70,20 @@ impl FourVector {
     }
 }
 
+pub fn normalized_quadratic_form_residual(matrix: [[f64; 4]; 4], vector: FourVector) -> f64 {
+    let vector = vector.to_array();
+    let mut contraction = 0.0;
+    let mut term_norm = 0.0;
+    for row in 0..4 {
+        for column in 0..4 {
+            let term = matrix[row][column] * vector[row] * vector[column];
+            contraction += term;
+            term_norm += term.abs();
+        }
+    }
+    contraction.abs() / term_norm.max(1.0)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeodesicState {
     components: [f64; 8],

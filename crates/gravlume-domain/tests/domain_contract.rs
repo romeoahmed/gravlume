@@ -8,11 +8,20 @@ use gravlume_domain::{
 const OBSERVER_POSITION: [f64; 4] = [0.0, 25.980_762_113_533_16, 0.692_820_323_027_550_9, 15.0];
 
 fn default_scene() -> PhysicalScene {
+    scene_with_frequency(1.0)
+}
+
+fn scene_with_frequency(measured_frequency: f64) -> PhysicalScene {
     PhysicalScene::commit(PhysicalSceneDraft::new(
         1.0,
         0.8,
         0.0,
-        StationaryObserverDraft::new(OBSERVER_POSITION, [0.0; 4], [0.0, 0.0, 1.0], 1.0),
+        StationaryObserverDraft::new(
+            OBSERVER_POSITION,
+            [0.0; 4],
+            [0.0, 0.0, 1.0],
+            measured_frequency,
+        ),
     ))
     .expect("the versioned default scene is valid")
 }
@@ -73,7 +82,9 @@ fn viewport_samples_produce_future_directed_null_rays() {
             .projection()
             .sample(x, y, offset_x, offset_y)
             .expect("sample is in bounds");
-        let ray = observation.initial_ray(sample);
+        let ray = observation
+            .initial_ray(sample)
+            .expect("sample remains valid for the observation projection");
 
         assert!(ray.normalized_null_residual() < 2.0e-12);
         assert!((ray.observer_frequency() - 1.0).abs() < 2.0e-12);
@@ -94,4 +105,62 @@ fn viewport_rejects_pixels_and_subpixels_outside_the_seam() {
     assert!(projection.sample(0, 2, 0.5, 0.5).is_err());
     assert!(projection.sample(0, 0, -f64::EPSILON, 0.5).is_err());
     assert!(projection.sample(0, 0, 0.5, 1.0 + f64::EPSILON).is_err());
+}
+
+#[test]
+fn initial_ray_resolves_a_sample_against_the_observation_projection() {
+    let observation_projection = ViewportProjection::perspective(
+        NonZeroU32::new(1280).expect("width is nonzero"),
+        NonZeroU32::new(720).expect("height is nonzero"),
+        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
+    )
+    .expect("projection is valid");
+    let foreign_projection = ViewportProjection::perspective(
+        NonZeroU32::new(1280).expect("width is nonzero"),
+        NonZeroU32::new(720).expect("height is nonzero"),
+        Angle::from_radians(2.0 * FRAC_PI_4).expect("angle is finite"),
+    )
+    .expect("projection is valid");
+    let observation = Observation::new(default_scene(), observation_projection)
+        .expect("observation invariants hold");
+    let foreign_sample = foreign_projection
+        .sample(100, 200, 0.25, 0.75)
+        .expect("sample is valid for the foreign projection");
+    let local_sample = observation_projection
+        .sample(100, 200, 0.25, 0.75)
+        .expect("sample is valid for the observation projection");
+
+    assert_eq!(
+        observation
+            .initial_ray(foreign_sample)
+            .expect("coordinates are valid for the observation projection")
+            .state(),
+        observation
+            .initial_ray(local_sample)
+            .expect("coordinates are valid for the observation projection")
+            .state()
+    );
+}
+
+#[test]
+fn normalized_initial_null_residual_is_stable_under_frequency_scaling() {
+    let projection = ViewportProjection::perspective(
+        NonZeroU32::new(1280).expect("width is nonzero"),
+        NonZeroU32::new(720).expect("height is nonzero"),
+        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
+    )
+    .expect("projection is valid");
+    let observation = Observation::new(scene_with_frequency(1.0e12), projection)
+        .expect("observation invariants hold");
+    let sample = projection
+        .sample(317, 509, 0.25, 0.75)
+        .expect("sample is valid");
+
+    assert!(
+        observation
+            .initial_ray(sample)
+            .expect("sample remains valid for the observation projection")
+            .normalized_null_residual()
+            < 2.0e-12
+    );
 }

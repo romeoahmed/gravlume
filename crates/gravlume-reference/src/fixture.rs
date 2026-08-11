@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, de};
 
 use crate::{
     AffineDirection, EventConfiguration, EventConfigurationError, ReferenceOutcome,
-    ReferencePolicy, Termination, TraceRequest,
+    ReferencePolicy, Termination, TraceRequest, events::OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
@@ -631,7 +631,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
     projection
         .sample(0, 0, subpixel[0], subpixel[1])
         .map_err(invalid_physical_data)?;
-    if raw.events.escape_radius_m.value <= 0.0
+    if raw.events.escape_radius_m.value != OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M
         || (raw.events.singularity_guard_d_over_m4.value
             - ReferencePolicy::regular_v1().singularity_guard_d_over_m4())
         .abs()
@@ -677,6 +677,7 @@ fn validate_observation_expected(
         .map_err(invalid_physical_data)?;
     let null_matches = observation
         .initial_ray(center_sample)
+        .map_err(invalid_physical_data)?
         .normalized_null_residual()
         <= raw.tolerance.initial_null_normalized_abs.value;
     if scene.parameter_state() != expected_parameter_state
