@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 use gravlume_domain::{GeodesicInvariants, GeodesicState, GeometryError, KerrNewmanSpacetime};
 
 use crate::{
-    events::{EventConfiguration, EventKind},
+    events::{EventConfiguration, EventKind, escape_event_is_armed},
     fixture::GeodesicFixture,
     integrator::{DenseOutput, attempt_step, derivative},
     outcome::{
@@ -25,12 +25,12 @@ impl ReferenceTracer {
     /// # Errors
     ///
     /// Rejects a spacetime that has not been normalized to unit mass.
-    pub fn new(
+    pub const fn new(
         spacetime: KerrNewmanSpacetime,
         policy: ReferencePolicy,
         events: EventConfiguration,
     ) -> Result<Self, ReferenceConfigurationError> {
-        if (spacetime.mass_m() - 1.0).abs() > 32.0 * f64::EPSILON {
+        if spacetime.mass_m().to_bits() != 1.0_f64.to_bits() {
             return Err(ReferenceConfigurationError::NonNormalizedMass);
         }
         Ok(Self {
@@ -494,7 +494,7 @@ impl EventArming {
                 value(EventKind::SingularityGuard) > 0.0,
                 value(EventKind::Horizon) > band,
                 value(EventKind::EquatorialSurface).abs() > band,
-                value(EventKind::Escape) < -band,
+                escape_event_is_armed(value(EventKind::Escape), band),
             ],
         }
     }
@@ -523,7 +523,8 @@ impl EventArming {
             self.arm(EventKind::EquatorialSurface);
         }
         if !self.is_armed(EventKind::Escape)
-            && event_value_for(tracer, EventKind::Escape, state).is_ok_and(|value| value < -band)
+            && event_value_for(tracer, EventKind::Escape, state)
+                .is_ok_and(|value| escape_event_is_armed(value, band))
         {
             self.arm(EventKind::Escape);
         }

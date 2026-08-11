@@ -1,8 +1,4 @@
-use std::{
-    f64::consts::{FRAC_PI_3, FRAC_PI_4},
-    fmt,
-    num::NonZeroU32,
-};
+use std::{fmt, num::NonZeroU32};
 
 use gravlume_domain::{
     Angle, GeodesicState, KerrNewmanSpacetime, Observation, ParameterState, PhysicalScene,
@@ -13,13 +9,17 @@ use serde::{Deserialize, Deserializer, de};
 use crate::{
     AffineDirection, EventConfiguration, EventConfigurationError, ReferenceOutcome,
     ReferencePolicy, Termination, TraceInputId, TraceRequest,
-    events::OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M,
+    events::{OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M, escape_event_is_armed},
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
 const V1_PRODUCER_PRECISION_DIGITS: u32 = 80;
 const V1_GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
 const V1_OBSERVATION_ID: &str = "kerr-exterior-observation-v1";
+const V1_OBSERVER_POLAR_ANGLE_DECIMAL: &str =
+    "1.0471975511965977461542144610931676280657231331250352736583148641026054687620697";
+const V1_VERTICAL_FOV_DECIMAL: &str =
+    "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225";
 
 #[derive(Clone, Debug)]
 pub enum FixtureDocument {
@@ -194,6 +194,7 @@ pub enum GeodesicApplicability {
 
 #[derive(Clone, Debug)]
 pub struct ExpectedOutcome {
+    input_id: TraceInputId,
     termination: Termination,
     event_radius_m: Option<f64>,
     turning_radius_m: Option<f64>,
@@ -207,7 +208,8 @@ pub struct ExpectedOutcome {
 impl ExpectedOutcome {
     #[must_use]
     pub fn accepts(&self, outcome: &ReferenceOutcome) -> bool {
-        if outcome.termination() != self.termination
+        if outcome.input_id() != &self.input_id
+            || outcome.termination() != self.termination
             || (outcome.azimuth_advance_rad() - self.azimuth_advance_rad).abs()
                 > self.azimuth_advance_absolute_tolerance_rad
         {
@@ -506,6 +508,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
     fn try_from(raw: RawGeodesicFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
         validate_conventions(&raw.spacetime);
+        require_decimal_source(&raw.spacetime.mass_m, "1", "spacetime.mass_m")?;
         validate_geodesic_evidence(&raw)?;
         let spacetime = KerrNewmanSpacetime::new(
             raw.spacetime.mass_m.value,
@@ -513,17 +516,17 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             raw.spacetime.charge_m.value,
         )
         .map_err(|error| FixtureError::InvalidPhysicalData(error.to_string()))?;
-        validate_geodesic_events(&raw, spacetime)?;
-        let termination = validate_geodesic_expected(&raw)?;
         let initial_state = GeodesicState::new(
-            raw.initial.position_txyz_m.map(|value| value.value),
-            raw.initial.momentum_covariant.map(|value| value.value),
+            decimal_array(&raw.initial.position_txyz_m),
+            decimal_array(&raw.initial.momentum_covariant),
         )
         .map_err(|error| FixtureError::InvalidPhysicalData(error.to_string()))?;
+        validate_geodesic_events(&raw, spacetime, initial_state)?;
+        let termination = validate_geodesic_expected(&raw)?;
         let initial_invariants = spacetime
             .invariants(initial_state)
             .map_err(invalid_physical_data)?;
-        if raw.initial.energy_at_infinity.value.to_bits() != 1.0_f64.to_bits()
+        if raw.initial.energy_at_infinity.source != "1"
             || (initial_invariants.energy() - 1.0).abs() > 32.0 * f64::EPSILON
             || initial_invariants.normalized_null_residual() > 2.0e-12
             || raw.expected.initial_null_abs.value < 0.0
@@ -543,7 +546,9 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             AffineDirectionName::Positive => AffineDirection::Positive,
             AffineDirectionName::Negative => AffineDirection::Negative,
         };
+        let input_id = TraceInputId::new(raw.id);
         let expected = ExpectedOutcome {
+            input_id: input_id.clone(),
             termination,
             event_radius_m: raw.expected.event_radius_m.map(|value| value.value),
             turning_radius_m: raw.expected.turning_radius_m.map(|value| value.value),
@@ -562,7 +567,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
         Ok(Self::Geodesic(GeodesicFixture {
             schema_version: raw.schema_version,
             profile: raw.profile,
-            input_id: TraceInputId::new(raw.id),
+            input_id,
             spacetime,
             initial_state,
             affine_direction,
@@ -585,60 +590,60 @@ fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), Fi
             && raw.producer.cross_form_azimuth_disagreement.is_none(),
         "producer",
     )?;
-    require_decimal(&raw.spacetime.mass_m, 1.0, "spacetime.mass_m")?;
-    require_decimal(&raw.spacetime.spin_m, 0.8, "spacetime.spin_m")?;
-    require_decimal(&raw.spacetime.charge_m, 0.0, "spacetime.charge_m")?;
-    require_decimal(
+    require_decimal_source(&raw.spacetime.mass_m, "1", "spacetime.mass_m")?;
+    require_decimal_source(&raw.spacetime.spin_m, "0.8", "spacetime.spin_m")?;
+    require_decimal_source(&raw.spacetime.charge_m, "0", "spacetime.charge_m")?;
+    require_decimal_source(
         &raw.observer.coordinate_time_m,
-        0.0,
+        "0",
         "observer.coordinate_time_m",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.observer.oblate_radius_m,
-        30.0,
+        "30",
         "observer.oblate_radius_m",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.observer.polar_angle_rad,
-        FRAC_PI_3,
+        V1_OBSERVER_POLAR_ANGLE_DECIMAL,
         "observer.polar_angle_rad",
     )?;
-    require_decimal(&raw.observer.azimuth_rad, 0.0, "observer.azimuth_rad")?;
-    require_decimal_array(
+    require_decimal_source(&raw.observer.azimuth_rad, "0", "observer.azimuth_rad")?;
+    require_decimal_source_array(
         &raw.observer.target_txyz_m,
-        [0.0; 4],
+        ["0"; 4],
         "observer.target_txyz_m",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.observer.measured_frequency,
-        1.0,
+        "1",
         "observer.measured_frequency",
     )?;
     require_profile(raw.viewport.width == 1280, "viewport.width")?;
     require_profile(raw.viewport.height == 720, "viewport.height")?;
-    require_decimal(
+    require_decimal_source(
         &raw.viewport.vertical_fov_rad,
-        FRAC_PI_4,
+        V1_VERTICAL_FOV_DECIMAL,
         "viewport.vertical_fov_rad",
     )?;
-    require_decimal_array(
+    require_decimal_source_array(
         &raw.viewport.default_subpixel,
-        [0.5, 0.5],
+        ["0.5", "0.5"],
         "viewport.default_subpixel",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.tolerance.radius_abs_m,
-        2.0e-13,
+        "2e-13",
         "tolerance.radius_abs_m",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.tolerance.frame_gram_max_abs,
-        2.0e-12,
+        "2e-12",
         "tolerance.frame_gram_max_abs",
     )?;
-    require_decimal(
+    require_decimal_source(
         &raw.tolerance.initial_null_normalized_abs,
-        2.0e-12,
+        "2e-12",
         "tolerance.initial_null_normalized_abs",
     )
 }
@@ -663,24 +668,24 @@ fn validate_geodesic_evidence(raw: &RawGeodesicFixture) -> Result<(), FixtureErr
     Ok(())
 }
 
-const fn require_decimal(
+fn require_decimal_source(
     actual: &DecimalString,
-    expected: f64,
+    expected: &str,
     field: &'static str,
 ) -> Result<(), FixtureError> {
-    require_profile(actual.value.to_bits() == expected.to_bits(), field)
+    require_profile(actual.source == expected, field)
 }
 
-fn require_decimal_array<const N: usize>(
+fn require_decimal_source_array<const N: usize>(
     actual: &[DecimalString; N],
-    expected: [f64; N],
+    expected: [&str; N],
     field: &'static str,
 ) -> Result<(), FixtureError> {
     require_profile(
         actual
             .iter()
             .zip(expected)
-            .all(|(actual, expected)| actual.value.to_bits() == expected.to_bits()),
+            .all(|(actual, expected)| actual.source == expected),
         field,
     )
 }
@@ -791,11 +796,29 @@ impl From<RawCriticalSide> for CriticalSide {
 fn validate_geodesic_events(
     raw: &RawGeodesicFixture,
     spacetime: KerrNewmanSpacetime,
+    initial_state: GeodesicState,
 ) -> Result<(), FixtureError> {
-    if raw.events.escape_radius_m.is_some()
-        && raw.events.escape_event_initially_armed != Some(false)
-    {
-        return Err(FixtureError::InconsistentEventEnvelope);
+    match (
+        raw.events.escape_radius_m.as_ref(),
+        raw.events.escape_event_initially_armed,
+    ) {
+        (None, None) => {}
+        (Some(escape_radius), Some(declared_armed)) => {
+            EventConfiguration::with_escape_radius(escape_radius.value)
+                .map_err(|_| FixtureError::InconsistentEventEnvelope)?;
+            let initial_radius = spacetime
+                .radius(initial_state.event())
+                .map_err(invalid_physical_data)?;
+            let event_value = initial_radius - escape_radius.value;
+            let actual_armed = escape_event_is_armed(
+                event_value,
+                ReferencePolicy::regular_v1().event_arming_band_m(),
+            );
+            if declared_armed != actual_armed {
+                return Err(FixtureError::InconsistentEventEnvelope);
+            }
+        }
+        _ => return Err(FixtureError::InconsistentEventEnvelope),
     }
     if let Some(stored_horizon) = raw.events.outer_horizon_radius_m.as_ref() {
         let Some(actual_horizon) = spacetime.outer_horizon_radius() else {

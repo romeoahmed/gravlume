@@ -18,6 +18,17 @@ fn parameter_state_and_horizon_are_classified_without_clamping() {
 }
 
 #[test]
+fn finite_extreme_scales_preserve_extremality_and_horizon_classification() {
+    for mass_m in [f64::MAX / 2.0, f64::MIN_POSITIVE] {
+        let extremal =
+            KerrNewmanSpacetime::new(mass_m, mass_m, 0.0).expect("parameters are finite");
+
+        assert_eq!(extremal.parameter_state(), ParameterState::Extremal);
+        assert_eq!(extremal.outer_horizon_radius(), Some(mass_m));
+    }
+}
+
+#[test]
 fn oblate_radius_and_rank_one_metric_inverse_satisfy_the_algebra_contract() {
     let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.2).expect("parameters are valid");
 

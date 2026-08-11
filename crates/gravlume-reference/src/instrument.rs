@@ -85,7 +85,7 @@ impl ReferenceInstrument {
             return Err(ReferenceRuntimeError::InvalidInitialRay);
         }
         let spacetime = *observation.scene().spacetime();
-        if (spacetime.mass_m() - 1.0).abs() > 32.0 * f64::EPSILON
+        if spacetime.mass_m().to_bits() != 1.0_f64.to_bits()
             || (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON
         {
             return Err(ReferenceRuntimeError::NonNormalizedReferenceInput);
