@@ -265,39 +265,21 @@ impl<'tracer> TraceExecution<'tracer> {
         start_value: f64,
         end_value: f64,
     ) -> Result<LocalizedRoot, GeometryError> {
-        let mut lower = 0.0;
-        let mut upper = 1.0;
-        let mut lower_value = start_value;
-        let mut upper_value = end_value;
-        for _ in 0..64 {
-            if (upper - lower) * self.step_m.abs() <= self.tracer.policy.event_affine_tolerance_m()
-            {
-                break;
-            }
-            let middle = 0.5 * (lower + upper);
-            let middle_state = state_from_dense(dense, middle)?;
-            let middle_value = self.event_value(kind, middle_state)?;
-            if same_sign(lower_value, middle_value) {
-                lower = middle;
-                lower_value = middle_value;
-            } else {
-                upper = middle;
-                upper_value = middle_value;
-            }
-        }
-        let theta = if lower_value.abs() <= upper_value.abs() {
-            lower
-        } else {
-            upper
-        };
-        let state = state_from_dense(dense, theta)?;
-        let residual = self.event_value(kind, state)?.abs() / self.event_scale(kind);
+        let root = localize_dense_root(
+            dense,
+            self.step_m,
+            self.tracer.policy.event_affine_tolerance_m(),
+            start_value,
+            end_value,
+            |state| self.event_value(kind, state),
+        )?;
+        let residual = self.event_value(kind, root.state)?.abs() / self.event_scale(kind);
         Ok(LocalizedRoot {
             kind,
             candidates: vec![kind],
-            theta,
-            state,
-            bracket_width_m: (upper - lower) * self.step_m.abs(),
+            theta: root.theta,
+            state: root.state,
+            bracket_width_m: root.bracket_width_m,
             normalized_residual: residual,
         })
     }
@@ -373,34 +355,19 @@ impl<'tracer> TraceExecution<'tracer> {
         start_value: f64,
         end_value: f64,
     ) -> Result<(f64, GeodesicState), GeometryError> {
-        let mut lower = 0.0;
-        let mut upper = 1.0;
-        let mut lower_value = start_value;
-        let mut upper_value = end_value;
-        for _ in 0..64 {
-            if (upper - lower) * self.step_m.abs() <= self.tracer.policy.event_affine_tolerance_m()
-            {
-                break;
-            }
-            let middle = 0.5 * (lower + upper);
-            let state = state_from_dense(dense, middle)?;
-            let traversal_sign = self.request.affine_direction.sign();
-            let value =
-                traversal_sign * self.evaluate_rhs(|spacetime| spacetime.radial_velocity(state))?;
-            if same_sign(lower_value, value) {
-                lower = middle;
-                lower_value = value;
-            } else {
-                upper = middle;
-                upper_value = value;
-            }
-        }
-        let theta = if lower_value.abs() <= upper_value.abs() {
-            lower
-        } else {
-            upper
-        };
-        Ok((theta, state_from_dense(dense, theta)?))
+        let traversal_sign = self.request.affine_direction.sign();
+        let root = localize_dense_root(
+            dense,
+            self.step_m,
+            self.tracer.policy.event_affine_tolerance_m(),
+            start_value,
+            end_value,
+            |state| {
+                self.evaluate_rhs(|spacetime| spacetime.radial_velocity(state))
+                    .map(|velocity| traversal_sign * velocity)
+            },
+        )?;
+        Ok((root.theta, root.state))
     }
 
     fn commit_observables(&mut self, state: GeodesicState) {
@@ -595,6 +562,12 @@ struct LocalizedRoot {
     normalized_residual: f64,
 }
 
+struct DenseRoot {
+    theta: f64,
+    state: GeodesicState,
+    bracket_width_m: f64,
+}
+
 impl EventKind {
     const fn ordered() -> [Self; 4] {
         [
@@ -617,6 +590,44 @@ impl EventKind {
 
 fn state_from_dense(dense: &DenseOutput, theta: f64) -> Result<GeodesicState, GeometryError> {
     GeodesicState::from_components(dense.evaluate(theta)).map_err(|_| GeometryError::NonFinite)
+}
+
+fn localize_dense_root(
+    dense: &DenseOutput,
+    step_m: f64,
+    affine_tolerance_m: f64,
+    start_value: f64,
+    end_value: f64,
+    mut value_at: impl FnMut(GeodesicState) -> Result<f64, GeometryError>,
+) -> Result<DenseRoot, GeometryError> {
+    let mut lower = 0.0;
+    let mut upper = 1.0;
+    let mut lower_value = start_value;
+    let mut upper_value = end_value;
+    for _ in 0..64 {
+        if (upper - lower) * step_m.abs() <= affine_tolerance_m {
+            break;
+        }
+        let middle = 0.5 * (lower + upper);
+        let value = value_at(state_from_dense(dense, middle)?)?;
+        if same_sign(lower_value, value) {
+            lower = middle;
+            lower_value = value;
+        } else {
+            upper = middle;
+            upper_value = value;
+        }
+    }
+    let theta = if lower_value.abs() <= upper_value.abs() {
+        lower
+    } else {
+        upper
+    };
+    Ok(DenseRoot {
+        theta,
+        state: state_from_dense(dense, theta)?,
+        bracket_width_m: (upper - lower) * step_m.abs(),
+    })
 }
 
 fn event_value_for(
