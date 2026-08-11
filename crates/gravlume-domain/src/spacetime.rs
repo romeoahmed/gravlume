@@ -115,8 +115,15 @@ impl KerrNewmanSpacetime {
             return Err(report);
         }
 
-        let extremality = mass_m.mul_add(mass_m, -spin_m.mul_add(spin_m, charge_m * charge_m));
-        let parameter_state = if extremality > 0.0 {
+        let extremality = scaled_extremality(mass_m, spin_m, charge_m);
+        // A nonzero orthogonal component makes exact M=|a| or M=|q| superextremal even when
+        // its normalized square is too small to survive binary64 multiplication.
+        let parameter_state = if (mass_m.to_bits() == spin_m.abs().to_bits()
+            && charge_m.abs() > 0.0)
+            || (mass_m.to_bits() == charge_m.abs().to_bits() && spin_m.abs() > 0.0)
+        {
+            ParameterState::Superextremal
+        } else if extremality > 0.0 {
             ParameterState::Subextremal
         } else if extremality == 0.0 {
             ParameterState::Extremal
@@ -153,13 +160,15 @@ impl KerrNewmanSpacetime {
 
     #[must_use]
     pub fn outer_horizon_radius(self) -> Option<f64> {
-        let discriminant = self.mass_m.mul_add(
-            self.mass_m,
-            -self
-                .spin_m
-                .mul_add(self.spin_m, self.charge_m * self.charge_m),
-        );
-        (discriminant >= 0.0).then(|| self.mass_m + discriminant.sqrt())
+        match self.parameter_state {
+            ParameterState::Superextremal => None,
+            ParameterState::Extremal => Some(self.mass_m),
+            ParameterState::Subextremal => {
+                let scale = parameter_scale(self.mass_m, self.spin_m, self.charge_m);
+                let extremality = scaled_extremality(self.mass_m, self.spin_m, self.charge_m);
+                Some(scale.mul_add(extremality.sqrt(), self.mass_m))
+            }
+        }
     }
 
     /// Converts ingoing oblate coordinates to canonical Cartesian spatial coordinates.
@@ -484,6 +493,21 @@ impl KerrNewmanSpacetime {
         };
         validate_geometry(geometry)
     }
+}
+
+const fn parameter_scale(mass_m: f64, spin_m: f64, charge_m: f64) -> f64 {
+    mass_m.max(spin_m.abs()).max(charge_m.abs())
+}
+
+fn scaled_extremality(mass_m: f64, spin_m: f64, charge_m: f64) -> f64 {
+    let scale = parameter_scale(mass_m, spin_m, charge_m);
+    let normalized_mass = mass_m / scale;
+    let normalized_spin = spin_m / scale;
+    let normalized_charge = charge_m / scale;
+    normalized_mass.mul_add(
+        normalized_mass,
+        -normalized_spin.mul_add(normalized_spin, normalized_charge * normalized_charge),
+    )
 }
 
 const fn classify_zero_radius(b: f64) -> GeometryError {

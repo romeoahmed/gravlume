@@ -144,6 +144,18 @@ fn observation_fixture_rejects_fixed_v1_profile_drift() {
 }
 
 #[test]
+fn observation_fixture_rejects_high_precision_preset_drift_hidden_by_f64_rounding() {
+    let mutated = DEFAULT_OBSERVATION.replace("mass_m = \"1\"", "mass_m = \"1.00000000000000001\"");
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&mutated),
+        Err(FixtureError::PresetMismatch {
+            field: "spacetime.mass_m"
+        })
+    ));
+}
+
+#[test]
 fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
     let invalid_oracle = SCATTER_B6.replace(
         "initial_null_abs = \"4.91454214841681154173676126201e-81\"",
@@ -186,6 +198,38 @@ fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
         FixtureDocument::parse_toml(&scaled),
         Err(FixtureError::InvalidPhysicalData(_))
     ));
+}
+
+#[test]
+fn geodesic_fixture_and_tracer_reject_non_unit_mass() {
+    let mutated = SCATTER_B6.replace("mass_m = \"1\"", "mass_m = \"1.000000000000001\"");
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&mutated),
+        Err(FixtureError::PresetMismatch {
+            field: "spacetime.mass_m"
+        })
+    ));
+}
+
+#[test]
+fn geodesic_fixture_validates_declared_initial_escape_arming() {
+    let initially_inside_escape_surface =
+        SCATTER_B6.replace("escape_radius_m = \"50\"", "escape_radius_m = \"100\"");
+    let arming_without_escape_event = CAPTURE_NEAR_CRITICAL.replace(
+        "outer_horizon_radius_m = \"2\"",
+        "outer_horizon_radius_m = \"2\"\nescape_event_initially_armed = false",
+    );
+
+    for source in [
+        &initially_inside_escape_surface,
+        &arming_without_escape_event,
+    ] {
+        assert!(matches!(
+            FixtureDocument::parse_toml(source),
+            Err(FixtureError::InconsistentEventEnvelope)
+        ));
+    }
 }
 
 #[test]
@@ -273,6 +317,24 @@ fn regular_schwarzschild_fixture_matches_the_independent_observables() {
         2 + 6 * (outcome.diagnostics().accepted_steps() + outcome.diagnostics().rejected_steps())
     );
     assert!(outcome.diagnostics().maximum_null_residual() < 5.0e-9);
+}
+
+#[test]
+fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
+    let fixture = FixtureDocument::parse_toml(SCATTER_B6)
+        .expect("fixture parses")
+        .into_geodesic()
+        .expect("fixture is geodesic");
+    let request = fixture.trace_request();
+    let outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+        .expect("fixture config is valid")
+        .trace(TraceRequest::new(
+            TraceInputId::new("different-input"),
+            request.initial_state(),
+            request.affine_direction(),
+        ));
+
+    assert!(!fixture.expected().accepts(&outcome));
 }
 
 #[test]

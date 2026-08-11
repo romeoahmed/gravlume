@@ -155,7 +155,7 @@ Phase 3 增加 equatorial surface：
 
 ## 4. Reference Policy
 
-`reference-regular-v1` 使用第 1 节的 DP5(4)，所有状态在 pack 前保持 `f64`。输入已经以 $M=\omega_{\rm obs}=1$ 归一化。
+`reference-regular-v1` 使用第 1 节的 DP5(4)，所有状态在 pack 前保持 `f64`。输入已经以 $M=\omega_{\rm obs}=1$ 归一化；直接尺度输入 $M$ 必须精确为 1，派生的 tetrad contraction $\omega_{\rm obs}$ 按具名浮点预算验证。
 
 | policy field | v1 值 |
 |---|---:|
@@ -178,7 +178,7 @@ Phase 3 增加 equatorial surface：
 
 `reference-strict-v1` 把所有 `rtol/atol` 除以 16、maximum step 降为 `0.25 M`、event tolerance 除以 4、step/reject 上限加倍。regular fixture 必须同时运行两个 policy；“baseline 成功”而 strict 改变 branch/termination 时，baseline 失败，不选择更好看的结果。
 
-起点位于 event surface 时 event 初始 unarmed；只有 $F<-b_{\rm arm}$ 后才允许反向 crossing。Reference Outcome 总是记录 accepted/rejected steps、实际 min/max step、event bracket/residual 和触发的资源上限。
+起点位于 event surface 时 event 初始 unarmed；只有 $F<-b_{\rm arm}$ 后才允许反向 crossing。fixture 声明的初始 armed 状态必须由初始 canonical state、event function 和 arming band 推导并一致；未安装对应 event 时不得携带该声明。Reference Outcome 总是记录 accepted/rejected steps、实际 min/max step、event bracket/residual 和触发的资源上限。
 
 ## 5. 验收预算
 
@@ -229,7 +229,7 @@ near-critical fixture 不套一个全局 angle tolerance。它必须给成对的
 
 ## 6. Fixture envelope
 
-fixture 使用 UTF-8 TOML，未知字段和未知 enum 一律拒绝。`schema_version` 管结构，`profile` 管阈值；两者不能互相替代。输入/期望的高精度十进制以字符串保存，解析器必须明确转换精度，不能先经 `f64` 再声称 80 位来源。
+fixture 使用 UTF-8 TOML，未知字段和未知 enum 一律拒绝。`schema_version` 管结构，`profile` 管阈值；两者不能互相替代。输入/期望的高精度十进制以字符串保存，解析器必须明确转换精度，不能先经 `f64` 再声称 80 位来源；固定 v1 preset 的十进制原文是规范 artifact，必须在舍入到 `f64` 前精确核对。
 
 ```toml
 schema_version = 1

@@ -34,6 +34,8 @@ a^2+q_e^2
 
 superextremal 是理想化、无事件视界的解，不是一般意义上的“无效参数”，但默认产品不把它称为黑洞。$q_e$ 是几何化电荷参数；没有明确 SI 转换和天体模型时，只能解释为对解族的研究。
 
+实现判别上述状态和计算 horizon discriminant 时必须先按 $\max(|M|,|a|,|q_e|)$ 无量纲化，不能直接平方有限输入而让 overflow/underflow 改变物理分类。
+
 ## 2. Cartesian Kerr–Schild geometry
 
 ### 2.1 椭球半径

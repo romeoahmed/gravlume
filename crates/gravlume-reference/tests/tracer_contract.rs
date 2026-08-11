@@ -24,15 +24,17 @@ fn reference_policies_are_versioned_and_strict_is_a_real_refinement() {
 
 #[test]
 fn v1_reference_seam_rejects_a_non_normalized_mass_scale() {
-    let spacetime = KerrNewmanSpacetime::new(2.0, 0.0, 0.0).expect("spacetime is valid");
-    let error = ReferenceTracer::new(
-        spacetime,
-        ReferencePolicy::regular_v1(),
-        EventConfiguration::horizon_only(),
-    )
-    .expect_err("v1 requires M = 1");
+    for mass_m in [2.0, 1.0_f64.next_up()] {
+        let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0).expect("spacetime is valid");
+        let error = ReferenceTracer::new(
+            spacetime,
+            ReferencePolicy::regular_v1(),
+            EventConfiguration::horizon_only(),
+        )
+        .expect_err("v1 requires exact M = 1");
 
-    assert_eq!(error, ReferenceConfigurationError::NonNormalizedMass);
+        assert_eq!(error, ReferenceConfigurationError::NonNormalizedMass);
+    }
 }
 
 #[test]
