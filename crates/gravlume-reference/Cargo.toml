@@ -1,0 +1,13 @@
+[package]
+name = "gravlume-reference"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gravlume-domain = { path = "../gravlume-domain" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

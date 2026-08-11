@@ -687,6 +687,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gravlume-reference"
+version = "0.1.0"
+dependencies = [
+ "gravlume-domain",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "gravlume-render"
 version = "0.1.0"
 dependencies = [

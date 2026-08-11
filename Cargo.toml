@@ -11,6 +11,7 @@ members = [
     ".",
     "crates/gravlume-desktop",
     "crates/gravlume-domain",
+    "crates/gravlume-reference",
     "crates/gravlume-render",
 ]
 resolver = "3"
