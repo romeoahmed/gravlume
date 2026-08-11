@@ -1,6 +1,4 @@
-use crate::{
-    ValidationIssue, ValidationIssueCode, ValidationReport, validation::validate_finite_array,
-};
+use crate::{ValidationIssueCode, ValidationReport, validation::validate_finite_array};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SpacetimeEvent {
@@ -277,11 +275,11 @@ impl GeodesicState {
         if components.into_iter().all(f64::is_finite) {
             Ok(Self { components })
         } else {
-            Err(ValidationReport::from_issue(ValidationIssue::error(
+            Err(ValidationReport::from_error(
                 ValidationIssueCode::NonFinite,
                 "geodesic_state",
                 "every numerical state component must be finite",
-            )))
+            ))
         }
     }
 
@@ -312,13 +310,5 @@ impl GeodesicState {
             self.components[6],
             self.components[7],
         ]
-    }
-}
-
-impl ValidationReport {
-    fn from_issue(issue: ValidationIssue) -> Self {
-        let mut report = Self::default();
-        report.push(issue);
-        report
     }
 }

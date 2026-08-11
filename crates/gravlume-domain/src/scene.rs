@@ -1,7 +1,7 @@
 use crate::{
     GeodesicState, KerrNewmanSpacetime, ObserverFrame, ParameterState, SpacetimeEvent,
-    StationaryObserverDraft, ValidationIssue, ValidationIssueCode, ValidationReport,
-    ViewportProjection, ViewportSample, math::FourVector, observer::StationaryObserver,
+    StationaryObserverDraft, ValidationIssueCode, ValidationReport, ViewportProjection,
+    ViewportSample, math::FourVector, observer::StationaryObserver,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
@@ -129,6 +129,13 @@ impl Observation {
     /// Revalidates the sample against this observation's projection and returns every seam issue.
     pub fn initial_ray(&self, sample: ViewportSample) -> Result<InitialViewRay, ValidationReport> {
         let [sight_x, sight_y] = self.projection.sight_plane(sample)?;
+        let non_finite = || {
+            ValidationReport::from_error(
+                ValidationIssueCode::NonFinite,
+                "observation.initial_ray",
+                "derived photon momentum and diagnostics must be finite",
+            )
+        };
         let frame = self.scene.observer.frame();
         let normalization = 1.0_f64.hypot(sight_x.hypot(sight_y)).recip();
         let sight_direction = frame
@@ -143,7 +150,7 @@ impl Observation {
             .add(arrival_direction)
             .scaled(self.scene.observer.measured_frequency());
         if !momentum_contravariant.is_finite() {
-            return Err(non_finite_initial_ray());
+            return Err(non_finite());
         }
         let momentum_covariant = self.scene.observer.lower(momentum_contravariant);
         let normalized_null_residual = self
@@ -160,10 +167,14 @@ impl Observation {
             || !observer_frequency.is_finite()
             || !normalized_null_residual.is_finite()
         {
-            return Err(non_finite_initial_ray());
+            return Err(non_finite());
         }
         if observer_frequency <= 0.0 || normalized_null_residual > INITIAL_RAY_NULL_TOLERANCE {
-            return Err(invalid_initial_ray());
+            return Err(ValidationReport::from_error(
+                ValidationIssueCode::InternalInvariant,
+                "observation.initial_ray",
+                "derived photon momentum must be future-directed and null within the domain budget",
+            ));
         }
         let mut components = [0.0; 8];
         components[..4].copy_from_slice(&event.to_txyz());
@@ -176,26 +187,6 @@ impl Observation {
             normalized_null_residual,
         })
     }
-}
-
-fn non_finite_initial_ray() -> ValidationReport {
-    let mut report = ValidationReport::default();
-    report.push(ValidationIssue::error(
-        ValidationIssueCode::NonFinite,
-        "observation.initial_ray",
-        "derived photon momentum and diagnostics must be finite",
-    ));
-    report
-}
-
-fn invalid_initial_ray() -> ValidationReport {
-    let mut report = ValidationReport::default();
-    report.push(ValidationIssue::error(
-        ValidationIssueCode::InternalInvariant,
-        "observation.initial_ray",
-        "derived photon momentum must be future-directed and null within the domain budget",
-    ));
-    report
 }
 
 #[derive(Clone, Copy, Debug)]

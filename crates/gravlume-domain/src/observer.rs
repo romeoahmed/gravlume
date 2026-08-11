@@ -71,14 +71,14 @@ impl StationaryObserverDraft {
     ) -> Result<StationaryObserver, ValidationReport> {
         let event = SpacetimeEvent::from_validated(self.event_txyz_m);
         let metric_g_tt = spacetime.metric_component_tt(event).map_err(|error| {
-            validation_error(
+            ValidationReport::from_error(
                 ValidationIssueCode::OutOfRange,
                 format!("{prefix}.event_txyz_m"),
                 error.to_string(),
             )
         })?;
         if metric_g_tt >= 0.0 {
-            return Err(validation_error(
+            return Err(ValidationReport::from_error(
                 ValidationIssueCode::NonStationaryObserver,
                 format!("{prefix}.event_txyz_m"),
                 "a stationary observer requires g_tt < 0",
@@ -87,7 +87,7 @@ impl StationaryObserverDraft {
         let four_velocity = FourVector::new([(-metric_g_tt).sqrt().recip(), 0.0, 0.0, 0.0]);
         let frame = construct_frame(spacetime, event, four_velocity, &self, prefix)?;
         let metric_covariant = spacetime.metric_covariant_at(event).map_err(|error| {
-            validation_error(
+            ValidationReport::from_error(
                 ValidationIssueCode::InternalInvariant,
                 prefix,
                 error.to_string(),
@@ -114,7 +114,7 @@ fn construct_frame(
         draft.target_txyz_m[index] - draft.event_txyz_m[index]
     }));
     let Ok(sight) = project_and_normalize(spacetime, event, four_velocity, target_seed, &[]) else {
-        return Err(validation_error(
+        return Err(ValidationReport::from_error(
             ValidationIssueCode::DegenerateDirection,
             format!("{prefix}.target_txyz_m"),
             "target does not define a spatial direction in the observer rest frame",
@@ -133,7 +133,7 @@ fn construct_frame(
         (up, false)
     } else {
         let Some(up) = best_coordinate_axis(spacetime, event, four_velocity, &[sight]) else {
-            return Err(validation_error(
+            return Err(ValidationReport::from_error(
                 ValidationIssueCode::DegenerateDirection,
                 format!("{prefix}.up_hint_xyz"),
                 "no stable image-up axis could be constructed",
@@ -143,7 +143,7 @@ fn construct_frame(
     };
     let Some(mut right) = best_coordinate_axis(spacetime, event, four_velocity, &[sight, up])
     else {
-        return Err(validation_error(
+        return Err(ValidationReport::from_error(
             ValidationIssueCode::InternalInvariant,
             prefix,
             "observer tetrad could not be completed",
@@ -173,23 +173,13 @@ fn construct_frame(
         || !frame.orientation_determinant.is_finite()
         || frame.orientation_determinant <= 0.0
     {
-        return Err(validation_error(
+        return Err(ValidationReport::from_error(
             ValidationIssueCode::InternalInvariant,
             prefix,
             "constructed observer frame failed its Gram/orientation contract",
         ));
     }
     Ok(frame)
-}
-
-fn validation_error(
-    code: ValidationIssueCode,
-    field_path: impl Into<String>,
-    explanation: impl Into<String>,
-) -> ValidationReport {
-    let mut report = ValidationReport::default();
-    report.push(ValidationIssue::error(code, field_path, explanation));
-    report
 }
 
 #[derive(Clone, Copy, Debug)]
