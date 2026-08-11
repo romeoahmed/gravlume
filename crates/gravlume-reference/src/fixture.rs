@@ -8,7 +8,8 @@ use serde::{Deserialize, Deserializer, de};
 
 use crate::{
     AffineDirection, EventConfiguration, EventConfigurationError, ReferenceOutcome,
-    ReferencePolicy, Termination, TraceRequest, events::OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M,
+    ReferencePolicy, Termination, TraceInputId, TraceRequest,
+    events::OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
@@ -61,8 +62,8 @@ impl FixtureDocument {
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
-            Self::Observation(fixture) => &fixture.id,
-            Self::Geodesic(fixture) => &fixture.id,
+            Self::Observation(fixture) => fixture.input_id.as_str(),
+            Self::Geodesic(fixture) => fixture.input_id.as_str(),
         }
     }
 
@@ -87,11 +88,16 @@ impl FixtureDocument {
 pub struct ObservationFixture {
     schema_version: u32,
     profile: String,
-    id: String,
+    input_id: TraceInputId,
     observation: Observation,
 }
 
 impl ObservationFixture {
+    #[must_use]
+    pub const fn input_id(&self) -> &TraceInputId {
+        &self.input_id
+    }
+
     #[must_use]
     pub const fn observation(&self) -> &Observation {
         &self.observation
@@ -102,7 +108,7 @@ impl ObservationFixture {
 pub struct GeodesicFixture {
     schema_version: u32,
     profile: String,
-    id: String,
+    input_id: TraceInputId,
     spacetime: KerrNewmanSpacetime,
     initial_state: GeodesicState,
     affine_direction: AffineDirection,
@@ -111,6 +117,11 @@ pub struct GeodesicFixture {
 }
 
 impl GeodesicFixture {
+    #[must_use]
+    pub const fn input_id(&self) -> &TraceInputId {
+        &self.input_id
+    }
+
     #[must_use]
     pub const fn spacetime(&self) -> KerrNewmanSpacetime {
         self.spacetime
@@ -129,8 +140,12 @@ impl GeodesicFixture {
     }
 
     #[must_use]
-    pub const fn trace_request(&self) -> TraceRequest {
-        TraceRequest::new(0, self.initial_state, self.affine_direction)
+    pub fn trace_request(&self) -> TraceRequest {
+        TraceRequest::new(
+            self.input_id.clone(),
+            self.initial_state,
+            self.affine_direction,
+        )
     }
 
     #[must_use]
@@ -445,7 +460,7 @@ impl TryFrom<RawObservationFixture> for FixtureDocument {
         Ok(Self::Observation(ObservationFixture {
             schema_version: raw.schema_version,
             profile: raw.profile,
-            id: raw.id,
+            input_id: TraceInputId::new(raw.id),
             observation,
         }))
     }
@@ -505,7 +520,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
         Ok(Self::Geodesic(GeodesicFixture {
             schema_version: raw.schema_version,
             profile: raw.profile,
-            id: raw.id,
+            input_id: TraceInputId::new(raw.id),
             spacetime,
             initial_state,
             affine_direction,

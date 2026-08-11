@@ -93,6 +93,7 @@ struct TraceExecution<'tracer> {
 impl<'tracer> TraceExecution<'tracer> {
     fn new(tracer: &'tracer ReferenceTracer, request: TraceRequest) -> Self {
         let state = request.initial_state;
+        let traversal_sign = request.affine_direction.sign();
         let components = state.components();
         let initial_invariants = tracer.spacetime.invariants(state).ok();
         let event_arming = EventArming::new(tracer, state);
@@ -101,7 +102,7 @@ impl<'tracer> TraceExecution<'tracer> {
             request,
             state,
             affine_parameter_m: 0.0,
-            step_m: request.affine_direction.sign() * tracer.policy.initial_step_m(),
+            step_m: traversal_sign * tracer.policy.initial_step_m(),
             accepted_steps: 0,
             rejected_steps: 0,
             rhs_evaluations: 0,
@@ -111,7 +112,7 @@ impl<'tracer> TraceExecution<'tracer> {
             initial_invariants,
             drifts: InvariantDrifts::default(),
             event_arming,
-            turning_radius_m: tracer.spacetime.radius(state.event()).ok(),
+            turning_radius_m: None,
             azimuth_advance_rad: 0.0,
             previous_azimuth_rad: components[2].atan2(components[1]),
             initial_time_m: components[0],
@@ -357,7 +358,10 @@ impl<'tracer> TraceExecution<'tracer> {
             && theta <= maximum_theta
             && let Ok(radius) = self.tracer.spacetime.radius(state.event())
         {
-            self.turning_radius_m = Some(radius);
+            self.turning_radius_m = Some(
+                self.turning_radius_m
+                    .map_or(radius, |minimum| minimum.min(radius)),
+            );
         }
     }
 
@@ -401,12 +405,6 @@ impl<'tracer> TraceExecution<'tracer> {
         let azimuth = components[2].atan2(components[1]);
         self.azimuth_advance_rad += wrapped_angle_difference(azimuth, self.previous_azimuth_rad);
         self.previous_azimuth_rad = azimuth;
-        if let Ok(radius) = self.tracer.spacetime.radius(state.event()) {
-            self.turning_radius_m = Some(
-                self.turning_radius_m
-                    .map_or(radius, |minimum| minimum.min(radius)),
-            );
-        }
         self.update_invariants(state);
     }
 
@@ -425,11 +423,12 @@ impl<'tracer> TraceExecution<'tracer> {
     }
 
     fn finish(
-        self,
+        mut self,
         termination: Termination,
         state: GeodesicState,
         event: Option<LocalizedEvent>,
     ) -> ReferenceOutcome {
+        let escape_direction_xyz = self.escape_direction_xyz(termination, state);
         ReferenceOutcome {
             input_id: self.request.input_id,
             policy_id: self.tracer.policy.id(),
@@ -437,6 +436,7 @@ impl<'tracer> TraceExecution<'tracer> {
             state,
             affine_parameter_m: self.affine_parameter_m,
             event,
+            escape_direction_xyz,
             turning_radius_m: self.turning_radius_m,
             azimuth_advance_rad: self.azimuth_advance_rad,
             travel_time_m: state.components()[0] - self.initial_time_m,
@@ -452,6 +452,31 @@ impl<'tracer> TraceExecution<'tracer> {
                 maximum_carter_drift: self.drifts.carter,
             },
         }
+    }
+
+    fn escape_direction_xyz(
+        &mut self,
+        termination: Termination,
+        state: GeodesicState,
+    ) -> Option<[f64; 3]> {
+        if termination != Termination::Escape {
+            return None;
+        }
+        self.rhs_evaluations += 1;
+        let derivative = self.tracer.spacetime.hamiltonian_rhs(state).ok()?;
+        let traversal_sign = self.request.affine_direction.sign();
+        let direction = [
+            traversal_sign * derivative[1],
+            traversal_sign * derivative[2],
+            traversal_sign * derivative[3],
+        ];
+        let norm = direction[0]
+            .mul_add(
+                direction[0],
+                direction[1].mul_add(direction[1], direction[2] * direction[2]),
+            )
+            .sqrt();
+        (norm > 0.0 && norm.is_finite()).then(|| direction.map(|component| component / norm))
     }
 }
 
@@ -649,7 +674,7 @@ mod tests {
         EventConfiguration, EventKind, ReferencePolicy, ReferenceTracer, Termination, TraceRequest,
         event_value_for, select_earliest_event,
     };
-    use crate::AffineDirection;
+    use crate::{AffineDirection, TraceInputId};
 
     #[test]
     fn accepted_step_limit_is_a_typed_terminal_condition() {
@@ -659,7 +684,11 @@ mod tests {
         let policy = ReferencePolicy::regular_v1().limited_to_one_step_for_test();
         let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
-        let outcome = tracer.trace(TraceRequest::new(0, state, AffineDirection::Positive));
+        let outcome = tracer.trace(TraceRequest::new(
+            TraceInputId::new("accepted-step-limit"),
+            state,
+            AffineDirection::Positive,
+        ));
 
         assert_eq!(outcome.termination(), Termination::StepExhaustion);
         assert_eq!(outcome.diagnostics().accepted_steps(), 1);
@@ -696,7 +725,11 @@ mod tests {
             EventConfiguration::horizon_only(),
         )
         .expect("mass is normalized");
-        let outcome = tracer.trace(TraceRequest::new(0, state, AffineDirection::Positive));
+        let outcome = tracer.trace(TraceRequest::new(
+            TraceInputId::new("superextremal-ring-approach"),
+            state,
+            AffineDirection::Positive,
+        ));
 
         assert_eq!(outcome.termination(), Termination::SingularityGuard);
     }

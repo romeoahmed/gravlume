@@ -21,7 +21,7 @@ pub use fixture::{
 pub use instrument::{ReferenceInstrument, ReferenceRequest, ReferenceRuntimeError};
 pub use outcome::{
     AffineDirection, LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination,
-    TraceDiagnostics, TraceRequest,
+    TraceDiagnostics, TraceInputId, TraceRequest,
 };
 pub use policy::ReferencePolicy;
 pub use tracer::{ReferenceConfigurationError, ReferenceTracer};

@@ -1,9 +1,9 @@
 use crate::{
-    ReferenceOutcome, Termination,
+    ReferenceOutcome, Termination, TraceInputId,
     policy::{REGULAR_V1_ID, STRICT_V1_ID},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ComparisonError {
     #[error("baseline policy must be {expected}, got {actual}")]
     UnexpectedBaselinePolicy {
@@ -19,8 +19,8 @@ pub enum ComparisonError {
         "comparison inputs differ: baseline {baseline_input_id}, candidate {candidate_input_id}"
     )]
     InputMismatch {
-        baseline_input_id: u64,
-        candidate_input_id: u64,
+        baseline_input_id: TraceInputId,
+        candidate_input_id: TraceInputId,
     },
 }
 
@@ -28,6 +28,7 @@ pub enum ComparisonError {
 pub enum ComparisonIssue {
     TerminationMismatch,
     EventPositionBudgetExceeded,
+    EscapeDirectionUnavailable,
     EscapeDirectionBudgetExceeded,
     TravelTimeBudgetExceeded,
     NullDriftBudgetExceeded,
@@ -70,8 +71,8 @@ impl ReferenceComparison {
         }
         if baseline.input_id() != candidate.input_id() {
             return Err(ComparisonError::InputMismatch {
-                baseline_input_id: baseline.input_id(),
-                candidate_input_id: candidate.input_id(),
+                baseline_input_id: baseline.input_id().clone(),
+                candidate_input_id: candidate.input_id().clone(),
             });
         }
         let mut issues = Vec::new();
@@ -89,8 +90,16 @@ impl ReferenceComparison {
         } else {
             None
         };
-        if escape_direction_angle_rad.is_some_and(|angle| angle > 2.0e-9) {
-            issues.push(ComparisonIssue::EscapeDirectionBudgetExceeded);
+        if baseline.termination() == Termination::Escape
+            && candidate.termination() == Termination::Escape
+        {
+            match escape_direction_angle_rad {
+                Some(angle) if angle > 2.0e-9 => {
+                    issues.push(ComparisonIssue::EscapeDirectionBudgetExceeded);
+                }
+                None => issues.push(ComparisonIssue::EscapeDirectionUnavailable),
+                Some(_) => {}
+            }
         }
         let travel_time_difference_m = (baseline.travel_time_m() - candidate.travel_time_m()).abs();
         if travel_time_difference_m > 2.0e-8 {
@@ -184,8 +193,8 @@ fn event_position_distance(left: &ReferenceOutcome, right: &ReferenceOutcome) ->
 }
 
 fn escape_direction_angle(left: &ReferenceOutcome, right: &ReferenceOutcome) -> Option<f64> {
-    let left = unit_spatial_position(left)?;
-    let right = unit_spatial_position(right)?;
+    let left = left.escape_direction_xyz()?;
+    let right = right.escape_direction_xyz()?;
     let dot = left[0]
         .mul_add(right[0], left[1].mul_add(right[1], left[2] * right[2]))
         .clamp(-1.0, 1.0);
@@ -200,19 +209,76 @@ fn escape_direction_angle(left: &ReferenceOutcome, right: &ReferenceOutcome) -> 
     Some(cross_norm.atan2(dot))
 }
 
-fn unit_spatial_position(outcome: &ReferenceOutcome) -> Option<[f64; 3]> {
-    let components = outcome.state().components();
-    let norm = components[1]
-        .mul_add(
-            components[1],
-            components[2].mul_add(components[2], components[3] * components[3]),
-        )
-        .sqrt();
-    (norm > 0.0 && norm.is_finite()).then(|| {
-        [
-            components[1] / norm,
-            components[2] / norm,
-            components[3] / norm,
-        ]
-    })
+#[cfg(test)]
+mod tests {
+    use gravlume_domain::GeodesicState;
+
+    use super::{ComparisonIssue, ReferenceComparison};
+    use crate::{ReferenceOutcome, Termination, TraceDiagnostics, TraceInputId};
+
+    #[test]
+    fn escape_direction_gate_uses_terminal_momentum_not_event_position() {
+        let baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
+        let candidate = escape_outcome("reference-strict-v1", [0.0, 1.0, 0.0]);
+
+        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+            .expect("policy roles and input identity match");
+
+        assert!(
+            comparison
+                .issues()
+                .contains(&ComparisonIssue::EscapeDirectionBudgetExceeded)
+        );
+    }
+
+    #[test]
+    fn escape_direction_gate_rejects_a_missing_terminal_direction() {
+        let baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
+        let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
+        candidate.escape_direction_xyz = None;
+
+        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+            .expect("policy roles and input identity match");
+
+        assert!(
+            comparison
+                .issues()
+                .contains(&ComparisonIssue::EscapeDirectionUnavailable)
+        );
+    }
+
+    fn escape_outcome(policy_id: &'static str, spatial_momentum: [f64; 3]) -> ReferenceOutcome {
+        ReferenceOutcome {
+            input_id: TraceInputId::new("same-input"),
+            policy_id,
+            termination: Termination::Escape,
+            state: GeodesicState::new(
+                [0.0, 200.0, 0.0, 0.0],
+                [
+                    -1.0,
+                    spatial_momentum[0],
+                    spatial_momentum[1],
+                    spatial_momentum[2],
+                ],
+            )
+            .expect("state is finite"),
+            affine_parameter_m: 1.0,
+            event: None,
+            escape_direction_xyz: Some(spatial_momentum),
+            turning_radius_m: None,
+            azimuth_advance_rad: 0.0,
+            travel_time_m: 1.0,
+            diagnostics: TraceDiagnostics {
+                accepted_steps: 1,
+                rejected_steps: 0,
+                rhs_evaluations: 7,
+                minimum_step_m: Some(1.0),
+                maximum_step_m: Some(1.0),
+                maximum_null_residual: 0.0,
+                maximum_energy_drift: 0.0,
+                maximum_angular_momentum_z_drift: 0.0,
+                maximum_carter_drift: 0.0,
+            },
+        }
+    }
 }

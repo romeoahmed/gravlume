@@ -36,7 +36,8 @@ impl ReferenceBatch {
         self.pool.install(|| {
             requests
                 .par_iter()
-                .map(|request| tracer.trace(*request))
+                .cloned()
+                .map(|request| tracer.trace(request))
                 .collect()
         })
     }

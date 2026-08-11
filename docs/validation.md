@@ -208,6 +208,8 @@ regular fixture 的 baseline/strict comparison 必须满足：
 | travel-time absolute error | `2e-8 M` |
 | normalized null/$E$/$L_z$/$\mathcal Q$ drift | each `5e-9` |
 
+escape direction 是 localized escape state 上 Hamilton RHS 空间分量按实际 affine traversal 符号取向后的单位 coordinate direction；它不是 terminal position 的径向单位向量。方向无法求值时 comparison 失败，不能省略该 gate。
+
 near-critical fixture 不套一个全局 angle tolerance。它必须给成对的 escape/capture 或两侧 branch 样本、distance-to-critical 标签和独立高精度 observable；discrete classification 必须正确，continuous tolerance 由 fixture 自身给出。
 
 ### 5.3 Interactive agreement

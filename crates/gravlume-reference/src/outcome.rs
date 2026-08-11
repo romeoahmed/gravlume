@@ -1,3 +1,5 @@
+use std::{fmt, sync::Arc};
+
 use gravlume_domain::{GeodesicState, GeometryError};
 
 use crate::EventKind;
@@ -17,9 +19,32 @@ impl AffineDirection {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// Stable logical identity shared by policy variants of the same trace input.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TraceInputId(Arc<str>);
+
+impl TraceInputId {
+    /// Wraps a caller-defined identity without hashing or process-local remapping.
+    #[must_use]
+    pub fn new(value: impl Into<Arc<str>>) -> Self {
+        Self(value.into())
+    }
+
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for TraceInputId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct TraceRequest {
-    pub(super) input_id: u64,
+    pub(super) input_id: TraceInputId,
     pub(super) initial_state: GeodesicState,
     pub(super) affine_direction: AffineDirection,
 }
@@ -27,7 +52,7 @@ pub struct TraceRequest {
 impl TraceRequest {
     #[must_use]
     pub const fn new(
-        input_id: u64,
+        input_id: TraceInputId,
         initial_state: GeodesicState,
         affine_direction: AffineDirection,
     ) -> Self {
@@ -39,17 +64,17 @@ impl TraceRequest {
     }
 
     #[must_use]
-    pub const fn input_id(self) -> u64 {
-        self.input_id
+    pub const fn input_id(&self) -> &TraceInputId {
+        &self.input_id
     }
 
     #[must_use]
-    pub const fn initial_state(self) -> GeodesicState {
+    pub const fn initial_state(&self) -> GeodesicState {
         self.initial_state
     }
 
     #[must_use]
-    pub const fn affine_direction(self) -> AffineDirection {
+    pub const fn affine_direction(&self) -> AffineDirection {
         self.affine_direction
     }
 }
@@ -188,12 +213,13 @@ impl TraceDiagnostics {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ReferenceOutcome {
-    pub(super) input_id: u64,
+    pub(super) input_id: TraceInputId,
     pub(super) policy_id: &'static str,
     pub(super) termination: Termination,
     pub(super) state: GeodesicState,
     pub(super) affine_parameter_m: f64,
     pub(super) event: Option<LocalizedEvent>,
+    pub(super) escape_direction_xyz: Option<[f64; 3]>,
     pub(super) turning_radius_m: Option<f64>,
     pub(super) azimuth_advance_rad: f64,
     pub(super) travel_time_m: f64,
@@ -202,8 +228,8 @@ pub struct ReferenceOutcome {
 
 impl ReferenceOutcome {
     #[must_use]
-    pub const fn input_id(&self) -> u64 {
-        self.input_id
+    pub const fn input_id(&self) -> &TraceInputId {
+        &self.input_id
     }
 
     #[must_use]
@@ -229,6 +255,12 @@ impl ReferenceOutcome {
     #[must_use]
     pub const fn event(&self) -> Option<&LocalizedEvent> {
         self.event.as_ref()
+    }
+
+    /// Returns the normalized terminal coordinate traversal direction for an escape.
+    #[must_use]
+    pub const fn escape_direction_xyz(&self) -> Option<[f64; 3]> {
+        self.escape_direction_xyz
     }
 
     #[must_use]
