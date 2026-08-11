@@ -177,6 +177,26 @@ fn geodesic_fixture_rejects_inconsistent_high_precision_null_evidence() {
 }
 
 #[test]
+fn geodesic_fixture_rejects_versioned_oracle_drift() {
+    let mutated = SCATTER_B6
+        .replace(
+            "azimuth_advance_rad = \"4.620418726881239063416504280864374022974\"",
+            "azimuth_advance_rad = \"5.5\"",
+        )
+        .replace(
+            "azimuth_advance_abs_rad = \"5e-10\"",
+            "azimuth_advance_abs_rad = \"1\"",
+        );
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&mutated),
+        Err(FixtureError::PresetMismatch {
+            field: "geodesic artifact"
+        })
+    ));
+}
+
+#[test]
 fn geodesic_fixture_rejects_a_self_consistent_non_unit_energy_scale() {
     let scaled = SCATTER_B6
         .replace(
@@ -356,16 +376,21 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
 
 #[test]
 fn same_fixture_label_cannot_alias_different_canonical_inputs() {
-    let shifted_source = SCATTER_B6.replace(
-        "position_txyz_m = [\"0\", \"50\", \"0\", \"0\"]",
-        "position_txyz_m = [\"1\", \"50\", \"0\", \"0\"]",
+    let fixture = geodesic_fixture(SCATTER_B6);
+    let request = fixture.trace_request();
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let regular = tracer.trace(request.clone());
+    let mut shifted_components = request.initial_state().components();
+    shifted_components[0] = 1.0;
+    let shifted_state = gravlume_domain::GeodesicState::from_components(shifted_components)
+        .expect("shifted state is finite");
+    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
+        TraceRequest::new(
+            TraceInputId::new("schwarzschild-scatter-b6-v1"),
+            shifted_state,
+            request.affine_direction(),
+        ),
     );
-    let original = geodesic_fixture(SCATTER_B6);
-    let shifted = geodesic_fixture(&shifted_source);
-    let regular = ReferenceTracer::from_fixture(&original, ReferencePolicy::regular_v1())
-        .trace(original.trace_request());
-    let strict = ReferenceTracer::from_fixture(&shifted, ReferencePolicy::strict_v1())
-        .trace(shifted.trace_request());
 
     assert!(matches!(
         ReferenceComparison::baseline_v1(&regular, &strict),
@@ -436,6 +461,27 @@ fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
     let forward_turning_radius = forward.turning_radius_m().expect("forward ray turns");
     let backward_turning_radius = backward.turning_radius_m().expect("backward ray turns");
     assert!((backward_turning_radius - forward_turning_radius).abs() <= 5.0e-11);
+}
+
+#[test]
+fn travel_time_is_independent_of_the_coordinate_time_origin() {
+    let fixture = geodesic_fixture(SCATTER_B6);
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let request = fixture.trace_request();
+    let baseline = tracer.trace(request.clone());
+    let mut shifted_components = request.initial_state().components();
+    shifted_components[0] = 1.0e300;
+    let shifted_state = gravlume_domain::GeodesicState::from_components(shifted_components)
+        .expect("shifted state is finite");
+    let shifted = tracer.trace(TraceRequest::new(
+        TraceInputId::new("schwarzschild-scatter-b6-shifted-time"),
+        shifted_state,
+        request.affine_direction(),
+    ));
+
+    assert_eq!(shifted.termination(), baseline.termination());
+    assert!(shifted.travel_time_m() > 0.0);
+    assert!((shifted.travel_time_m() - baseline.travel_time_m()).abs() <= 2.0e-8);
 }
 
 #[test]

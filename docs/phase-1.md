@@ -6,11 +6,11 @@
 
 - `PhysicalSceneDraft → PhysicalScene → Observation` 是原子 validation seam；稳定字段为 issue code、field path 与 severity。Observer Frame 保存 Gram residual、orientation determinant 和 up-axis fallback 诊断。
 - `ViewportSample` 只保存 pixel/subpixel coordinates；`Observation::initial_ray` 针对自己的 projection 重新验证并独占 top-left sample 到 future-directed Photon Momentum 的 CPU 映射。`ReferenceRequest` 在绑定 Observation 时解析 initial ray，`ReferenceInstrument` 只通过该接口构造 backward trace，负 affine traversal 不改写物理 momentum。
-- `KerrNewmanSpacetime` 使用 canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` 状态与闭式 Cartesian Kerr–Schild Hamilton RHS；metric/radius denominator 失败是 typed error，不 clamp 方程。
+- `KerrNewmanSpacetime` 使用 canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` 状态与闭式 Cartesian Kerr–Schild Hamilton RHS；参数状态以 exponent-aligned integer significand 精确比较实际 binary64 值，轴线 geometry 使用 $r=|z|$ 解析极限。metric/radius denominator 失败是 typed error，不 clamp 方程。
 - `ReferenceTracer` 在 seam 强制 v1 的 `M=1` 归一化，`ReferenceInstrument` 额外强制 `omega_obs=1`；随后使用七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差。拒步不提交 state/event side effect。
 - accepted step 保存 quartic dense output；horizon、escape、equatorial surface 与 singularity guard 只在 bracket 内二分定位。同一步 candidate 在 tie tolerance 内全部保留，并按 `singularity → horizon → emitter → escape` 排序。
-- outcome 分开记录绑定完整有效输入的 identity、terminal、accepted/rejected/RHS counters、实际 min/max step、event bracket/residual、null/E/Lz/Carter drift、dense-localized turning radius、Hamilton RHS terminal traversal direction、非负 coordinate travel duration 与 azimuth advance。turning point 按 affine traversal direction 检测并使用 dense output 定位；无转向的 capture 不以最小采样半径冒充 turning point，step/reject exhaustion 和 numerical failure 不伪装成物理 terminal。
-- v1 TOML 使用 `deny_unknown_fields` 并限制为 1 MiB；未知字段/enum/schema/profile、与 profile 不一致的固定 event 值、NaN/Inf、负零与非法物理值在 seam 拒绝。80 位十进制保留为字符串到解析 seam，运行时明确转换为 `f64`，不声称保留 80 位算术。
+- outcome 分开记录绑定完整有效输入的 identity、terminal、accepted/rejected/RHS counters、实际 min/max step、event bracket/residual、null/E/Lz/Carter drift、dense-localized turning radius、Hamilton RHS terminal traversal direction、非负 coordinate travel duration 与 azimuth advance。coordinate duration 从 DP dense/local step increment 补偿累计，不从两个绝对时间相减；turning point 按 affine traversal direction 检测并使用 dense output 定位；无转向的 capture 不以最小采样半径冒充 turning point，step/reject exhaustion 和 numerical failure 不伪装成物理 terminal。
+- v1 TOML 使用 `deny_unknown_fields` 并限制为 1 MiB；未知字段/enum/schema/profile、与 profile 不一致的固定 event 值、NaN/Inf、负零与非法物理值在 seam 拒绝。三个具名 geodesic preset 的完整 DTO 与嵌入的规范 fixture 原文一致后才进入 domain，因此 producer、input、oracle 或 tolerance 的修改都必须使用新 ID/profile。80 位十进制保留为字符串到解析 seam，运行时明确转换为 `f64`，不声称保留 80 位算术。
 - `ReferenceComparison::baseline_v1` 在计算预算前验证 regular/strict policy roles 与 input ID；配置错误返回 `ComparisonError`，只有有效配对才产生数值 `ComparisonIssue`。
 - `ReferenceBatch` 建立最多 256 worker 的专用 Rayon pool；单条轨迹顺序确定，indexed parallel collect 保持 input order。
 
@@ -39,4 +39,5 @@
 - Dormand–Prince pair：原始论文 [Dormand–Prince 1980](https://doi.org/10.1016/0771-050X%2880%2990013-3)，continuous extension [Shampine 1986](https://doi.org/10.1090/S0025-5718-1986-0815836-3)，系数交叉检查 [SciPy 1.18.0 RK45 source](https://github.com/scipy/scipy/blob/v1.18.0/scipy/integrate/_ivp/rk.py)。
 - bracketed root guarantee：[Brent 1971/1973 作者书目页](https://maths-people.anu.edu.au/~brent/pub/pub006.html)；当前实现选择合同允许的 safeguarded bisection。
 - serialization seam：[Serde container attributes](https://serde.rs/container-attrs.html) 与 [`toml::from_str` 1.1.4](https://docs.rs/toml/1.1.4/toml/fn.from_str.html)。
+- binary64 seam：[Rust `f64`](https://doc.rust-lang.org/stable/std/primitive.f64.html) 与 [`include_str!`](https://doc.rust-lang.org/stable/std/macro.include_str.html)。
 - batch execution：[`rayon::ThreadPool` 1.12.0](https://docs.rs/rayon/1.12.0/rayon/struct.ThreadPool.html)；vector operations：[`glam::DVec3` 0.33.3](https://docs.rs/glam/0.33.3/glam/f64/struct.DVec3.html)。依赖闭包的最终事实以 `Cargo.lock` 为准。

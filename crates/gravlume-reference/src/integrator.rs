@@ -129,22 +129,16 @@ impl DenseOutput {
     pub(super) fn evaluate(&self, theta: f64) -> [f64; STATE_COMPONENTS] {
         let powers = [theta, theta * theta, theta.powi(3), theta.powi(4)];
         std::array::from_fn(|component| {
-            let weighted_derivative = self
-                .stages
-                .iter()
-                .zip(DENSE_COEFFICIENTS)
-                .map(|(stage, coefficients)| {
-                    coefficients
-                        .into_iter()
-                        .zip(powers)
-                        .map(|(coefficient, power)| coefficient * power)
-                        .sum::<f64>()
-                        * stage[component]
-                })
-                .sum::<f64>();
-            self.step
-                .mul_add(weighted_derivative, self.start[component])
+            self.step.mul_add(
+                dense_derivative(&self.stages, component, powers),
+                self.start[component],
+            )
         })
+    }
+
+    pub(super) fn time_increment(&self, theta: f64) -> f64 {
+        let powers = [theta, theta * theta, theta.powi(3), theta.powi(4)];
+        self.step * dense_derivative(&self.stages, 0, powers)
     }
 }
 
@@ -180,7 +174,9 @@ pub fn attempt_step(
     }
     let end = weighted_state(start, step, &stages, FIFTH_ORDER_WEIGHTS);
     let fourth_order = weighted_state(start, step, &stages, FOURTH_ORDER_WEIGHTS);
-    let error = std::array::from_fn(|index| end[index] - fourth_order[index]);
+    let mut error = std::array::from_fn(|index| end[index] - fourth_order[index]);
+    error[0] = weighted_increment(step, &stages, FIFTH_ORDER_WEIGHTS, 0)
+        - weighted_increment(step, &stages, FOURTH_ORDER_WEIGHTS, 0);
     Ok(StepAttempt {
         end,
         error,
@@ -191,6 +187,39 @@ pub fn attempt_step(
             stages,
         },
     })
+}
+
+fn dense_derivative(
+    stages: &[[f64; STATE_COMPONENTS]; STAGES],
+    component: usize,
+    powers: [f64; 4],
+) -> f64 {
+    stages
+        .iter()
+        .zip(DENSE_COEFFICIENTS)
+        .map(|(stage, coefficients)| {
+            coefficients
+                .into_iter()
+                .zip(powers)
+                .map(|(coefficient, power)| coefficient * power)
+                .sum::<f64>()
+                * stage[component]
+        })
+        .sum()
+}
+
+fn weighted_increment(
+    step: f64,
+    stages: &[[f64; STATE_COMPONENTS]; STAGES],
+    weights: [f64; STAGES],
+    component: usize,
+) -> f64 {
+    let weighted_derivative = stages
+        .iter()
+        .zip(weights)
+        .map(|(stage, weight)| weight * stage[component])
+        .sum::<f64>();
+    step * weighted_derivative
 }
 
 fn weighted_state(
