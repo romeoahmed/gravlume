@@ -258,34 +258,28 @@ mod tests {
     }
 
     #[test]
-    fn escape_direction_gate_uses_terminal_momentum_not_event_position() {
+    fn escape_direction_gate_uses_terminal_momentum_and_requires_both_directions() {
         let baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
-        let candidate = escape_outcome("reference-strict-v1", [0.0, 1.0, 0.0]);
+        for (momentum, direction, expected_issue) in [
+            (
+                [0.0, 1.0, 0.0],
+                Some([0.0, 1.0, 0.0]),
+                ComparisonIssue::EscapeDirectionBudgetExceeded,
+            ),
+            (
+                [1.0, 0.0, 0.0],
+                None,
+                ComparisonIssue::EscapeDirectionUnavailable,
+            ),
+        ] {
+            let mut candidate = escape_outcome("reference-strict-v1", momentum);
+            candidate.escape_direction_xyz = direction;
 
-        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
-            .expect("policy roles and input identity match");
+            let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+                .expect("policy roles and input identity match");
 
-        assert!(
-            comparison
-                .issues()
-                .contains(&ComparisonIssue::EscapeDirectionBudgetExceeded)
-        );
-    }
-
-    #[test]
-    fn escape_direction_gate_rejects_a_missing_terminal_direction() {
-        let baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
-        let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
-        candidate.escape_direction_xyz = None;
-
-        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
-            .expect("policy roles and input identity match");
-
-        assert!(
-            comparison
-                .issues()
-                .contains(&ComparisonIssue::EscapeDirectionUnavailable)
-        );
+            assert!(comparison.issues().contains(&expected_issue));
+        }
     }
 
     fn escape_outcome(policy_id: &'static str, spatial_momentum: [f64; 3]) -> ReferenceOutcome {
