@@ -84,6 +84,18 @@ impl EventConfiguration {
     pub(super) const fn equatorial_surface(self) -> Option<EquatorialSurface> {
         self.equatorial_surface
     }
+
+    pub(super) fn canonical_bits(self) -> [u64; 5] {
+        let escape = self.escape_radius_m;
+        let equatorial = self.equatorial_surface;
+        [
+            u64::from(escape.is_some()),
+            escape.map_or(0, f64::to_bits),
+            u64::from(equatorial.is_some()),
+            equatorial.map_or(0, |surface| surface.inner_radius_m.to_bits()),
+            equatorial.map_or(0, |surface| surface.outer_radius_m.to_bits()),
+        ]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]

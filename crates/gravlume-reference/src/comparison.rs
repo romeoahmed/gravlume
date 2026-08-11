@@ -22,6 +22,8 @@ pub enum ComparisonError {
         baseline_input_id: TraceInputId,
         candidate_input_id: TraceInputId,
     },
+    #[error("comparison input label {input_id} resolves to different canonical inputs")]
+    InputIdentityCollision { input_id: TraceInputId },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,10 +72,15 @@ impl ReferenceComparison {
                 actual: candidate.policy_id(),
             });
         }
-        if baseline.input_id() != candidate.input_id() {
+        if baseline.input_id().as_str() != candidate.input_id().as_str() {
             return Err(ComparisonError::InputMismatch {
-                baseline_input_id: baseline.input_id().clone(),
-                candidate_input_id: candidate.input_id().clone(),
+                baseline_input_id: baseline.input_id().logical(),
+                candidate_input_id: candidate.input_id().logical(),
+            });
+        }
+        if baseline.input_id() != candidate.input_id() {
+            return Err(ComparisonError::InputIdentityCollision {
+                input_id: baseline.input_id().logical(),
             });
         }
         let mut issues = Vec::new();

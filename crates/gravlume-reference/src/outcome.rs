@@ -1,10 +1,10 @@
 use std::{fmt, sync::Arc};
 
-use gravlume_domain::{GeodesicState, GeometryError};
+use gravlume_domain::{GeodesicState, GeometryError, KerrNewmanSpacetime};
 
-use crate::EventKind;
+use crate::{EventKind, events::EventConfiguration};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AffineDirection {
     Positive,
     Negative,
@@ -19,26 +19,73 @@ impl AffineDirection {
     }
 }
 
-/// Stable logical identity shared by policy variants of the same trace input.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct TraceInputId(Arc<str>);
+struct CanonicalTraceInput {
+    spacetime: [u64; 3],
+    state: [u64; 8],
+    affine_direction: AffineDirection,
+    events: [u64; 5],
+}
+
+/// Stable logical identity shared by policy variants of exactly the same effective trace input.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TraceInputId {
+    logical: Arc<str>,
+    canonical: Option<Arc<CanonicalTraceInput>>,
+}
 
 impl TraceInputId {
-    /// Wraps a caller-defined identity without hashing or process-local remapping.
+    /// Creates a caller-defined logical label.
+    ///
+    /// The reference tracer binds this label to the canonical spacetime, state, affine direction,
+    /// and event configuration before producing an outcome.
     #[must_use]
     pub fn new(value: impl Into<Arc<str>>) -> Self {
-        Self(value.into())
+        Self {
+            logical: value.into(),
+            canonical: None,
+        }
     }
 
     #[must_use]
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.logical
+    }
+
+    pub(super) fn bind(
+        &self,
+        spacetime: KerrNewmanSpacetime,
+        state: GeodesicState,
+        affine_direction: AffineDirection,
+        events: EventConfiguration,
+    ) -> Self {
+        let canonical = CanonicalTraceInput {
+            spacetime: [
+                spacetime.mass_m().to_bits(),
+                spacetime.spin_m().to_bits(),
+                spacetime.charge_m().to_bits(),
+            ],
+            state: state.components().map(f64::to_bits),
+            affine_direction,
+            events: events.canonical_bits(),
+        };
+        if self.canonical.as_deref() == Some(&canonical) {
+            return self.clone();
+        }
+        Self {
+            logical: Arc::clone(&self.logical),
+            canonical: Some(Arc::new(canonical)),
+        }
+    }
+
+    pub(super) fn logical(&self) -> Self {
+        Self::new(Arc::clone(&self.logical))
     }
 }
 
 impl fmt::Display for TraceInputId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.logical)
     }
 }
 
@@ -273,6 +320,7 @@ impl ReferenceOutcome {
         self.azimuth_advance_rad
     }
 
+    /// Returns the coordinate-time duration along the actual affine traversal.
     #[must_use]
     pub const fn travel_time_m(&self) -> f64 {
         self.travel_time_m

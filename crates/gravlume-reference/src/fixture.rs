@@ -21,6 +21,14 @@ const V1_OBSERVER_POLAR_ANGLE_DECIMAL: &str =
     "1.0471975511965977461542144610931676280657231331250352736583148641026054687620697";
 const V1_VERTICAL_FOV_DECIMAL: &str =
     "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225";
+const V1_OUTER_HORIZON_RADIUS_DECIMAL: &str = "1.6";
+const V1_OBSERVER_CARTESIAN_XYZ_DECIMALS: [&str; 3] = [
+    "25.980762113533159402911695122588085504142078807155709420837104691778995253632001",
+    "0.69282032302755091741097853660234894677712210152415225122232279178077320676352001",
+    "15.0",
+];
+const V1_OBSERVER_G_TT_DECIMAL: &str =
+    "-0.93334518307856381087806612157838606469960895840739424102381798791325986491290437";
 
 #[derive(Clone, Debug)]
 pub enum FixtureDocument {
@@ -492,7 +500,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             .invariants(initial_state)
             .map_err(invalid_physical_data)?;
         if raw.initial.energy_at_infinity.source != "1"
-            || (initial_invariants.energy() - 1.0).abs() > 32.0 * f64::EPSILON
+            || initial_invariants.energy().to_bits() != 1.0_f64.to_bits()
             || initial_invariants.normalized_null_residual() > 2.0e-12
             || raw.expected.initial_null_abs.value < 0.0
             || raw.expected.initial_null_abs.value > V1_GEODESIC_INITIAL_NULL_ABS_MAX
@@ -511,7 +519,8 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             AffineDirectionName::Positive => AffineDirection::Positive,
             AffineDirectionName::Negative => AffineDirection::Negative,
         };
-        let input_id = TraceInputId::new(raw.id);
+        let input_id =
+            TraceInputId::new(raw.id).bind(spacetime, initial_state, affine_direction, events);
         let expected = ExpectedOutcome {
             input_id: input_id.clone(),
             termination,
@@ -618,6 +627,21 @@ fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), Fi
         &raw.tolerance.initial_null_normalized_abs,
         "2e-12",
         "tolerance.initial_null_normalized_abs",
+    )?;
+    require_decimal_source(
+        &raw.expected.outer_horizon_radius_m,
+        V1_OUTER_HORIZON_RADIUS_DECIMAL,
+        "expected.outer_horizon_radius_m",
+    )?;
+    require_decimal_source_array(
+        &raw.expected.observer_cartesian_xyz_m,
+        V1_OBSERVER_CARTESIAN_XYZ_DECIMALS,
+        "expected.observer_cartesian_xyz_m",
+    )?;
+    require_decimal_source(
+        &raw.expected.observer_g_tt,
+        V1_OBSERVER_G_TT_DECIMAL,
+        "expected.observer_g_tt",
     )
 }
 

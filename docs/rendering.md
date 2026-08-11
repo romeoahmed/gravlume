@@ -175,7 +175,7 @@ fast-light request 固定：
 
 ### 5.3 Slow-light contract
 
-沿 trace 得到 emission coordinate time $t_{\rm em}=t_{\rm obs}-\Delta t$（符号依 canonical convention，在 reference fixture 固定）。source provider 必须声明：
+沿 trace 得到 emission coordinate time $t_{\rm em}=t_{\rm obs}-\Delta t$；reference outcome 的 `travel_time_m` 是沿实际 affine traversal 的非负 coordinate-time duration，负 affine 回溯不把它保存为负的 signed delta。source provider 必须声明：
 
 - snapshots 的 time coordinate、ordering 和 revision；
 - nearest/linear/higher-order interpolation；
