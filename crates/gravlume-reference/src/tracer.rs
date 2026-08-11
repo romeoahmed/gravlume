@@ -86,7 +86,7 @@ struct TraceExecution<'tracer> {
     turning_radius_m: Option<f64>,
     azimuth_advance_rad: f64,
     previous_azimuth_rad: f64,
-    initial_time_m: f64,
+    coordinate_time_delta_m: CompensatedSum,
 }
 
 impl<'tracer> TraceExecution<'tracer> {
@@ -114,7 +114,7 @@ impl<'tracer> TraceExecution<'tracer> {
             turning_radius_m: None,
             azimuth_advance_rad: 0.0,
             previous_azimuth_rad: components[2].atan2(components[1]),
-            initial_time_m: components[0],
+            coordinate_time_delta_m: CompensatedSum::default(),
         }
     }
 
@@ -147,10 +147,14 @@ impl<'tracer> TraceExecution<'tracer> {
                     return self.finish_failure(failure.error().into());
                 }
             };
-            let error_norm =
-                self.tracer
-                    .policy
-                    .error_norm(self.state.components(), attempt.end, attempt.error);
+            let mut error_start = self.state.components();
+            let mut error_end = attempt.end;
+            error_start[0] = self.coordinate_time_delta_m.total();
+            error_end[0] = error_start[0] + attempt.dense.time_increment(1.0);
+            let error_norm = self
+                .tracer
+                .policy
+                .error_norm(error_start, error_end, attempt.error);
             if !error_norm.is_finite() {
                 return self.finish_failure(NumericalFailure::NonFinite);
             }
@@ -180,6 +184,8 @@ impl<'tracer> TraceExecution<'tracer> {
             let committed_theta = event.as_ref().map_or(1.0, |event| event.theta);
             let committed_state = event.as_ref().map_or(end_state, |event| event.state);
             self.record_turning_point(&attempt.dense, end_state, committed_theta);
+            self.coordinate_time_delta_m
+                .add(attempt.dense.time_increment(committed_theta));
             self.commit_observables(committed_state);
             if let Some(event) = event {
                 self.affine_parameter_m = self.step_m.mul_add(event.theta, self.affine_parameter_m);
@@ -437,7 +443,7 @@ impl<'tracer> TraceExecution<'tracer> {
             turning_radius_m: self.turning_radius_m,
             azimuth_advance_rad: self.azimuth_advance_rad,
             travel_time_m: self.request.affine_direction.sign()
-                * (state.components()[0] - self.initial_time_m),
+                * self.coordinate_time_delta_m.total(),
             diagnostics: TraceDiagnostics {
                 accepted_steps: self.accepted_steps,
                 rejected_steps: self.rejected_steps,
@@ -484,6 +490,28 @@ impl<'tracer> TraceExecution<'tracer> {
     ) -> Result<T, GeometryError> {
         self.rhs_evaluations += 1;
         evaluate(self.tracer.spacetime)
+    }
+}
+
+#[derive(Default)]
+struct CompensatedSum {
+    sum: f64,
+    correction: f64,
+}
+
+impl CompensatedSum {
+    fn add(&mut self, value: f64) {
+        let next = self.sum + value;
+        self.correction += if self.sum.abs() >= value.abs() {
+            (self.sum - next) + value
+        } else {
+            (value - next) + self.sum
+        };
+        self.sum = next;
+    }
+
+    fn total(&self) -> f64 {
+        self.sum + self.correction
     }
 }
 

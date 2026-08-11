@@ -17,6 +17,12 @@ const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
 const V1_PRODUCER_PRECISION_DIGITS: u32 = 80;
 const V1_GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
 const V1_OBSERVATION_ID: &str = "kerr-exterior-observation-v1";
+const V1_SCATTER_B6: &str =
+    include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
+const V1_SCATTER_NEAR_CRITICAL: &str =
+    include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-near-critical.toml");
+const V1_CAPTURE_NEAR_CRITICAL: &str =
+    include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
 const V1_OBSERVER_POLAR_ANGLE_DECIMAL: &str =
     "1.0471975511965977461542144610931676280657231331250352736583148641026054687620697";
 const V1_VERTICAL_FOV_DECIMAL: &str =
@@ -260,7 +266,7 @@ struct RawObservationFixture {
     tolerance: RawObservationTolerance,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawGeodesicFixture {
     schema_version: u32,
@@ -276,7 +282,7 @@ struct RawGeodesicFixture {
     tolerance: RawGeodesicTolerance,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawProducer {
     method: String,
@@ -284,7 +290,7 @@ struct RawProducer {
     cross_form_azimuth_disagreement: Option<DecimalString>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawSpacetime {
     #[serde(rename = "family")]
@@ -352,7 +358,7 @@ struct RawObservationTolerance {
     initial_null_normalized_abs: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawInitial {
     position_txyz_m: [DecimalString; 4],
@@ -361,7 +367,7 @@ struct RawInitial {
     energy_at_infinity: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawGeodesicEvents {
     escape_radius_m: Option<DecimalString>,
@@ -369,7 +375,7 @@ struct RawGeodesicEvents {
     outer_horizon_radius_m: Option<DecimalString>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(tag = "class", rename_all = "kebab-case", deny_unknown_fields)]
 enum RawApplicability {
     Regular {
@@ -383,7 +389,7 @@ enum RawApplicability {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawGeodesicExpected {
     termination: ExpectedTermination,
@@ -393,7 +399,7 @@ struct RawGeodesicExpected {
     initial_null_abs: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawGeodesicTolerance {
     turning_radius_abs_m: Option<DecimalString>,
@@ -401,7 +407,7 @@ struct RawGeodesicTolerance {
     azimuth_advance_abs_rad: DecimalString,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 struct DecimalString {
     source: String,
     value: f64,
@@ -436,7 +442,7 @@ impl<'de> Deserialize<'de> for DecimalString {
 
 macro_rules! fixture_enum {
     ($name:ident { $($variant:ident => $wire:literal),+ $(,)? }) => {
-        #[derive(Clone, Copy, Debug, Deserialize)]
+        #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
         enum $name {
             $(#[serde(rename = $wire)] $variant),+
         }
@@ -515,6 +521,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             initial_invariants.energy(),
             initial_invariants.angular_momentum_z(),
         )?;
+        validate_geodesic_v1_profile(&raw)?;
         let affine_direction = match raw.initial.affine_direction {
             AffineDirectionName::Positive => AffineDirection::Positive,
             AffineDirectionName::Negative => AffineDirection::Negative,
@@ -548,6 +555,22 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             expected,
         }))
     }
+}
+
+fn validate_geodesic_v1_profile(raw: &RawGeodesicFixture) -> Result<(), FixtureError> {
+    let canonical_source = match raw.id.as_str() {
+        "schwarzschild-scatter-b6-v1" => V1_SCATTER_B6,
+        "schwarzschild-scatter-near-critical-v1" => V1_SCATTER_NEAR_CRITICAL,
+        "schwarzschild-capture-near-critical-v1" => V1_CAPTURE_NEAR_CRITICAL,
+        _ => return Err(FixtureError::PresetMismatch { field: "id" }),
+    };
+    let canonical: RawFixtureDocument = toml::from_str(canonical_source)?;
+    let RawFixtureDocument::Geodesic(canonical) = canonical else {
+        return Err(FixtureError::PresetMismatch {
+            field: "geodesic artifact",
+        });
+    };
+    require_profile(raw == &canonical, "geodesic artifact")
 }
 
 fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), FixtureError> {
