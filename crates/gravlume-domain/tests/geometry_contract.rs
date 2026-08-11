@@ -1,4 +1,6 @@
-use gravlume_domain::{GeometryError, KerrNewmanSpacetime, ParameterState, SpacetimeEvent};
+use gravlume_domain::{
+    GeometryError, KerrNewmanSpacetime, ParameterState, SpacetimeEvent, ValidationIssueCode,
+};
 
 #[test]
 fn parameter_state_and_horizon_are_classified_without_clamping() {
@@ -26,6 +28,17 @@ fn finite_extreme_scales_preserve_extremality_and_horizon_classification() {
         assert_eq!(extremal.parameter_state(), ParameterState::Extremal);
         assert_eq!(extremal.outer_horizon_radius(), Some(mass_m));
     }
+}
+
+#[test]
+fn validated_spacetime_rejects_an_unrepresentable_outer_horizon() {
+    let report = KerrNewmanSpacetime::new(f64::MAX, 0.0, 0.0)
+        .expect_err("validated geometry must have a finite outer horizon");
+
+    assert!(report.issues().iter().any(|issue| {
+        issue.code() == ValidationIssueCode::NonFinite
+            && issue.field_path() == "spacetime.outer_horizon_radius_m"
+    }));
 }
 
 #[test]
@@ -62,6 +75,17 @@ fn metric_inverse_residual_is_term_normalized_under_strong_cancellation() {
         .expect("metric is finite");
 
     assert!(residual < 2.0e-12, "normalized residual was {residual:e}");
+}
+
+#[test]
+fn metric_inverse_residual_preserves_representable_values_when_term_norm_overflows() {
+    let spacetime = KerrNewmanSpacetime::new(5.0e113, 0.0, 0.0).expect("parameters are valid");
+    let event = SpacetimeEvent::from_txyz([0.0, 1.0e-40, 0.0, 0.0]).expect("event is finite");
+    let residual = spacetime
+        .metric_inverse_residual(event)
+        .expect("scaled metric contraction is finite");
+
+    assert!(residual.is_finite() && residual > 0.0 && residual < f64::MIN_POSITIVE);
 }
 
 #[test]

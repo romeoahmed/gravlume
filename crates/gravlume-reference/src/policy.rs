@@ -1,5 +1,7 @@
 pub const REGULAR_V1_ID: &str = "reference-regular-v1";
 pub const STRICT_V1_ID: &str = "reference-strict-v1";
+pub const V1_SINGULARITY_GUARD_D_OVER_M4_DECIMAL: &str = "9.094947017729282379150390625e-13";
+const V1_SINGULARITY_GUARD_D_OVER_M4: f64 = f64::from_bits(0x3d70_0000_0000_0000);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ReferencePolicy {
@@ -42,7 +44,7 @@ impl ReferencePolicy {
             event_affine_tolerance_m: 2.0e-11,
             event_tie_tolerance_m: 5.0e-11,
             event_arming_band_m: 1.28e-9,
-            singularity_guard_d_over_m4: 9.094_947_017_729_282e-13,
+            singularity_guard_d_over_m4: V1_SINGULARITY_GUARD_D_OVER_M4,
         }
     }
 

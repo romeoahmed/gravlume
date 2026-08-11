@@ -9,7 +9,8 @@ use serde::{Deserialize, Deserializer, de};
 use crate::{
     AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, Termination,
     TraceInputId, TraceRequest,
-    events::{OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M, escape_event_is_armed},
+    events::{OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_DECIMAL, escape_event_is_armed},
+    policy::V1_SINGULARITY_GUARD_D_OVER_M4_DECIMAL,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
@@ -594,6 +595,16 @@ fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), Fi
         "viewport.default_subpixel",
     )?;
     require_decimal_source(
+        &raw.events.escape_radius_m,
+        OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_DECIMAL,
+        "events.escape_radius_m",
+    )?;
+    require_decimal_source(
+        &raw.events.singularity_guard_d_over_m4,
+        V1_SINGULARITY_GUARD_D_OVER_M4_DECIMAL,
+        "events.singularity_guard_d_over_m4",
+    )?;
+    require_decimal_source(
         &raw.tolerance.radius_abs_m,
         "2e-13",
         "tolerance.radius_abs_m",
@@ -890,14 +901,6 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
     projection
         .sample(0, 0, subpixel[0], subpixel[1])
         .map_err(invalid_physical_data)?;
-    if raw.events.escape_radius_m.value != OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M
-        || (raw.events.singularity_guard_d_over_m4.value
-            - ReferencePolicy::regular_v1().singularity_guard_d_over_m4())
-        .abs()
-            > f64::EPSILON
-    {
-        return Err(FixtureError::InconsistentEventEnvelope);
-    }
     Ok(Observation::new(scene, projection))
 }
 

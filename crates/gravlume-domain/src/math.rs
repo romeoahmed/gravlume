@@ -105,6 +105,68 @@ pub fn normalized_quadratic_form_residual(matrix: [[f64; 4]; 4], vector: FourVec
     relative_residual * denominator_scale
 }
 
+pub fn normalized_inner_product_residual<const N: usize>(
+    left: [f64; N],
+    right: [f64; N],
+    expected: f64,
+) -> Option<f64> {
+    if !expected.is_finite()
+        || !left.into_iter().all(f64::is_finite)
+        || !right.into_iter().all(f64::is_finite)
+    {
+        return None;
+    }
+
+    let mut terms = [(0.0, 0_i32); N];
+    let mut maximum_exponent = None;
+    for (index, (left, right)) in left.into_iter().zip(right).enumerate() {
+        if left == 0.0 || right == 0.0 {
+            continue;
+        }
+        let (left_significand, left_exponent) = positive_binary_decomposition(left.abs());
+        let (right_significand, right_exponent) = positive_binary_decomposition(right.abs());
+        let mut significand = left_significand * right_significand;
+        let mut exponent = left_exponent + right_exponent;
+        if significand >= 2.0 {
+            significand *= 0.5;
+            exponent += 1;
+        }
+        if left.is_sign_negative() != right.is_sign_negative() {
+            significand = -significand;
+        }
+        terms[index] = (significand, exponent);
+        maximum_exponent =
+            Some(maximum_exponent.map_or(exponent, |current: i32| current.max(exponent)));
+    }
+
+    let Some(maximum_exponent) = maximum_exponent else {
+        return Some(expected.abs());
+    };
+    let (contraction, term_norm) = terms.into_iter().fold(
+        (0.0, 0.0),
+        |(contraction, term_norm), (significand, exponent)| {
+            if significand == 0.0 {
+                return (contraction, term_norm);
+            }
+            let scaled = significand * binary_power(exponent - maximum_exponent);
+            (contraction + scaled, term_norm + scaled.abs())
+        },
+    );
+    if !contraction.is_finite() || !term_norm.is_finite() || term_norm == 0.0 {
+        return None;
+    }
+
+    let (_, term_norm_exponent) = positive_binary_decomposition(term_norm);
+    let residual = if maximum_exponent + term_norm_exponent >= 0 {
+        let expected_scaled = expected * binary_power(-maximum_exponent);
+        (contraction - expected_scaled).abs() / term_norm
+    } else {
+        let product = contraction * binary_power(maximum_exponent);
+        (product - expected).abs()
+    };
+    residual.is_finite().then_some(residual)
+}
+
 fn positive_product_capped_at_one(factors: [f64; 4]) -> f64 {
     let mut significand = 1.0;
     let mut exponent = 0_i32;
@@ -158,6 +220,26 @@ fn positive_binary_decomposition(value: f64) -> (f64, i32) {
             Err(_) => return (f64::NAN, 0),
         };
         (f64::from_bits((1023_u64 << 52) | fraction), factor_exponent)
+    }
+}
+
+fn binary_power(exponent: i32) -> f64 {
+    if exponent < -1074 {
+        return 0.0;
+    }
+    if exponent < -1022 {
+        let Ok(fraction_bit) = u32::try_from(exponent + 1074) else {
+            return 0.0;
+        };
+        return f64::from_bits(1_u64 << fraction_bit);
+    }
+    let Ok(stored_exponent) = u64::try_from(exponent + 1023) else {
+        return f64::INFINITY;
+    };
+    if stored_exponent >= 0x7ff {
+        f64::INFINITY
+    } else {
+        f64::from_bits(stored_exponent << 52)
     }
 }
 

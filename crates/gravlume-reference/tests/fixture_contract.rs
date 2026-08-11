@@ -41,22 +41,6 @@ fn fixture_envelope_is_strict_and_size_bounded() {
 }
 
 #[test]
-fn observation_fixture_rejects_events_outside_the_v1_profile() {
-    for source in [
-        DEFAULT_OBSERVATION.replace("escape_radius_m = \"200\"", "escape_radius_m = \"123\""),
-        DEFAULT_OBSERVATION.replace(
-            "singularity_guard_d_over_m4 = \"9.094947017729282379150390625e-13\"",
-            "singularity_guard_d_over_m4 = \"1e-12\"",
-        ),
-    ] {
-        assert!(matches!(
-            FixtureDocument::parse_toml(&source),
-            Err(FixtureError::InconsistentEventEnvelope)
-        ));
-    }
-}
-
-#[test]
 fn observation_fixture_rejects_fixed_v1_profile_drift() {
     let mutations = [
         (
@@ -118,6 +102,16 @@ fn observation_fixture_rejects_fixed_v1_profile_drift() {
             "default_subpixel = [\"0.5\", \"0.5\"]",
             "default_subpixel = [\"0.25\", \"0.5\"]",
             "viewport.default_subpixel",
+        ),
+        (
+            "escape_radius_m = \"200\"",
+            "escape_radius_m = \"123\"",
+            "events.escape_radius_m",
+        ),
+        (
+            "singularity_guard_d_over_m4 = \"9.094947017729282379150390625e-13\"",
+            "singularity_guard_d_over_m4 = \"9.096e-13\"",
+            "events.singularity_guard_d_over_m4",
         ),
         (
             "radius_abs_m = \"2e-13\"",
@@ -301,6 +295,10 @@ fn regular_schwarzschild_fixture_matches_the_independent_observables() {
     }));
     assert!(fixture.expected().accepts(&outcome));
     assert!(outcome.diagnostics().maximum_null_residual() < 5.0e-9);
+    let diagnostics = outcome.diagnostics();
+    let integration_and_terminal_evaluations =
+        2 + 6 * (diagnostics.accepted_steps() + diagnostics.rejected_steps());
+    assert!(diagnostics.rhs_evaluations() > integration_and_terminal_evaluations);
 }
 
 #[test]
