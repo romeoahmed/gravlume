@@ -1,6 +1,6 @@
-use std::sync::Arc;
-
-use gravlume_domain::{InitialViewRay, Observation, ValidationReport, ViewportSample};
+use gravlume_domain::{
+    InitialViewRay, KerrNewmanSpacetime, Observation, ValidationReport, ViewportSample,
+};
 
 use crate::{
     AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, ReferenceTracer,
@@ -10,7 +10,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct ReferenceRequest {
     input_id: TraceInputId,
-    observation: Arc<Observation>,
+    spacetime: KerrNewmanSpacetime,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
 }
@@ -23,14 +23,14 @@ impl ReferenceRequest {
     /// Rejects a sample that is invalid for the request observation's projection.
     pub fn new(
         input_id: TraceInputId,
-        observation: Arc<Observation>,
+        observation: &Observation,
         sample: ViewportSample,
         policy: ReferencePolicy,
     ) -> Result<Self, ValidationReport> {
         let initial_ray = observation.initial_ray(sample)?;
         Ok(Self {
             input_id,
-            observation,
+            spacetime: *observation.scene().spacetime(),
             initial_ray,
             policy,
         })
@@ -60,14 +60,11 @@ impl ReferenceInstrument {
     ) -> Result<ReferenceOutcome, ReferenceRuntimeError> {
         let ReferenceRequest {
             input_id,
-            observation,
+            spacetime,
             initial_ray,
             policy,
         } = request;
-        let spacetime = *observation.scene().spacetime();
-        if spacetime.mass_m().to_bits() != 1.0_f64.to_bits()
-            || (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON
-        {
+        if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
             return Err(ReferenceRuntimeError::NonNormalizedReferenceInput);
         }
         let tracer = ReferenceTracer::new(

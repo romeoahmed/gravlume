@@ -1,4 +1,4 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
 use gravlume_reference::{
     AffineDirection, ComparisonError, CriticalSide, FixtureDocument, FixtureError,
@@ -427,14 +427,14 @@ fn dedicated_rayon_pool_preserves_input_order() {
 fn observation_interface_traces_backward_without_flipping_photon_time_orientation() {
     let fixture = observation_fixture(DEFAULT_OBSERVATION);
     let input_id = fixture.input_id().clone();
-    let observation = Arc::new(fixture.observation().clone());
+    let observation = fixture.observation();
     let sample = observation
         .projection()
         .sample(0, 0, 0.5, 0.5)
         .expect("corner sample is valid");
     let regular_request = ReferenceRequest::new(
         input_id.clone(),
-        Arc::clone(&observation),
+        observation,
         sample,
         ReferencePolicy::regular_v1(),
     )
