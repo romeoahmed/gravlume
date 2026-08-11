@@ -216,7 +216,7 @@ fn positive_binary_decomposition(value: f64) -> (f64, i32) {
     }
 }
 
-fn binary_power(exponent: i32) -> f64 {
+pub fn binary_power(exponent: i32) -> f64 {
     if exponent < -1074 {
         return 0.0;
     }
