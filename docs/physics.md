@@ -73,7 +73,7 @@ u=
 \partial_zr=\frac{z r(r^2+a^2)}{r^4+a^2z^2}.
 \]
 
-定义域排除 ring singularity $r=0,z=0,x^2+y^2=a^2$。Analytic-Extension View 若需要 signed $r$，必须使用另一显式 chart/state；默认 radius 函数不暗含符号分支。
+定义域排除 ring singularity $r=0,z=0,x^2+y^2=a^2$。默认 non-negative-$r$ 单叶实现还把 $r=0,z=0,x^2+y^2<a^2$ 作为显式 `ChartBoundary`，不把 branch disk 误报成物理 ring singularity。Analytic-Extension View 若需要 signed $r$，必须使用另一显式 chart/state；默认 radius 函数不暗含符号分支。
 
 ### 2.2 Kerr–Schild null covector
 

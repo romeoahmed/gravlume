@@ -48,6 +48,8 @@ pub enum GeometryError {
     NonFinite,
     #[error("the Kerr-Schild radius is undefined at the ring singularity")]
     RingSingularity,
+    #[error("the non-negative Kerr-Schild chart is undefined on its r = 0 branch disk")]
+    ChartBoundary,
     #[error("a Kerr-Schild denominator is non-positive or non-finite")]
     InvalidDenominator,
 }
@@ -377,8 +379,11 @@ impl KerrNewmanSpacetime {
             }
             2.0 * spin_squared * z * z / denominator
         };
-        if radius_squared <= 0.0 || !radius_squared.is_finite() {
-            return Err(GeometryError::RingSingularity);
+        if !radius_squared.is_finite() {
+            return Err(GeometryError::InvalidDenominator);
+        }
+        if radius_squared <= 0.0 {
+            return Err(classify_zero_radius(b, radius_squared_3d, spin_squared));
         }
         let radius = radius_squared.sqrt();
         let radius_fourth = radius_squared * radius_squared;
@@ -450,6 +455,15 @@ impl KerrNewmanSpacetime {
             singularity_measure,
         };
         validate_geometry(geometry)
+    }
+}
+
+fn classify_zero_radius(b: f64, radius_squared_3d: f64, spin_squared: f64) -> GeometryError {
+    let ring_scale = radius_squared_3d.max(spin_squared).max(1.0);
+    if b.abs() <= 16.0 * f64::EPSILON * ring_scale {
+        GeometryError::RingSingularity
+    } else {
+        GeometryError::ChartBoundary
     }
 }
 

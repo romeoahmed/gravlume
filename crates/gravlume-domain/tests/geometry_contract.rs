@@ -1,4 +1,4 @@
-use gravlume_domain::{KerrNewmanSpacetime, ParameterState, SpacetimeEvent};
+use gravlume_domain::{GeometryError, KerrNewmanSpacetime, ParameterState, SpacetimeEvent};
 
 #[test]
 fn parameter_state_and_horizon_are_classified_without_clamping() {
@@ -55,5 +55,18 @@ fn schwarzschild_limit_is_spherical_and_stationary() {
             + 9.0 / 13.0)
             .abs()
             < 2.0e-15
+    );
+}
+
+#[test]
+fn ring_singularity_and_nonnegative_radius_branch_disk_are_distinct_failures() {
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("parameters are valid");
+    let ring = SpacetimeEvent::from_txyz([0.0, 0.8, 0.0, 0.0]).expect("event is finite");
+    let branch_disk = SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, 0.0]).expect("event is finite");
+
+    assert_eq!(spacetime.radius(ring), Err(GeometryError::RingSingularity));
+    assert_eq!(
+        spacetime.radius(branch_disk),
+        Err(GeometryError::ChartBoundary)
     );
 }
