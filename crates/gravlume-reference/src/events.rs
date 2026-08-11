@@ -1,7 +1,6 @@
 use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
 
-pub const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M: f64 = 200.0;
-pub const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_DECIMAL: &str = "200";
+const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_M: f64 = 200.0;
 
 pub const fn escape_event_is_armed(event_value: f64, arming_band_m: f64) -> bool {
     event_value < -arming_band_m

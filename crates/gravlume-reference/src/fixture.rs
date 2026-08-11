@@ -8,33 +8,20 @@ use serde::{Deserialize, Deserializer, de};
 
 use crate::{
     AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, Termination,
-    TraceInputId, TraceRequest,
-    events::{OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_DECIMAL, escape_event_is_armed},
-    policy::V1_SINGULARITY_GUARD_D_OVER_M4_DECIMAL,
+    TraceInputId, TraceRequest, events::escape_event_is_armed,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
 const V1_PRODUCER_PRECISION_DIGITS: u32 = 80;
 const V1_GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
-const V1_OBSERVATION_ID: &str = "kerr-exterior-observation-v1";
+const V1_OBSERVATION: &str =
+    include_str!("../../../tests/fixtures/v1/default-kerr-observation.toml");
 const V1_SCATTER_B6: &str =
     include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
 const V1_SCATTER_NEAR_CRITICAL: &str =
     include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-near-critical.toml");
 const V1_CAPTURE_NEAR_CRITICAL: &str =
     include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
-const V1_OBSERVER_POLAR_ANGLE_DECIMAL: &str =
-    "1.0471975511965977461542144610931676280657231331250352736583148641026054687620697";
-const V1_VERTICAL_FOV_DECIMAL: &str =
-    "0.78539816339744830961566084581987572104929234984377645524373614807695410157155225";
-const V1_OUTER_HORIZON_RADIUS_DECIMAL: &str = "1.6";
-const V1_OBSERVER_CARTESIAN_XYZ_DECIMALS: [&str; 3] = [
-    "25.980762113533159402911695122588085504142078807155709420837104691778995253632001",
-    "0.69282032302755091741097853660234894677712210152415225122232279178077320676352001",
-    "15.0",
-];
-const V1_OBSERVER_G_TT_DECIMAL: &str =
-    "-0.93334518307856381087806612157838606469960895840739424102381798791325986491290437";
 
 #[derive(Clone, Debug)]
 pub enum FixtureDocument {
@@ -250,7 +237,7 @@ enum RawFixtureDocument {
     Geodesic(RawGeodesicFixture),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObservationFixture {
     schema_version: u32,
@@ -306,7 +293,7 @@ struct RawSpacetime {
     charge_m: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObserver {
     coordinate_time_m: DecimalString,
@@ -321,7 +308,7 @@ struct RawObserver {
     measured_frequency: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawViewport {
     #[serde(rename = "projection")]
@@ -334,14 +321,14 @@ struct RawViewport {
     default_subpixel: [DecimalString; 2],
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObservationEvents {
     escape_radius_m: DecimalString,
     singularity_guard_d_over_m4: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObservationExpected {
     parameter_state: ParameterStateName,
@@ -350,7 +337,7 @@ struct RawObservationExpected {
     observer_g_tt: DecimalString,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObservationTolerance {
     radius_abs_m: DecimalString,
@@ -487,7 +474,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
 
     fn try_from(raw: RawGeodesicFixture) -> Result<Self, Self::Error> {
         validate_envelope(raw.schema_version, &raw.profile)?;
-        require_decimal_source(&raw.spacetime.mass_m, "1", "spacetime.mass_m")?;
+        require_profile(raw.spacetime.mass_m.source == "1", "spacetime.mass_m")?;
         validate_geodesic_evidence(&raw)?;
         let spacetime = KerrNewmanSpacetime::new(
             raw.spacetime.mass_m.value,
@@ -574,98 +561,13 @@ fn validate_geodesic_v1_profile(raw: &RawGeodesicFixture) -> Result<(), FixtureE
 }
 
 fn validate_observation_v1_profile(raw: &RawObservationFixture) -> Result<(), FixtureError> {
-    require_profile(raw.id == V1_OBSERVATION_ID, "id")?;
-    require_profile(
-        matches!(raw.evidence, Evidence::AlgebraicAndNumeric),
-        "evidence",
-    )?;
-    require_profile(
-        raw.producer.precision_digits == V1_PRODUCER_PRECISION_DIGITS
-            && !raw.producer.method.trim().is_empty()
-            && raw.producer.cross_form_azimuth_disagreement.is_none(),
-        "producer",
-    )?;
-    require_decimal_source(&raw.spacetime.mass_m, "1", "spacetime.mass_m")?;
-    require_decimal_source(&raw.spacetime.spin_m, "0.8", "spacetime.spin_m")?;
-    require_decimal_source(&raw.spacetime.charge_m, "0", "spacetime.charge_m")?;
-    require_decimal_source(
-        &raw.observer.coordinate_time_m,
-        "0",
-        "observer.coordinate_time_m",
-    )?;
-    require_decimal_source(
-        &raw.observer.oblate_radius_m,
-        "30",
-        "observer.oblate_radius_m",
-    )?;
-    require_decimal_source(
-        &raw.observer.polar_angle_rad,
-        V1_OBSERVER_POLAR_ANGLE_DECIMAL,
-        "observer.polar_angle_rad",
-    )?;
-    require_decimal_source(&raw.observer.azimuth_rad, "0", "observer.azimuth_rad")?;
-    require_decimal_source_array(
-        &raw.observer.target_txyz_m,
-        ["0"; 4],
-        "observer.target_txyz_m",
-    )?;
-    require_decimal_source(
-        &raw.observer.measured_frequency,
-        "1",
-        "observer.measured_frequency",
-    )?;
-    require_profile(raw.viewport.width == 1280, "viewport.width")?;
-    require_profile(raw.viewport.height == 720, "viewport.height")?;
-    require_decimal_source(
-        &raw.viewport.vertical_fov_rad,
-        V1_VERTICAL_FOV_DECIMAL,
-        "viewport.vertical_fov_rad",
-    )?;
-    require_decimal_source_array(
-        &raw.viewport.default_subpixel,
-        ["0.5", "0.5"],
-        "viewport.default_subpixel",
-    )?;
-    require_decimal_source(
-        &raw.events.escape_radius_m,
-        OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_DECIMAL,
-        "events.escape_radius_m",
-    )?;
-    require_decimal_source(
-        &raw.events.singularity_guard_d_over_m4,
-        V1_SINGULARITY_GUARD_D_OVER_M4_DECIMAL,
-        "events.singularity_guard_d_over_m4",
-    )?;
-    require_decimal_source(
-        &raw.tolerance.radius_abs_m,
-        "2e-13",
-        "tolerance.radius_abs_m",
-    )?;
-    require_decimal_source(
-        &raw.tolerance.frame_gram_max_abs,
-        "2e-12",
-        "tolerance.frame_gram_max_abs",
-    )?;
-    require_decimal_source(
-        &raw.tolerance.initial_null_normalized_abs,
-        "2e-12",
-        "tolerance.initial_null_normalized_abs",
-    )?;
-    require_decimal_source(
-        &raw.expected.outer_horizon_radius_m,
-        V1_OUTER_HORIZON_RADIUS_DECIMAL,
-        "expected.outer_horizon_radius_m",
-    )?;
-    require_decimal_source_array(
-        &raw.expected.observer_cartesian_xyz_m,
-        V1_OBSERVER_CARTESIAN_XYZ_DECIMALS,
-        "expected.observer_cartesian_xyz_m",
-    )?;
-    require_decimal_source(
-        &raw.expected.observer_g_tt,
-        V1_OBSERVER_G_TT_DECIMAL,
-        "expected.observer_g_tt",
-    )
+    let canonical: RawFixtureDocument = toml::from_str(V1_OBSERVATION)?;
+    let RawFixtureDocument::Observation(canonical) = canonical else {
+        return Err(FixtureError::PresetMismatch {
+            field: "observation artifact",
+        });
+    };
+    require_profile(raw == &canonical, "observation artifact")
 }
 
 fn validate_geodesic_evidence(raw: &RawGeodesicFixture) -> Result<(), FixtureError> {
@@ -686,28 +588,6 @@ fn validate_geodesic_evidence(raw: &RawGeodesicFixture) -> Result<(), FixtureErr
         ));
     }
     Ok(())
-}
-
-fn require_decimal_source(
-    actual: &DecimalString,
-    expected: &str,
-    field: &'static str,
-) -> Result<(), FixtureError> {
-    require_profile(actual.source == expected, field)
-}
-
-fn require_decimal_source_array<const N: usize>(
-    actual: &[DecimalString; N],
-    expected: [&str; N],
-    field: &'static str,
-) -> Result<(), FixtureError> {
-    require_profile(
-        actual
-            .iter()
-            .zip(expected)
-            .all(|(actual, expected)| actual.source == expected),
-        field,
-    )
 }
 
 const fn require_profile(matches: bool, field: &'static str) -> Result<(), FixtureError> {
