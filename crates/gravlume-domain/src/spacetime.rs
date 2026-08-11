@@ -336,13 +336,30 @@ impl KerrNewmanSpacetime {
         left: FourVector,
         right: FourVector,
     ) -> Result<f64, GeometryError> {
+        self.metric_dot_and_term_norm(event, left, right)
+            .map(|(contraction, _)| contraction)
+    }
+
+    pub(super) fn metric_dot_and_term_norm(
+        self,
+        event: SpacetimeEvent,
+        left: FourVector,
+        right: FourVector,
+    ) -> Result<(f64, f64), GeometryError> {
         let metric = metric_covariant(self.geometry(event)?);
         let left = left.to_array();
         let right = right.to_array();
-        Ok((0..4)
+        let result = (0..4)
             .flat_map(|row| (0..4).map(move |column| (row, column)))
             .map(|(row, column)| metric[row][column] * left[row] * right[column])
-            .sum())
+            .fold((0.0, 0.0_f64), |(sum, norm), term| {
+                (sum + term, norm + term.abs())
+            });
+        if result.0.is_finite() && result.1.is_finite() {
+            Ok(result)
+        } else {
+            Err(GeometryError::NonFinite)
+        }
     }
 
     pub(super) fn metric_covariant_at(

@@ -369,7 +369,9 @@ fn gram_residual(
     let mut residual = 0.0_f64;
     for row in 0..4 {
         for column in 0..4 {
-            let Ok(actual) = spacetime.metric_dot(event, basis[row], basis[column]) else {
+            let Ok((actual, term_norm)) =
+                spacetime.metric_dot_and_term_norm(event, basis[row], basis[column])
+            else {
                 return f64::INFINITY;
             };
             let expected = if row == column {
@@ -377,7 +379,7 @@ fn gram_residual(
             } else {
                 0.0
             };
-            residual = residual.max((actual - expected).abs());
+            residual = residual.max((actual - expected).abs() / term_norm.max(1.0));
         }
     }
     residual
