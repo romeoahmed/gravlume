@@ -67,6 +67,16 @@ pub struct ValidationReport {
 }
 
 impl ValidationReport {
+    pub(super) fn from_error(
+        code: ValidationIssueCode,
+        field_path: impl Into<String>,
+        explanation: impl Into<String>,
+    ) -> Self {
+        Self {
+            issues: vec![ValidationIssue::error(code, field_path, explanation)],
+        }
+    }
+
     pub(super) fn push(&mut self, issue: ValidationIssue) {
         self.issues.push(issue);
     }
