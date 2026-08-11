@@ -5,7 +5,7 @@ use glam::DVec3;
 use crate::{
     GeodesicState, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
     math::{
-        FourVector, binary_power, normalized_inner_product_residual,
+        FourVector, binary_power, binary64_magnitude, normalized_inner_product_residual,
         normalized_quadratic_form_residual, positive_product,
     },
     validation::validate_finite,
@@ -801,20 +801,6 @@ impl PartialOrd for ExactBinary {
 impl Ord for ExactBinary {
     fn cmp(&self, other: &Self) -> Ordering {
         self.limbs.iter().rev().cmp(other.limbs.iter().rev())
-    }
-}
-
-fn binary64_magnitude(value: f64) -> (u64, i32) {
-    let bits = value.to_bits();
-    let stored_exponent = (bits >> 52) & 0x7ff;
-    let fraction = bits & ((1_u64 << 52) - 1);
-    if stored_exponent == 0 {
-        (fraction, -1074)
-    } else {
-        (
-            (1_u64 << 52) | fraction,
-            i32::try_from(stored_exponent).unwrap_or_default() - 1075,
-        )
     }
 }
 

@@ -194,23 +194,28 @@ pub fn positive_product<const N: usize>(factors: [f64; N]) -> f64 {
 }
 
 fn positive_binary_decomposition(value: f64) -> (f64, i32) {
+    let (significand, exponent) = binary64_magnitude(value);
+    let Ok(highest_bit) = i32::try_from(significand.ilog2()) else {
+        return (f64::NAN, 0);
+    };
+    let normalized_exponent = exponent + highest_bit;
+    (
+        value / binary_power(normalized_exponent),
+        normalized_exponent,
+    )
+}
+
+pub fn binary64_magnitude(value: f64) -> (u64, i32) {
     let bits = value.to_bits();
     let stored_exponent = (bits >> 52) & 0x7ff;
     let fraction = bits & ((1_u64 << 52) - 1);
     if stored_exponent == 0 {
-        let highest_fraction_bit = fraction.ilog2();
-        let power_of_two = f64::from_bits(1_u64 << highest_fraction_bit);
-        let factor_exponent = match i32::try_from(highest_fraction_bit) {
-            Ok(bit) => bit - 1074,
-            Err(_) => return (f64::NAN, 0),
-        };
-        (value / power_of_two, factor_exponent)
+        (fraction, -1074)
     } else {
-        let factor_exponent = match i32::try_from(stored_exponent) {
-            Ok(stored) => stored - 1023,
-            Err(_) => return (f64::NAN, 0),
-        };
-        (f64::from_bits((1023_u64 << 52) | fraction), factor_exponent)
+        (
+            (1_u64 << 52) | fraction,
+            i32::try_from(stored_exponent).unwrap_or_default() - 1075,
+        )
     }
 }
 
