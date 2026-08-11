@@ -40,19 +40,14 @@ impl ReferenceTracer {
         })
     }
 
-    /// Creates a tracer from a validated geodesic fixture.
-    ///
-    /// # Errors
-    ///
-    /// Returns a configuration error if the fixture is not normalized or its events are invalid.
-    pub fn from_fixture(
-        fixture: &GeodesicFixture,
-        policy: ReferencePolicy,
-    ) -> Result<Self, ReferenceConfigurationError> {
-        let events = fixture
-            .event_configuration()
-            .map_err(|_| ReferenceConfigurationError::InvalidEvents)?;
-        Self::new(fixture.spacetime(), policy, events)
+    /// Creates a tracer from a fixture whose normalization and events were validated while parsing.
+    #[must_use]
+    pub const fn from_fixture(fixture: &GeodesicFixture, policy: ReferencePolicy) -> Self {
+        Self {
+            spacetime: fixture.spacetime(),
+            policy,
+            events: fixture.event_configuration(),
+        }
     }
 
     #[must_use]
@@ -65,8 +60,6 @@ impl ReferenceTracer {
 pub enum ReferenceConfigurationError {
     #[error("reference-v1 inputs must be normalized to M = 1")]
     NonNormalizedMass,
-    #[error("fixture event configuration is invalid")]
-    InvalidEvents,
 }
 
 struct TraceExecution<'tracer> {

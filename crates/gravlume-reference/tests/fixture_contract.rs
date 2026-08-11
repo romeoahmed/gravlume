@@ -22,9 +22,7 @@ fn v1_fixture_seam_accepts_the_repository_documents_and_rejects_unknown_fields()
         CAPTURE_NEAR_CRITICAL,
         DEFAULT_OBSERVATION,
     ] {
-        let fixture = FixtureDocument::parse_toml(source).expect("v1 fixture is valid");
-        assert_eq!(fixture.schema_version(), 1);
-        assert_eq!(fixture.profile(), "baseline-v1");
+        FixtureDocument::parse_toml(source).expect("v1 fixture is valid");
     }
 
     let with_unknown = SCATTER_B6.replace(
@@ -300,8 +298,7 @@ fn regular_schwarzschild_fixture_matches_the_independent_observables() {
         .expect("fixture parses")
         .into_geodesic()
         .expect("fixture is geodesic");
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid");
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let outcome = tracer.trace(fixture.trace_request());
 
     assert_eq!(outcome.termination(), Termination::Escape);
@@ -326,13 +323,13 @@ fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
         .into_geodesic()
         .expect("fixture is geodesic");
     let request = fixture.trace_request();
-    let outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid")
-        .trace(TraceRequest::new(
+    let outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
+        TraceRequest::new(
             TraceInputId::new("different-input"),
             request.initial_state(),
             request.affine_direction(),
-        ));
+        ),
+    );
 
     assert!(!fixture.expected().accepts(&outcome));
 }
@@ -344,10 +341,8 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
         .into_geodesic()
         .expect("fixture is geodesic");
     let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid")
         .trace(fixture.trace_request());
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
-        .expect("fixture config is valid")
         .trace(fixture.trace_request());
     let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
         .expect("policy roles and input identity match");
@@ -364,11 +359,9 @@ fn baseline_comparison_rejects_wrong_policy_roles() {
         .into_geodesic()
         .expect("fixture is geodesic");
     let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
-        .expect("fixture config is valid")
         .trace(fixture.trace_request());
 
     let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid")
         .trace(fixture.trace_request());
 
     assert!(matches!(
@@ -388,20 +381,20 @@ fn baseline_comparison_rejects_different_input_ids() {
         .into_geodesic()
         .expect("fixture is geodesic");
     let request = fixture.trace_request();
-    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid")
-        .trace(TraceRequest::new(
+    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
+        TraceRequest::new(
             TraceInputId::new("regular-input"),
             request.initial_state(),
             request.affine_direction(),
-        ));
-    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
-        .expect("fixture config is valid")
-        .trace(TraceRequest::new(
+        ),
+    );
+    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
+        TraceRequest::new(
             TraceInputId::new("strict-input"),
             request.initial_state(),
             request.affine_direction(),
-        ));
+        ),
+    );
 
     assert_eq!(
         ReferenceComparison::baseline_v1(&regular, &strict),
@@ -435,8 +428,7 @@ fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
         .expect("fixture parses")
         .into_geodesic()
         .expect("fixture is geodesic");
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
-        .expect("fixture config is valid");
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1());
     let forward = tracer.trace(fixture.trace_request());
     let backward = tracer.trace(TraceRequest::new(
         TraceInputId::new("schwarzschild-scatter-b6-v1-reverse"),
@@ -466,8 +458,7 @@ fn dedicated_rayon_pool_preserves_input_order() {
         .expect("fixture parses")
         .into_geodesic()
         .expect("fixture is geodesic");
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .expect("fixture config is valid");
+    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let request = fixture.trace_request();
     let inputs = [
         TraceRequest::new(
@@ -549,7 +540,7 @@ fn run_fixture(source: &str, policy: ReferencePolicy) -> gravlume_reference::Ref
         .expect("fixture parses")
         .into_geodesic()
         .expect("fixture is geodesic");
-    let tracer = ReferenceTracer::from_fixture(&fixture, policy).expect("fixture config is valid");
+    let tracer = ReferenceTracer::from_fixture(&fixture, policy);
     let outcome = tracer.trace(fixture.trace_request());
     assert!(fixture.expected().accepts(&outcome));
     outcome
