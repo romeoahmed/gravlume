@@ -5,6 +5,36 @@ pub struct TestGpu {
     pub(crate) queue: wgpu::Queue,
 }
 
+impl TestGpu {
+    pub fn read_buffer(&self, buffer: &wgpu::Buffer, submission: wgpu::SubmissionIndex) -> Vec<u8> {
+        // map_async callbacks are driven by polling; waiting for the producing submission makes
+        // the contract deterministic without a wall-clock timeout.
+        // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html#method.map_async
+        let (sender, receiver) = mpsc::sync_channel(1);
+        buffer.map_async(wgpu::MapMode::Read, .., move |result| {
+            let _send_result = sender.send(result);
+        });
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("native GPU submission completes");
+        receiver
+            .recv()
+            .expect("buffer map callback runs")
+            .expect("buffer maps for readback");
+
+        let mapped = buffer
+            .get_mapped_range(..)
+            .expect("mapped buffer range is available");
+        let bytes = mapped.to_vec();
+        drop(mapped);
+        buffer.unmap();
+        bytes
+    }
+}
+
 pub fn native_gpu() -> &'static TestGpu {
     static GPU: OnceLock<TestGpu> = OnceLock::new();
     GPU.get_or_init(|| pollster::block_on(request_native_gpu()))
@@ -48,33 +78,4 @@ async fn request_native_gpu() -> TestGpu {
         .expect("native contract test device request succeeds");
 
     TestGpu { device, queue }
-}
-
-pub fn read_buffer(buffer: &wgpu::Buffer, submission: wgpu::SubmissionIndex) -> Vec<u8> {
-    // map_async callbacks are driven by polling; waiting for the producing submission makes the
-    // contract deterministic without a wall-clock timeout.
-    // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html#method.map_async
-    let gpu = native_gpu();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    buffer.map_async(wgpu::MapMode::Read, .., move |result| {
-        let _send_result = sender.send(result);
-    });
-    gpu.device
-        .poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: None,
-        })
-        .expect("native GPU submission completes");
-    receiver
-        .recv()
-        .expect("buffer map callback runs")
-        .expect("buffer maps for readback");
-
-    let mapped = buffer
-        .get_mapped_range(..)
-        .expect("mapped buffer range is available");
-    let bytes = mapped.to_vec();
-    drop(mapped);
-    buffer.unmap();
-    bytes
 }

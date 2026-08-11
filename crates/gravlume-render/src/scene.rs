@@ -227,7 +227,7 @@ fn render_scene(extent: RenderExtent) -> Vec<u8> {
         padded_bytes_per_row,
     );
     let submission = gpu.queue.submit([commands]);
-    let mapped = crate::test_gpu::read_buffer(&readback, submission);
+    let mapped = gpu.read_buffer(&readback, submission);
     remove_row_padding(
         &mapped,
         extent,

@@ -364,7 +364,7 @@ mod tests {
             },
         );
         let submission = gpu.queue.submit([encoder.finish()]);
-        let mapped = crate::test_gpu::read_buffer(&readback, submission);
+        let mapped = gpu.read_buffer(&readback, submission);
         mapped[..WIDTH as usize * 4].to_vec()
     }
 }
