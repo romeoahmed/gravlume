@@ -3,6 +3,8 @@ use std::{
     sync::{Arc, mpsc},
 };
 
+use crate::{CapabilityError, TimingError};
+
 #[derive(Debug, thiserror::Error)]
 pub enum RenderInitError {
     #[error("failed to create the native presentation surface: {0}")]
@@ -12,7 +14,7 @@ pub enum RenderInitError {
     #[error("adapter {adapter:?} does not satisfy Phase 0: {reason}")]
     UnsupportedAdapter { adapter: String, reason: String },
     #[error("surface does not satisfy the SDR presentation contract: {0}")]
-    SurfaceCapabilities(String),
+    SurfaceCapabilities(#[from] CapabilityError),
     #[error("failed to create the Phase 0 device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
     #[error("failed to create {stage}: {source}")]
@@ -28,13 +30,13 @@ pub enum RenderInitError {
 #[derive(Debug, thiserror::Error)]
 pub enum RenderRuntimeError {
     #[error("GPU timing/readback failed: {0}")]
-    Timing(String),
+    Timing(#[from] TimingError),
     #[error("non-blocking GPU poll failed: {0}")]
     Poll(#[from] wgpu::PollError),
     #[error("failed to recreate a lost surface: {0}")]
     RecreateSurface(#[from] wgpu::CreateSurfaceError),
     #[error("recovered surface does not satisfy the SDR presentation contract: {0}")]
-    SurfaceCapabilities(String),
+    SurfaceCapabilities(#[from] CapabilityError),
     #[error("nonzero extent has no matching frame-resource bundle")]
     MissingFrameResources,
 }
@@ -50,7 +52,7 @@ pub enum ResizeError {
         max_texture_dimension_2d: u32,
     },
     #[error("surface does not satisfy the SDR presentation contract: {0}")]
-    SurfaceCapabilities(String),
+    SurfaceCapabilities(#[from] CapabilityError),
     #[error("failed to {stage}: {source}")]
     GpuResource {
         stage: &'static str,
@@ -86,7 +88,8 @@ pub enum DeviceEventKind {
     Lost,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{kind:?}: {message}")]
 pub struct DeviceEvent {
     kind: DeviceEventKind,
     message: String,
@@ -125,8 +128,8 @@ impl DeviceEvent {
     }
 }
 
-impl From<ResizeError> for DeviceEvent {
-    fn from(error: ResizeError) -> Self {
+impl From<&ResizeError> for DeviceEvent {
+    fn from(error: &ResizeError) -> Self {
         Self::new(error.kind(), error.to_string())
     }
 }

@@ -387,6 +387,8 @@ winit event thread 唯一拥有 surface/configure/submit 生命周期。worker �
 - `FatalRuntimeError`：OOM、不可恢复 device loss、shader/ABI contract、内部 invariant；
 - `OracleError`：root/turning classification、non-convergence、取消、资源上限。
 
+desktop `RunError` 保留 winit/render/resize/device 的 typed source chain；不得在 crate seam 提前 `to_string()`，只有展示与日志边界才格式化。
+
 正常 surface flow 不 panic。device 初始化后安装 uncaptured-error 与 device-lost callback；callback 只发 typed event 回 event thread。shader/layout/pipeline/大 allocation 用 error scope，并在同一线程成对 push/pop。
 
 ### 10.3 可观测性

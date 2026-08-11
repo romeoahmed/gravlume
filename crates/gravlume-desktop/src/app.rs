@@ -4,10 +4,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gravlume_render::{DeviceEvent, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics};
+use gravlume_render::{
+    DeviceEvent, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics, RenderInitError,
+    RenderRuntimeError, ResizeError,
+};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
+    error::{EventLoopError, OsError},
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
@@ -22,15 +26,17 @@ const SMOKE_ONCE_ENV: &str = "GRAVLUME_SMOKE_ONCE";
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
     #[error("failed to create the desktop event loop: {0}")]
-    EventLoop(String),
+    EventLoop(#[from] EventLoopError),
     #[error("failed to create the native window: {0}")]
-    Window(String),
+    Window(#[from] OsError),
     #[error("failed to initialize the GPU renderer: {0}")]
-    RenderInit(String),
+    RenderInit(#[from] RenderInitError),
     #[error("rendering failed: {0}")]
-    RenderRuntime(String),
+    RenderRuntime(#[from] RenderRuntimeError),
+    #[error("fatal resize failure: {0}")]
+    Resize(#[from] ResizeError),
     #[error("fatal GPU event: {0}")]
-    Device(String),
+    Device(#[from] DeviceEvent),
 }
 
 /// Runs the native Gravlume application until the event loop exits.
@@ -40,13 +46,9 @@ pub enum RunError {
 /// Returns an error when event-loop, window, renderer, or device initialization/runtime fails.
 pub fn run(launch: Launch) -> Result<(), RunError> {
     let mut builder = EventLoop::<Instant>::with_user_event();
-    let event_loop = builder
-        .build()
-        .map_err(|error| RunError::EventLoop(error.to_string()))?;
+    let event_loop = builder.build()?;
     let mut app = DesktopApp::new(launch, event_loop.create_proxy());
-    event_loop
-        .run_app(&mut app)
-        .map_err(|error| RunError::EventLoop(error.to_string()))?;
+    event_loop.run_app(&mut app)?;
     app.fatal_error.take().map_or(Ok(()), Err)
 }
 
@@ -99,11 +101,7 @@ impl DesktopApp {
                     window_preferences.width(),
                     window_preferences.height(),
                 ));
-            let window = Arc::new(
-                event_loop
-                    .create_window(attributes)
-                    .map_err(|error| RunError::Window(error.to_string()))?,
-            );
+            let window = Arc::new(event_loop.create_window(attributes)?);
             let egui = egui_winit::State::new(
                 self.egui_context.clone(),
                 egui::ViewportId::ROOT,
@@ -132,14 +130,11 @@ impl DesktopApp {
         };
 
         if let Some(renderer) = self.renderer.as_mut() {
-            renderer
-                .resume_surface()
-                .map_err(|error| RunError::RenderRuntime(error.to_string()))?;
+            renderer.resume_surface()?;
             window.request_redraw();
             return Ok(());
         }
-        let renderer = pollster::block_on(GpuEngine::new(window.clone()))
-            .map_err(|error| RunError::RenderInit(error.to_string()))?;
+        let renderer = pollster::block_on(GpuEngine::new(window.clone()))?;
         let diagnostics = renderer.diagnostics();
         tracing::info!(
             adapter = diagnostics.adapter_name(),
@@ -206,7 +201,7 @@ impl DesktopApp {
                 | FrameSkip::ZeroExtent
                 | FrameSkip::Suspended,
             )) => {}
-            Err(error) => self.fail(event_loop, RunError::RenderRuntime(error.to_string())),
+            Err(error) => self.fail(event_loop, error.into()),
         }
     }
 
@@ -214,14 +209,13 @@ impl DesktopApp {
         let mut report_changed = false;
         for event in events {
             tracing::error!(kind = ?event.kind(), message = event.message(), "GPU device event");
-            let fatal_message = event.is_fatal().then(|| event.message().to_owned());
+            if event.is_fatal() {
+                self.fail(event_loop, event.into());
+                return;
+            }
             if self.last_device_event.as_ref() != Some(&event) {
                 self.last_device_event = Some(event);
                 report_changed = true;
-            }
-            if let Some(message) = fatal_message {
-                self.fail(event_loop, RunError::Device(message));
-                return;
             }
         }
         if report_changed {
@@ -240,15 +234,15 @@ impl DesktopApp {
                 }
             }
             Err(error) => {
-                let fatal_message = error.is_fatal().then(|| error.to_string());
-                let event = DeviceEvent::from(error);
+                let is_fatal = error.is_fatal();
+                let event = DeviceEvent::from(&error);
                 tracing::error!(kind = ?event.kind(), message = event.message(), width, height, "GPU resize rejected");
                 let report_changed = self.last_device_event.as_ref() != Some(&event);
                 if report_changed {
                     self.last_device_event = Some(event);
                 }
-                if let Some(message) = fatal_message {
-                    self.fail(event_loop, RunError::Device(message));
+                if is_fatal {
+                    self.fail(event_loop, error.into());
                 } else if report_changed {
                     self.request_redraw();
                 }
@@ -323,9 +317,7 @@ impl ApplicationHandler<Instant> for DesktopApp {
             }
             WindowEvent::RedrawRequested => self.draw_frame(event_loop),
             _ if response.consumed => {}
-            _ => {
-                // Observer controls arrive here once Phase 1 introduces an Observer Frame.
-            }
+            _ => {}
         }
     }
 
@@ -342,7 +334,7 @@ impl ApplicationHandler<Instant> for DesktopApp {
                 }
             }
             Some(Err(error)) => {
-                self.fail(event_loop, RunError::RenderRuntime(error.to_string()));
+                self.fail(event_loop, error.into());
                 return;
             }
             None => {}
