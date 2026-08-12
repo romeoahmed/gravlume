@@ -18,7 +18,7 @@
 
 **交付物**：validated Observation、Observer Event/Frame、Kerr–Schild `f64` DP5(4)、dense-output event localization、[验证合同](validation.md) fixture 和 comparison report。
 
-当前实现与适用域证据见 [Phase 1 实现与证据](phase-1.md)；未覆盖的 oracle 梯级不得因代码交付物存在而视为自动满足。
+当前实现与适用域证据见 [Reference 实现与证据](reference-implementation.md)；未覆盖的 oracle 梯级不得因代码交付物存在而视为自动满足。
 
 **退出条件**：
 

@@ -1,12 +1,14 @@
+use std::borrow::Cow;
+
 use gravlume_domain::{Observation, ValidationReport};
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
 
 use crate::extent::RenderExtent;
 
-pub const TRACE_SHADER: &str = include_str!("shaders/trace.wgsl");
+const TRACE_SHADER: &str = include_str!("shaders/trace.wgsl");
 #[cfg(test)]
-pub const TRACE_RECORD_SIZE: u64 = 48;
+const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
 pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
 
@@ -19,9 +21,9 @@ pub struct TraceUniforms {
     pub image_right: [f32; 4],
     pub image_up: [f32; 4],
     pub arrival: [f32; 4],
-    pub projection_policy: [f32; 4],
-    pub integration: [f32; 4],
-    pub viewport: [u32; 4],
+    pub projection: [f32; 4],
+    pub event_surfaces: [f32; 4],
+    pub step_policy: [f32; 4],
 }
 
 impl TraceUniforms {
@@ -48,7 +50,7 @@ impl TraceUniforms {
                     1.0,
                     spacetime.spin_m() / mass,
                     spacetime.charge_m() / mass,
-                    horizon,
+                    0.0,
                 ],
                 "spacetime",
             )?,
@@ -60,22 +62,20 @@ impl TraceUniforms {
             image_right: pack4(frame.image_right_txyz(), "image_right")?,
             image_up: pack4(frame.image_up_txyz(), "image_up")?,
             arrival: pack4(frame.arrival_direction_txyz(), "arrival")?,
-            projection_policy: pack4(
+            projection: pack4(
                 [
                     (projection.vertical_fov().radians() * 0.5).tan(),
-                    200.0,
-                    f64::from(f32::from_bits(0x2b80_0000)),
                     observer_frequency,
+                    0.5,
+                    0.5,
                 ],
-                "projection_policy",
+                "projection",
             )?,
-            integration: [0.01, 0.005, 0.5, INVARIANT_DRIFT_LIMIT],
-            viewport: [
-                projection.width().get(),
-                projection.height().get(),
-                2_048,
-                u32::from(spacetime.outer_horizon_radius().is_some()),
-            ],
+            event_surfaces: pack4(
+                [200.0, f64::from(f32::from_bits(0x2b80_0000)), horizon, 0.0],
+                "event_surfaces",
+            )?,
+            step_policy: [0.01, 0.005, 0.5, INVARIANT_DRIFT_LIMIT],
         })
     }
 }
@@ -97,14 +97,6 @@ pub enum TraceInputError {
     NotRepresentable { field: &'static str },
 }
 
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub struct TraceRecord {
-    pub direction_time: [f32; 4],
-    pub invariant_drift: [f32; 4],
-    pub metadata: [u32; 4],
-}
-
 pub struct TraceCompute {
     pipeline: wgpu::ComputePipeline,
     #[cfg(test)]
@@ -114,19 +106,22 @@ pub struct TraceCompute {
 }
 
 impl TraceCompute {
-    pub fn new(device: &wgpu::Device, observation: &Observation) -> Result<Self, TraceInputError> {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<Self, TraceInputError> {
         let uniforms = TraceUniforms::from_observation(observation)?;
         Ok(Self::from_uniforms(device, uniforms))
     }
 
     #[cfg(test)]
-    pub fn new_for_initial_rays(
+    pub(crate) fn for_initial_ray_capture(
         device: &wgpu::Device,
         observation: &Observation,
         subpixel: [f32; 2],
     ) -> Result<Self, TraceInputError> {
         let mut uniforms = TraceUniforms::from_observation(observation)?;
-        uniforms.integration[..2].copy_from_slice(&subpixel);
+        uniforms.projection[2..].copy_from_slice(&subpixel);
         Ok(Self::from_uniforms(device, uniforms))
     }
 
@@ -199,12 +194,12 @@ impl TraceCompute {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cartesian Kerr-Schild trace shader"),
-            source: wgpu::ShaderSource::Wgsl(TRACE_SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(trace_shader_source()),
         });
         let pipeline = create_pipeline(device, &pipeline_layout, &shader, "trace_scene");
         #[cfg(test)]
         let initial_ray_pipeline =
-            create_pipeline(device, &pipeline_layout, &shader, "initial_ray_contract");
+            create_pipeline(device, &pipeline_layout, &shader, "write_initial_rays");
 
         Self {
             pipeline,
@@ -215,7 +210,7 @@ impl TraceCompute {
         }
     }
 
-    pub fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceTarget {
+    pub(crate) fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceTarget {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene-linear HDR trace target"),
             size: wgpu::Extent3d {
@@ -280,7 +275,7 @@ impl TraceCompute {
         }
     }
 
-    pub fn encode(
+    pub(crate) fn encode(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceTarget,
@@ -290,7 +285,11 @@ impl TraceCompute {
     }
 
     #[cfg(test)]
-    pub fn encode_initial_rays(&self, encoder: &mut wgpu::CommandEncoder, target: &TraceTarget) {
+    pub(crate) fn encode_initial_rays(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &TraceTarget,
+    ) {
         Self::encode_with_pipeline(encoder, target, None, &self.initial_ray_pipeline);
     }
 
@@ -313,6 +312,16 @@ impl TraceCompute {
             1,
         );
     }
+}
+
+#[cfg(test)]
+pub fn trace_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!("{TRACE_SHADER}\n{INITIAL_RAY_CAPTURE_SHADER}"))
+}
+
+#[cfg(not(test))]
+const fn trace_shader_source() -> Cow<'static, str> {
+    Cow::Borrowed(TRACE_SHADER)
 }
 
 fn create_pipeline(
@@ -346,21 +355,21 @@ pub struct TraceTarget {
 }
 
 impl TraceTarget {
-    pub const fn extent(&self) -> RenderExtent {
+    pub(crate) const fn extent(&self) -> RenderExtent {
         self.extent
     }
 
-    pub const fn view(&self) -> &wgpu::TextureView {
+    pub(crate) const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
     #[cfg(test)]
-    pub const fn texture(&self) -> &wgpu::Texture {
+    pub(crate) const fn texture(&self) -> &wgpu::Texture {
         &self.texture
     }
 
     #[cfg(test)]
-    pub const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
+    pub(crate) const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
         [&self.direction_time, &self.invariant_drift, &self.metadata]
     }
 }

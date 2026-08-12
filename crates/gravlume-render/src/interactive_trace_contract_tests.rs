@@ -11,10 +11,10 @@ use num_traits::ToPrimitive as _;
 
 use crate::{
     trace::{
-        INVARIANT_DRIFT_LIMIT, TRACE_RECORD_SIZE, TRACE_SHADER, TraceRecord, TraceTermination,
-        TraceUniforms, UnknownTraceTermination,
+        INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
+        trace_shader_source,
     },
-    trace_test_support::{TraceEntryPoint, render_trace_for_test},
+    trace_test_support::{TraceEntryPoint, TraceRecord, render_trace_for_test},
 };
 
 #[test]
@@ -51,14 +51,11 @@ fn host_uniform_and_capture_layouts_match_the_gpu_abi() {
     assert_eq!(offset_of!(TraceUniforms, image_right), 48);
     assert_eq!(offset_of!(TraceUniforms, image_up), 64);
     assert_eq!(offset_of!(TraceUniforms, arrival), 80);
-    assert_eq!(offset_of!(TraceUniforms, projection_policy), 96);
-    assert_eq!(offset_of!(TraceUniforms, integration), 112);
-    assert_eq!(offset_of!(TraceUniforms, viewport), 128);
+    assert_eq!(offset_of!(TraceUniforms, projection), 96);
+    assert_eq!(offset_of!(TraceUniforms, event_surfaces), 112);
+    assert_eq!(offset_of!(TraceUniforms, step_policy), 128);
 
-    assert_eq!(
-        size_of::<TraceRecord>(),
-        usize::try_from(TRACE_RECORD_SIZE).expect("trace record ABI size fits usize")
-    );
+    assert_eq!(size_of::<TraceRecord>(), 48);
     assert_eq!(offset_of!(TraceRecord, direction_time), 0);
     assert_eq!(offset_of!(TraceRecord, invariant_drift), 16);
     assert_eq!(offset_of!(TraceRecord, metadata), 32);
@@ -68,26 +65,33 @@ fn host_uniform_and_capture_layouts_match_the_gpu_abi() {
 }
 
 #[test]
-fn observation_pack_is_dimensionless_and_retains_the_viewport_contract() {
+fn observation_pack_is_dimensionless_and_separates_trace_policies() {
     let observation = default_observation(7, 5);
     let packed = TraceUniforms::from_observation(&observation).expect("default scene packs");
 
     assert_eq!(
         packed.spacetime.map(f32::to_bits),
-        [1.0_f32, 0.8, 0.0, 1.6].map(f32::to_bits)
+        [1.0_f32, 0.8, 0.0, 0.0].map(f32::to_bits)
     );
-    assert_eq!(packed.viewport[..2], [7, 5]);
-    assert_eq!(packed.projection_policy[1].to_bits(), 200.0_f32.to_bits());
-    assert_eq!(packed.projection_policy[2].to_bits(), 0x2b80_0000);
+    assert_eq!(packed.projection[1].to_bits(), 1.0_f32.to_bits());
+    assert_eq!(packed.event_surfaces[0].to_bits(), 200.0_f32.to_bits());
+    assert_eq!(packed.event_surfaces[1].to_bits(), 0x2b80_0000);
+    assert_eq!(packed.event_surfaces[2].to_bits(), 1.6_f32.to_bits());
+    let [_, _, sample_x, sample_y] = packed.projection;
     assert_eq!(
-        packed.integration[3].to_bits(),
+        [sample_x.to_bits(), sample_y.to_bits()],
+        [0.5_f32; 2].map(f32::to_bits)
+    );
+    assert_eq!(
+        packed.step_policy[3].to_bits(),
         INVARIANT_DRIFT_LIMIT.to_bits()
     );
 }
 
 #[test]
 fn shader_parses_validates_and_keeps_its_resource_contract() {
-    let module = naga::front::wgsl::parse_str(TRACE_SHADER).expect("interactive WGSL parses");
+    let shader = trace_shader_source();
+    let module = naga::front::wgsl::parse_str(&shader).expect("interactive WGSL parses");
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
@@ -101,7 +105,7 @@ fn shader_parses_validates_and_keeps_its_resource_contract() {
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
     entry_points.sort_unstable();
-    assert_eq!(entry_points, ["initial_ray_contract", "trace_scene"]);
+    assert_eq!(entry_points, ["trace_scene", "write_initial_rays"]);
 
     let mut bindings = module
         .global_variables

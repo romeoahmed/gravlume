@@ -5,9 +5,9 @@ struct TraceUniforms {
     image_right: vec4<f32>,
     image_up: vec4<f32>,
     arrival: vec4<f32>,
-    projection_policy: vec4<f32>,
-    integration: vec4<f32>,
-    viewport: vec4<u32>,
+    projection: vec4<f32>,
+    event_surfaces: vec4<f32>,
+    step_policy: vec4<f32>,
 }
 
 struct Geometry {
@@ -61,6 +61,7 @@ const TERMINATION_UNCERTAIN: u32 = 6u;
 const FLAG_NON_FINITE: u32 = 1u;
 const FLAG_INVALID_RADICAND: u32 = 2u;
 const FLAG_INVALID_DENOMINATOR: u32 = 4u;
+const MAXIMUM_STEPS: u32 = 2048u;
 
 @group(0) @binding(0)
 var<uniform> trace_uniforms: TraceUniforms;
@@ -297,7 +298,7 @@ fn sight_direction(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) -> 
         2.0 * (f32(pixel.x) + subpixel.x) / dimensions.x - 1.0,
         1.0 - 2.0 * (f32(pixel.y) + subpixel.y) / dimensions.y,
     );
-    let tangent_half_fov = trace_uniforms.projection_policy.x;
+    let tangent_half_fov = trace_uniforms.projection.x;
     let sight_plane = vec2<f32>(
         dimensions.x / dimensions.y * tangent_half_fov * normalized.x,
         tangent_half_fov * normalized.y,
@@ -428,7 +429,7 @@ fn dense_state_at(
 fn initial_state_at(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) -> InitialState {
     let sight = sight_direction(pixel, extent, subpixel);
     let arrival = -sight;
-    let momentum_contravariant = trace_uniforms.projection_policy.w
+    let momentum_contravariant = trace_uniforms.projection.y
         * (trace_uniforms.observer_velocity + arrival);
     let geometry = geometry_at(trace_uniforms.observer_event.yzw);
     if geometry.flags != 0u || !finite_vec4(momentum_contravariant) {
@@ -567,28 +568,6 @@ fn store_failure(index: u32, pixel: vec2<u32>, flags: u32) {
 }
 
 @compute @workgroup_size(8, 8, 1)
-fn initial_ray_contract(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let extent = textureDimensions(scene_hdr);
-    if !inside_extent(global_id.xy, extent) {
-        return;
-    }
-
-    let index = record_index(global_id.xy, extent);
-    let initial = initial_state_at(global_id.xy, extent, trace_uniforms.integration.xy);
-    if initial.flags != 0u {
-        store_failure(index, global_id.xy, initial.flags);
-        return;
-    }
-    trace_direction_time[index] = vec4<f32>(
-        initial.sight.yzw,
-        trace_uniforms.projection_policy.w,
-    );
-    trace_invariant_drift[index] = vec4<f32>(initial.null_residual, 0.0, 0.0, 0.0);
-    trace_metadata[index] = vec4<u32>(0u);
-    textureStore(scene_hdr, vec2<i32>(global_id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-}
-
-@compute @workgroup_size(8, 8, 1)
 fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(scene_hdr);
     if !inside_extent(global_id.xy, extent) {
@@ -596,7 +575,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 
     let index = record_index(global_id.xy, extent);
-    let initial = initial_state_at(global_id.xy, extent, vec2<f32>(0.5));
+    let initial = initial_state_at(global_id.xy, extent, trace_uniforms.projection.zw);
     if initial.flags != 0u {
         store_failure(index, global_id.xy, initial.flags);
         return;
@@ -610,13 +589,11 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var state = initial.state;
     var maximum_drift = vec4<f32>(initial_invariants.values.x, 0.0, 0.0, 0.0);
     var travel_time = 0.0;
-    let maximum_steps = trace_uniforms.viewport.z;
-    let escape_radius = trace_uniforms.projection_policy.y;
-    let singularity_guard = trace_uniforms.projection_policy.z;
-    let has_horizon = trace_uniforms.viewport.w != 0u;
-    let horizon_radius = trace_uniforms.spacetime.w;
+    let escape_radius = trace_uniforms.event_surfaces.x;
+    let singularity_guard = trace_uniforms.event_surfaces.y;
+    let horizon_radius = trace_uniforms.event_surfaces.z;
 
-    for (var step_index = 0u; step_index < maximum_steps; step_index += 1u) {
+    for (var step_index = 0u; step_index < MAXIMUM_STEPS; step_index += 1u) {
         let start_geometry = geometry_at(state.position.yzw);
         if start_geometry.flags != 0u {
             store_trace_result(
@@ -651,9 +628,9 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let strong_field_scale = select(0.1, 1.0, start_geometry.radius > 6.0);
         let step_magnitude = clamp(
-            strong_field_scale * trace_uniforms.integration.x * start_geometry.radius,
-            strong_field_scale * trace_uniforms.integration.y,
-            trace_uniforms.integration.z,
+            strong_field_scale * trace_uniforms.step_policy.x * start_geometry.radius,
+            strong_field_scale * trace_uniforms.step_policy.y,
+            trace_uniforms.step_policy.z,
         );
         let stepped = rk4_step(state, -step_magnitude);
         if stepped.flags != 0u {
@@ -694,7 +671,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             event_surface = singularity_guard;
             start_value = start_geometry.singularity_measure;
             end_value = next_geometry.singularity_measure;
-        } else if has_horizon
+        } else if horizon_radius > 0.0
             && start_geometry.radius > horizon_radius
             && next_geometry.radius <= horizon_radius
         {
@@ -793,7 +770,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 committed_maximum_drift.x,
                 termination == TERMINATION_HORIZON,
             );
-            if uncertainty > trace_uniforms.integration.w {
+            if uncertainty > trace_uniforms.step_policy.w {
                 termination = TERMINATION_UNCERTAIN;
             }
             store_trace_result(
@@ -837,7 +814,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         global_id.xy,
         TERMINATION_STEP_EXHAUSTION,
         0u,
-        maximum_steps,
+        MAXIMUM_STEPS,
         0.0,
         vec3<f32>(0.0),
         travel_time,

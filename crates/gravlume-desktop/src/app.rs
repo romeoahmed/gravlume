@@ -276,12 +276,6 @@ impl DesktopApp {
     }
 }
 
-impl Drop for DesktopApp {
-    fn drop(&mut self) {
-        self.pending_textures.clear();
-    }
-}
-
 impl ApplicationHandler<Instant> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.lifecycle.resume()
