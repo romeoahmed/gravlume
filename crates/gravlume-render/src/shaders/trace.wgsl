@@ -62,6 +62,7 @@ const FLAG_NON_FINITE: u32 = 1u;
 const FLAG_INVALID_RADICAND: u32 = 2u;
 const FLAG_INVALID_DENOMINATOR: u32 = 4u;
 const MAXIMUM_STEPS: u32 = 2048u;
+const MAXIMUM_FINITE_F32: f32 = 0x1.fffffep+127f;
 
 @group(0) @binding(0)
 var<uniform> trace_uniforms: TraceUniforms;
@@ -79,15 +80,46 @@ var<storage, read_write> trace_invariant_drift: array<vec4<f32>>;
 var<storage, read_write> trace_metadata: array<vec4<u32>>;
 
 fn finite_scalar(value: f32) -> bool {
-    return value == value && abs(value) <= 3.402823466e38;
+    return value == value && abs(value) <= MAXIMUM_FINITE_F32;
 }
 
 fn finite_vec4(value: vec4<f32>) -> bool {
-    return all(value == value) && all(abs(value) <= vec4<f32>(3.402823466e38));
+    return all(value == value) && all(abs(value) <= vec4<f32>(MAXIMUM_FINITE_F32));
 }
 
 fn finite_vec3(value: vec3<f32>) -> bool {
-    return all(value == value) && all(abs(value) <= vec3<f32>(3.402823466e38));
+    return all(value == value) && all(abs(value) <= vec3<f32>(MAXIMUM_FINITE_F32));
+}
+
+// WGSL runtime overflow may produce an indeterminate value under the finite-math assumption, so
+// guard the multiplication rather than trying to clamp its result.
+// Source: https://www.w3.org/TR/WGSL/#floating-point-evaluation
+fn saturating_positive_product(left: f32, right: f32) -> f32 {
+    if left == 0.0 || right == 0.0 {
+        return 0.0;
+    }
+    if left > 1.0 && right > MAXIMUM_FINITE_F32 / left {
+        return MAXIMUM_FINITE_F32;
+    }
+    return left * right;
+}
+
+fn saturating_positive_sum(left: f32, right: f32) -> f32 {
+    if left > MAXIMUM_FINITE_F32 - right {
+        return MAXIMUM_FINITE_F32;
+    }
+    return left + right;
+}
+
+fn positive_square(value: f32) -> f32 {
+    return saturating_positive_product(abs(value), abs(value));
+}
+
+fn singularity_measure(radius: f32, spin: f32, z: f32) -> f32 {
+    let radius_squared = positive_square(radius);
+    let radius_fourth = positive_square(radius_squared);
+    let spin_z = saturating_positive_product(abs(spin), abs(z));
+    return saturating_positive_sum(radius_fourth, positive_square(spin_z));
 }
 
 fn invalid_geometry(flags: u32) -> Geometry {
@@ -159,9 +191,9 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
             radius * inverse_denominator_scale,
             0.0,
         );
-        let singularity = scale * scale * scale * scale
-            * (radius_squared * radius_squared + spin_squared * z * z);
-        if !finite_scalar(radius)
+        let physical_radius = scale * radius;
+        let singularity = singularity_measure(physical_radius, spin_physical, position.z);
+        if !finite_scalar(physical_radius)
             || !finite_scalar(scalar_f)
             || !finite_vec3(scalar_f_gradient)
             || !finite_scalar(singularity)
@@ -169,7 +201,7 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
             return invalid_geometry(FLAG_NON_FINITE);
         }
         return Geometry(
-            scale * radius,
+            physical_radius,
             radius_gradient,
             scalar_f,
             scalar_f_gradient,
@@ -256,9 +288,9 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let derivative_z = (delta_z / radius - coordinates.z * radius_i / radius_squared) / scale;
         null_gradients[index] = vec4<f32>(0.0, derivative_x, derivative_y, derivative_z);
     }
-    let singularity = scale * scale * scale * scale
-        * (radius_squared * radius_squared + spin_squared * z * z);
-    if !finite_scalar(scale * radius)
+    let physical_radius = scale * radius;
+    let singularity = singularity_measure(physical_radius, spin_physical, position.z);
+    if !finite_scalar(physical_radius)
         || !finite_scalar(scalar_f)
         || !finite_vec3(scalar_f_gradient)
         || !finite_vec4(null_covector)
@@ -270,7 +302,7 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         return invalid_geometry(FLAG_NON_FINITE);
     }
     return Geometry(
-        scale * radius,
+        physical_radius,
         radius_gradient,
         scalar_f,
         scalar_f_gradient,
@@ -507,6 +539,10 @@ fn invariant_drift(initial: vec4<f32>, current: vec4<f32>) -> vec4<f32> {
         abs(current.z - initial.z) / max(1.0, abs(initial.z)),
         abs(current.w - initial.w) / max(1.0, abs(initial.w)),
     );
+}
+
+fn invariant_budget_exceeded(maximum_drift: vec4<f32>) -> bool {
+    return any(maximum_drift > vec4<f32>(trace_uniforms.step_policy.w));
 }
 
 fn visible_failure_color(termination: u32) -> vec4<f32> {
@@ -765,12 +801,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 termination == TERMINATION_SINGULARITY,
             );
             let event_residual = (localized_value - event_surface) / max(1.0, abs(event_surface));
-            let uncertainty = select(
-                max(committed_maximum_drift.x, committed_maximum_drift.w),
-                committed_maximum_drift.x,
-                termination == TERMINATION_HORIZON,
-            );
-            if uncertainty > trace_uniforms.step_policy.w {
+            if invariant_budget_exceeded(committed_maximum_drift) {
                 termination = TERMINATION_UNCERTAIN;
             }
             store_trace_result(

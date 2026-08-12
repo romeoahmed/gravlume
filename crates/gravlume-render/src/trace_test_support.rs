@@ -42,6 +42,13 @@ pub fn capture_initial_rays(observation: &Observation, subpixel: [f32; 2]) -> Tr
     capture(gpu, observation, &compute)
 }
 
+pub fn capture_invariant_gate_cases(observation: &Observation) -> TraceCapture {
+    let gpu = crate::test_gpu::native_gpu();
+    let compute = TraceCompute::for_invariant_gate_capture(&gpu.device, observation)
+        .expect("observation packs for GPU");
+    capture(gpu, observation, &compute)
+}
+
 fn capture(
     gpu: &crate::test_gpu::TestGpu,
     observation: &Observation,

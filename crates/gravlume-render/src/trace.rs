@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use gravlume_domain::{Observation, ValidationReport};
+use gravlume_domain::{KerrNewmanSpacetime, Observation, ParameterState, ValidationReport};
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
 
@@ -9,7 +9,10 @@ use crate::extent::RenderExtent;
 const TRACE_SHADER: &str = include_str!("shaders/trace.wgsl");
 #[cfg(test)]
 const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
+#[cfg(test)]
+const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate_capture.wgsl");
 pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
+const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -29,8 +32,8 @@ pub struct TraceUniforms {
 impl TraceUniforms {
     pub fn from_observation(observation: &Observation) -> Result<Self, TraceInputError> {
         let scene = observation.scene();
-        let spacetime = *scene.spacetime();
-        let mass = spacetime.mass_m();
+        let physical_spacetime = *scene.spacetime();
+        let mass = physical_spacetime.mass_m();
         let projection = *observation.projection();
         let frame = scene.observer_frame();
         let sample = projection
@@ -40,20 +43,36 @@ impl TraceUniforms {
             .initial_ray(sample)
             .map_err(TraceInputError::DomainInvariant)?
             .observer_frequency();
-        let horizon = spacetime
-            .outer_horizon_radius()
-            .map_or(-1.0, |radius| radius / mass);
+        if (observer_frequency - 1.0).abs() > NORMALIZED_FREQUENCY_TOLERANCE {
+            return Err(TraceInputError::NonNormalizedObserverFrequency { observer_frequency });
+        }
+        let spacetime_uniform = pack4(
+            [
+                1.0,
+                physical_spacetime.spin_m() / mass,
+                physical_spacetime.charge_m() / mass,
+                0.0,
+            ],
+            "spacetime",
+        )?;
+        let interactive_spacetime = KerrNewmanSpacetime::new(
+            f64::from(spacetime_uniform[0]),
+            f64::from(spacetime_uniform[1]),
+            f64::from(spacetime_uniform[2]),
+        )
+        .map_err(TraceInputError::DomainInvariant)?;
+        let canonical_state = physical_spacetime.parameter_state();
+        let interactive_state = interactive_spacetime.parameter_state();
+        if interactive_state != canonical_state {
+            return Err(TraceInputError::ParameterStateChangedByPacking {
+                canonical_state,
+                interactive_state,
+            });
+        }
+        let horizon = interactive_spacetime.outer_horizon_radius().unwrap_or(-1.0);
 
         Ok(Self {
-            spacetime: pack4(
-                [
-                    1.0,
-                    spacetime.spin_m() / mass,
-                    spacetime.charge_m() / mass,
-                    0.0,
-                ],
-                "spacetime",
-            )?,
+            spacetime: spacetime_uniform,
             observer_event: pack4(
                 scene.observer_event().to_txyz().map(|value| value / mass),
                 "observer_event",
@@ -65,7 +84,7 @@ impl TraceUniforms {
             projection: pack4(
                 [
                     (projection.vertical_fov().radians() * 0.5).tan(),
-                    observer_frequency,
+                    1.0,
                     0.5,
                     0.5,
                 ],
@@ -93,6 +112,17 @@ fn pack4(values: [f64; 4], field: &'static str) -> Result<[f32; 4], TraceInputEr
 pub enum TraceInputError {
     #[error("validated observation failed to resolve its initial ray: {0}")]
     DomainInvariant(#[source] ValidationReport),
+    #[error(
+        "interactive trace inputs must be normalized to observer frequency 1, got {observer_frequency}"
+    )]
+    NonNormalizedObserverFrequency { observer_frequency: f64 },
+    #[error(
+        "spacetime parameter state changes from {canonical_state:?} to {interactive_state:?} under the interactive f32 contract"
+    )]
+    ParameterStateChangedByPacking {
+        canonical_state: ParameterState,
+        interactive_state: ParameterState,
+    },
     #[error("observation field {field} is not representable by the interactive f32 contract")]
     NotRepresentable { field: &'static str },
 }
@@ -130,6 +160,20 @@ impl TraceCompute {
             uniforms,
             Cow::Owned(format!("{TRACE_SHADER}\n{INITIAL_RAY_CAPTURE_SHADER}")),
             "write_initial_rays",
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_invariant_gate_capture(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<Self, TraceInputError> {
+        let uniforms = TraceUniforms::from_observation(observation)?;
+        Ok(Self::from_uniforms(
+            device,
+            uniforms,
+            Cow::Owned(format!("{TRACE_SHADER}\n{INVARIANT_GATE_CAPTURE_SHADER}")),
+            "write_invariant_gate_cases",
         ))
     }
 

@@ -4,9 +4,9 @@
 
 ## 已实现闭环
 
-- `GpuEngine::new` 接受 validated `Observation`。host 端先按质量 $M$ 无量纲化，再通过受检 `f64 → f32` 转换写入 144-byte `TraceUniforms`；projection/sample、event surfaces 与 step policy 各自占独立字段，无法表示的输入返回 `TraceInputError`，不会饱和或静默截断为无穷。
-- `TraceUniforms` 使用显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；测试 readback DTO 只聚合已分别解码的三个 plane，不冒充 GPU 内存布局。生产路径不保留只服务测试捕获的 record DTO 或 compute entry point。GPU 把同一语义记录拆成 direction/time、invariant drift、metadata 三个 16-byte-per-pixel storage plane；这使 3840×2160 的每个 binding 为 126.6 MiB，落在 WebGPU 保证的 128 MiB storage-binding limit 内。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
-- WGSL 独立实现 `f32` ingoing Cartesian Kerr–Schild radius/geometry、轴线解析分支、closed-form Hamilton RHS、negative-affine geometric-step RK4、线性 event fraction、端点导数约束的三次 Hermite dense state 与 null/E/Lz/Carter drift。终止步的 travel time、invariant drift、direction 与 event residual 全部提交同一 localized state，不包含 event surface 之后的 RK endpoint。radicand、denominator 和 finite guard 都写入 machine-readable failure flags。
+- `GpuEngine::new` 接受 validated `Observation`。host 端先按质量 $M$ 无量纲化，再通过受检 `f64 → f32` 转换写入 144-byte `TraceUniforms`；interactive profile 要求派生的 $\omega_{obs}$ 在具名预算内归一为 1，且 canonical binary64 parameter state 不得在 f32 pack 后改变。违反这些 seam 条件或存在无法表示的字段时返回 `TraceInputError`。projection/sample、event surfaces 与 step policy 各自占独立字段。
+- `TraceUniforms` 使用显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；测试 readback DTO 只聚合已分别解码的三个 plane，不冒充 GPU 内存布局。生产路径不保留只服务测试捕获的 record DTO 或 compute entry point。GPU 把同一语义记录拆成 direction/time、invariant drift、metadata 三个 16-byte-per-pixel storage plane；3840×2160 的单 binding 为 126.6 MiB，仍落在 WebGPU 保证的 128 MiB storage-binding limit 内，但普通 viewport 的 frame-resource bundle 按 2560×1440 pixel budget 封顶为约 211 MiB。two-phase rebuild 的新旧 bundle 因此最坏约 422 MiB；超预算 resize 在分配前返回 typed validation error。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
+- WGSL 独立实现 `f32` ingoing Cartesian Kerr–Schild radius/geometry、轴线解析分支、closed-form Hamilton RHS、negative-affine geometric-step RK4、线性 event fraction、端点导数约束的三次 Hermite dense state 与 null/E/Lz/Carter drift。终止步的 travel time、invariant drift、direction 与 event residual 全部提交同一 localized state，不包含 event surface 之后的 RK endpoint；四项 drift 任一超过 `0.05` 都把确定终止降为 `Uncertain`。singularity guard 的正值乘积在计算前检测溢出并向有限最大值饱和，因此远场 guard side 不使其余可表示几何失败。radicand、denominator 和 finite guard 都写入 machine-readable failure flags。
 - 每个像素以当前 HDR texture extent 构造 top-left viewport sample，因此 resize 后的 aspect ratio 与 record index 不依赖启动时尺寸。8×8 workgroup 越界 invocation 显式返回。
 - escape 使用方向编码的解析高动态范围天空，horizon 写物理黑色；singularity、exhaustion、uncertain 和 numerical failure 使用不同的非黑诊断颜色。interactive failure 不冒充物理 terminal，也不静默变黑。
 - 生产 frame graph 以 trace target 替代早期诊断 gradient，继续复用中性 display transform、egui overlay、timestamp readback 和既有 surface 生命周期。
@@ -28,7 +28,7 @@
 - center、四角与 jitter 的 CPU/WGSL initial direction agreement，角误差不高于 `2e-6 rad`，初始 null residual 不高于 `8e-5`；
 - 默认 Kerr Observation 的 7×5 headless regular matrix 中五个具名样本：GPU termination 与 CPU reference 一致，escape direction 角误差不高于 `3.82e-4 rad`，event residual 不高于 `5e-3`；
 - 9×9 extent 跨 workgroup boundary 的每像素 record-plane/HDR 写入；
-- 4K UHD extent 在 WebGPU 默认 buffer limits 下通过容量验证，超过 texture/binding/buffer limit 的 resize 在分配前返回 typed error；
+- 2560×1440 native internal pixel budget 边界通过验证；4K native trace 及其他超过单个 frame-resource bundle budget 的 resize 在分配前返回 typed error；
 - 默认 regular matrix 的 localized travel time 与 CPU reference 相差不高于 `1e-3 M`，每项记录的 invariant drift 均不高于 interactive `0.05` budget；
 
 这些测试需要可用的原生 Metal 或 Vulkan adapter。CPU/GPU 使用不同精度与不同积分器；agreement 只说明当前样本落在预算内，不构成独立物理证明。
@@ -38,7 +38,7 @@
 - 当前 CPU/GPU matrix 是默认 exterior Kerr scene 的小规模 regular 样本，不覆盖 near-critical 分支、Kerr–Newman 参数扫描、near-axis Carter 条件性或不同 escape radius。
 - interactive RK4 采用固定的 radius-scaled step policy；守恒量超过预算时返回 `Uncertain`，当前没有 Phase 4 的 classify/refine 第二遍追迹。
 - 解析天空用于验证方向、HDR 与 terminal 可见性，不是物理 source model。薄盘、frequency ratio、emission/absorption 和 spectral output 属于 Phase 3。
-- 没有 60 FPS 或显存预算声明。Windows/Linux 仍需在具名 adapter、driver 和 release profile 上记录 smoke；当前测试通过不能替代该平台证据。
+- 没有 60 FPS 声明；当前只声明分配前的 frame-resource peak 上限，不声称已测得完整 driver GPU memory peak。Windows/Linux 仍需在具名 adapter、driver 和 release profile 上记录 smoke；当前测试通过不能替代该平台证据。
 
 ## 实现来源
 
