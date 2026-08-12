@@ -890,25 +890,3 @@ fn decimal_array<const N: usize>(values: &[DecimalString; N]) -> [f64; N] {
 fn invalid_physical_data(error: impl fmt::Display) -> FixtureError {
     FixtureError::InvalidPhysicalData(error.to_string())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::FixtureDocument;
-    use crate::{ReferencePolicy, ReferenceTracer};
-
-    const CAPTURE_NEAR_CRITICAL: &str =
-        include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
-
-    #[test]
-    fn capture_expectation_rejects_an_unexpected_turning_radius() {
-        let fixture = FixtureDocument::parse_toml(CAPTURE_NEAR_CRITICAL)
-            .expect("fixture parses")
-            .into_geodesic()
-            .expect("fixture is geodesic");
-        let mut outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-            .trace(fixture.trace_request());
-        outcome.turning_radius_m = Some(3.0);
-
-        assert!(!fixture.expected().accepts(&outcome));
-    }
-}

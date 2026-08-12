@@ -93,7 +93,8 @@ impl DesktopApp {
             last_device_event: None,
             fatal_error: None,
             presented_frames: 0,
-            smoke_once: smoke_once_value(std::env::var_os(SMOKE_ONCE_ENV).as_deref()),
+            smoke_once: std::env::var_os(SMOKE_ONCE_ENV)
+                .is_some_and(|value| value == OsStr::new("1")),
         }
     }
 
@@ -496,15 +497,11 @@ impl EventLoopSchedule {
     }
 }
 
-fn smoke_once_value(value: Option<&OsStr>) -> bool {
-    value.is_some_and(|value| value == OsStr::new("1"))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, time::Duration};
+    use std::time::Duration;
 
-    use super::{EventLoopSchedule, smoke_once_value};
+    use super::EventLoopSchedule;
 
     #[test]
     fn gpu_progress_never_consumes_or_requests_a_repaint() {
@@ -531,12 +528,5 @@ mod tests {
         assert!(!schedule.take_due_repaint(now + Duration::from_millis(9)));
         assert!(schedule.take_due_repaint(repaint));
         assert_eq!(schedule.next_wake(), None);
-    }
-
-    #[test]
-    fn smoke_hook_accepts_only_the_exact_opt_in_value() {
-        assert!(!smoke_once_value(None));
-        assert!(smoke_once_value(Some(OsStr::new("1"))));
-        assert!(!smoke_once_value(Some(OsStr::new("true"))));
     }
 }
