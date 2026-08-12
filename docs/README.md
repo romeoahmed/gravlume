@@ -10,12 +10,13 @@
 | [数学物理合同](physics.md) | 坐标、时空、观察者、辐射与偏振的连续模型是什么？ |
 | [验证合同](validation.md) | CPU reference、fixture、profile 和可观测误差如何定义？ |
 | [Phase 1 实现与证据](phase-1.md) | 当前领域/reference 实现通过了什么，适用域和剩余 oracle 缺口是什么？ |
+| [Phase 2 实现与证据](phase-2.md) | interactive GPU tracer 的 ABI、自动化证据与适用域是什么？ |
 | [架构与实现合同](architecture.md) | Rust Module/Interface、生命周期、GPU ABI 和错误语义如何组织？ |
 | [渲染算法与研究门槛](rendering.md) | 哪些算法进入实时主线，哪些必须先做可否证原型？ |
 | [Rust 平台合同](platform.md) | crate 闭包、Vulkan/Metal、设备基线与加速 variant 如何协商？ |
 | [实施路线](roadmap.md) | 每个阶段交付什么，什么证据允许进入下一阶段？ |
 
-推荐顺序：范围 → 数学物理 → 验证 → Phase 1 证据 → 架构 → 算法 → 平台 → 路线。
+推荐顺序：范围 → 数学物理 → 验证 → Phase 1/2 证据 → 架构 → 算法 → 平台 → 路线。
 
 ## 证据标记
 

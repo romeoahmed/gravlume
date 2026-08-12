@@ -32,7 +32,7 @@
 - 当前 trajectory fixture 只覆盖 equatorial Schwarzschild 和默认 exterior Kerr Observation 的非临界样本。published Kerr/Kerr–Newman trajectory、独立 chart/state representation、near-axis Killing-tensor overlap 与更广参数扫描仍是 reference ladder 的扩展项。
 - raw-radius/reciprocal-radius `f32` 条件性数据仍按[渲染研究](rendering.md)标记为候选 `[X]`；本实现没有把缺少完整 metadata 的表升级成 machine-readable scientific fixture。
 - finite escape sphere 是数值边界；当前 comparison 报告边界上的方向、位置和 travel time，不把它解释为无穷远精确 observable。
-- renderer 尚未消费这些 CPU 结果；GPU agreement、sky/source anchor、频率比与画面属于 Phase 2/3。
+- renderer 从同一 validated `Observation` 独立构造 GPU initial ray，并已对 regular sample matrix 比较 termination 与 escape direction；它不消费 CPU trajectory。near-critical agreement、source anchor 与频率比仍属于后续证据/Phase 3。
 
 ## 实现来源
 
