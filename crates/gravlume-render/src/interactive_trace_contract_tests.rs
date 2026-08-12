@@ -187,7 +187,7 @@ fn every_recorded_invariant_can_make_a_terminal_uncertain() {
 }
 
 #[test]
-fn production_shader_parses_validates_and_keeps_its_resource_contract() {
+fn production_shader_exposes_only_presentation_resources() {
     let module = naga::front::wgsl::parse_str(production_shader_source())
         .expect("production trace WGSL parses");
     naga::valid::Validator::new(
@@ -205,14 +205,44 @@ fn production_shader_parses_validates_and_keeps_its_resource_contract() {
     entry_points.sort_unstable();
     assert_eq!(entry_points, ["trace_scene"]);
 
-    let mut bindings = module
+    let mut resources = module
         .global_variables
         .iter()
-        .filter_map(|(_, variable)| variable.binding.as_ref())
-        .map(|binding| (binding.group, binding.binding))
+        .filter_map(|(_, variable)| {
+            variable
+                .binding
+                .as_ref()
+                .map(|binding| ((binding.group, binding.binding), variable))
+        })
         .collect::<Vec<_>>();
-    bindings.sort_unstable();
-    assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]);
+    resources.sort_unstable_by_key(|(binding, _)| *binding);
+    assert_eq!(
+        resources
+            .iter()
+            .map(|(binding, _)| *binding)
+            .collect::<Vec<_>>(),
+        [(0, 0), (0, 1), (0, 2)]
+    );
+
+    let uniforms = resources[0].1;
+    let scene_hdr = resources[1].1;
+    let dispatch = resources[2].1;
+    assert_eq!(uniforms.space, naga::AddressSpace::Uniform);
+    assert!(matches!(
+        (&scene_hdr.space, &module.types[scene_hdr.ty].inner),
+        (
+            naga::AddressSpace::Handle,
+            naga::TypeInner::Image {
+                dim: naga::ImageDimension::D2,
+                arrayed: false,
+                class: naga::ImageClass::Storage {
+                    format: naga::StorageFormat::Rgba16Float,
+                    access,
+                },
+            }
+        ) if *access == naga::StorageAccess::STORE
+    ));
+    assert_eq!(dispatch.space, naga::AddressSpace::Uniform);
 }
 
 #[test]

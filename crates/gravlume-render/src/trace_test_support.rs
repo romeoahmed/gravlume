@@ -31,13 +31,15 @@ impl TraceCapture {
 
 pub fn capture_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_gpu::native_gpu();
-    let compute = TraceCompute::new(&gpu.device, observation).expect("observation packs for GPU");
+    let compute = TraceCompute::for_trace_capture(&gpu.device, observation)
+        .expect("observation packs for GPU");
     capture(gpu, observation, &compute)
 }
 
 pub fn capture_trace_in_batches(observation: &Observation, pixels_per_batch: u32) -> TraceCapture {
     let gpu = crate::test_gpu::native_gpu();
-    let compute = TraceCompute::new(&gpu.device, observation).expect("observation packs for GPU");
+    let compute = TraceCompute::for_trace_capture(&gpu.device, observation)
+        .expect("observation packs for GPU");
     capture_in_batches(gpu, observation, &compute, pixels_per_batch)
 }
 

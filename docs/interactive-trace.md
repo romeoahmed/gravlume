@@ -5,14 +5,14 @@
 ## 已实现闭环
 
 - `GpuEngine::new` 接受 validated `Observation`。host 端先按质量 $M$ 无量纲化，再通过受检 `f64 → f32` 转换写入 144-byte `TraceUniforms`；interactive profile 要求派生的 $\omega_{obs}$ 在具名预算内归一为 1，且 canonical binary64 parameter state 不得在 f32 pack 后改变。当前 Kerr–Newman 模型平稳且 GPU observable 只保存非负 coordinate-time duration，因此初始 shader time 明确归零，避免 absolute binary32 time 的 ULP 使 travel time 依赖坐标原点；空间 event、frame 与方向仍来自 validated Observation。违反这些 seam 条件或存在无法表示的字段时返回 `TraceInputError`。projection/sample、event surfaces 与 step policy 各自占独立字段。
-- `TraceUniforms` 使用显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；测试 readback DTO 只聚合已分别解码的三个 plane，不冒充 GPU 内存布局。生产路径不保留只服务测试捕获的 record DTO 或 compute entry point。GPU 把同一语义记录拆成 direction/time、invariant drift、metadata 三个 16-byte-per-pixel storage plane；3840×2160 的单 binding 为 126.6 MiB，仍落在 WebGPU 保证的 128 MiB storage-binding limit 内。隐藏 candidate 56 B/pixel、published scene 8 B/pixel、UI 4 B/pixel；普通 viewport 按 2560×1440 封顶约 239 MiB，two-phase rebuild 的理论新旧峰值约 478 MiB。超预算 resize 在分配前返回 typed validation error。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
+- `TraceUniforms` 使用显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；测试 readback DTO 只聚合已分别解码的三个 plane，不冒充 GPU 内存布局。production shader 只有 uniform、FP16 output 与 dispatch 三个 binding；direction/time、invariant drift、metadata 三个 `16 B/pixel` plane 只由显式 diagnostic capture 创建。新 extent generation 是 candidate HDR `8 B/pixel` + UI `4 B/pixel`；上一完整 scene 独立持有 `8 B/pixel`。candidate 完成后直接提升 texture view，不保留第二张同尺寸 published copy。4K 同尺寸 transactional rebuild 的保守核心峰值是 `32 B/pixel = 253.125 MiB`，落在明确的 256 MiB gate 内；超过 4K pixel policy 或该真实 live-resource plan 的 resize 在分配前返回 typed error。zero extent 与 suspend 都保留已安装 bundle，停止新 compute/acquire；suspend 期间的 resize 只由窗口系统合并，surface 成功恢复后再读取最新 physical inner size 重建一次。这保证任何 replacement 分配始终把仍安装的旧 bundle 纳入资源计划，不产生未计账的 retired generation。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
 - WGSL 独立实现 `f32` Cartesian Kerr–Schild radius/geometry、显式 ingoing/outgoing principal direction、轴线解析分支、closed-form Hamilton RHS、negative-affine geometric-step RK4、线性 event fraction、端点导数约束的三次 Hermite dense state 与 null/E/Lz/Carter drift。交互相机使用 outgoing chart：反向相机追迹在 ingoing chart 的过去视界会遇到 coordinate barrier，而 outgoing chart 让该族光线正则穿越。终止步的 travel time、invariant drift、direction 与 event residual 全部提交同一 localized state，不包含 event surface 之后的 RK endpoint；四项 drift 任一超过 `0.05` 都把确定终止降为 `Uncertain`。singularity guard 的正值乘积在计算前检测溢出并向有限最大值饱和，因此远场 guard side 不使其余可表示几何失败。radicand、denominator 和 finite guard 都写入 machine-readable failure flags。
 - 每个像素以当前 HDR texture extent 构造 top-left viewport sample，因此 resize 后的 aspect ratio 与 record index 不依赖启动时尺寸。trace 以额外 16-byte dispatch uniform 提供线性 pixel offset，继续使用 8×8 workgroup；每个 batch 只覆盖自己的连续 pixel interval，尾部越界 invocation 显式返回。
-- escape 使用方向编码的解析高动态范围天空，horizon 写物理黑色；singularity、exhaustion、uncertain 和 numerical failure 使用不同的非黑诊断颜色。interactive failure 不冒充物理 terminal，也不静默变黑。
-- 生产 frame graph 把不可见的 native-resolution `candidate` 与只含完整画面的 FP16 `published scene` 分离。compute 可以按 batch 推进，但 incomplete candidate 从不进入 display bind group；最后一批在同一 queue timeline 中先完成 trace、再整图发布、最终 present。没有低分辨率 tier、扫描式 reveal 或对 termination/source-direction discontinuity 的临时插值。完成 submission 的 timestamp/readback 返回后才释放 candidate；resize generation 变化后，旧 completion 只完成 GPU 回收，不能发布新 generation。
+- escape 使用无 seam、低阶球面多项式与六个局部轴向色标编码的解析高动态范围天空，horizon 写物理黑色；该方向图避免薄网格在临界曲线附近产生过曝 alias，同时保留 source direction 的可读性。singularity、exhaustion、uncertain 和 numerical failure 使用不同的非黑诊断颜色。interactive failure 不冒充物理 terminal，也不静默变黑。
+- 生产 frame graph 把不可见的 native-resolution `candidate` 与上一张完整 FP16 `published scene` 分离。compute batch 不再 acquire surface、运行 egui 或 present；incomplete candidate 从不进入 display bind group。最后一批 timestamp/readback 完成且 generation 仍匹配时，candidate view 原子提升为 published scene，然后只请求一次 presentation。没有整图 publication copy、低分辨率 tier、扫描式 reveal 或跨 termination/source-direction discontinuity 的临时插值。resize 期间旧完整 scene 按 aspect-fit 显示，比例外填黑；stale completion 只完成 GPU 回收，不能发布新 generation。
 - scene 与 egui 不再直接画到同一 gamma target：published scene 保持 extended-linear sRGB，egui 单独画到透明 `Rgba8Unorm`，final pass 对 premultiplied gamma UI 做 unpremultiply → sRGB decode → linear-premultiply，再在线性空间以 SDR reference white 合成。SDR 保持原有 Reinhard 映射；HDR 使用 FP16 `Rgba16Float + ExtendedSrgbLinear`，1.0 以下保持 identity，亮部按实时 headroom 压缩。精确 HDR pair 或可靠平台状态缺失时以 typed reason 降级到 SDR，不把 unknown 当作 HDR。
 - 每个 accepted RK4 endpoint 的 exact geometry/RHS 同时供 event、invariant 与下一步 $k_1$ 使用；这不是把 classical RK4 的 $k_4$ 当 FSAL，而是复用原先为 endpoint 另算的 derivative。普通步由源码级 5 RHS/8 geometry 降为 4 RHS algebra/4 geometry。切换到适配 backward trace 的 outgoing chart 后，旧 ingoing barrier 时代的 `r<6M` 十倍减速被删除；当前 radius-scaled policy 为 `min(0.1r, 8M)`、下限 `0.005M`，所有变更仍受 reference observable 与四守恒量 gate 约束。
-- 每个 extent generation 建立新的 trace 状态；一个 batch 在途时不追加更多 trace work，timestamp 回读完成后按具名 soft budget 有界调整下一批大小。已完成 generation 只重画 published scene/UI，不重复追迹。overlay 与 smoke 记录完成比例、batch count、累计 compute time 和最大 batch time。
+- 每个 extent generation 建立新的 trace 状态；一个 batch 在途时不追加更多 trace work，timestamp 回读完成后按具名 soft budget和设备 `max_compute_workgroups_per_dimension` 共同限制下一批大小。已完成 generation 只重画 published scene/UI，不重复追迹。overlay 不以每批 surface redraw 换取跳动百分比；smoke 只有在 matching generation 的 presentation submission 确认 queue complete 后退出，并记录 batch count、累计 compute time 和最大 batch time。
 
 ## ABI 与依赖决定
 
@@ -25,7 +25,7 @@
 `cargo test -p gravlume-render --all-targets --locked` 当前覆盖：
 
 - termination discriminant 的双向 checked mapping；
-- host uniform size/field offset 与 WGSL 六 binding/生产 entry-point 合同；
+- host uniform size/field offset 与 production WGSL 三 binding 的 address-space/access/format 合同；
 - Naga 对独立生产 WGSL 的 parse 与 validation；测试 capture entry point 由真实 GPU pipeline 执行覆盖；
 - 物理等价的质量尺度变换产生逐 bit 相同的无量纲 GPU trace record；
 - observer/target coordinate time 同时平移到 $10^8 M$ 不改变 termination、escape direction 或 travel time；
@@ -34,7 +34,7 @@
 - 默认 Kerr Observation 的 7×5 headless regular matrix 中六个具名样本（四角、顶边、中心 capture）：GPU termination 与 CPU reference 一致，escape direction 角误差不高于 `3.82e-4 rad`，event residual 不高于 `5e-3`；
 - 9×9 extent 跨 workgroup boundary 的每像素 record-plane/HDR 写入；
 - 17×9 extent 的多 batch dispatch 与单 dispatch 逐 bit 相同；
-- 2560×1440 native internal pixel budget 边界通过验证；4K native trace 及其他超过单个 frame-resource bundle budget 的 resize 在分配前返回 typed error；
+- 4K native pixel boundary、设备 dispatch-dimension batch 上限和 cold/worst transactional core-resource plan；超 4K pixel policy 的 resize 在分配前返回 typed error；
 - 默认 regular matrix 的 localized travel time 与 CPU reference 相差不高于 `1e-3 M`，每项记录的 invariant drift 均不高于 interactive `0.05` budget；
 
 这些测试需要可用的原生 Metal 或 Vulkan adapter。CPU/GPU 使用不同精度与不同积分器；agreement 只说明当前样本落在预算内，不构成独立物理证明。
@@ -44,7 +44,7 @@
 - 当前 CPU/GPU matrix 是默认 exterior Kerr scene 的小规模 regular 样本，不覆盖 near-critical 分支、Kerr–Newman 参数扫描、near-axis Carter 条件性或不同 escape radius。
 - interactive RK4 采用固定的 radius-scaled step policy；守恒量超过预算时返回 `Uncertain`，当前没有 Phase 4 的 classify/refine 第二遍追迹。
 - 解析天空用于验证方向、HDR 与 terminal 可见性，不是物理 source model。薄盘、frequency ratio、emission/absorption 和 spectral output 属于 Phase 3。
-- 没有 60 FPS 声明；batch 只控制 watchdog/主循环响应，原生完整画面的原子发布修正可见语义，outgoing chart、重新标定的 geometric step 与 endpoint reuse 才减少总计算。开发期 160×90 Metal A/B 中，旧实现平均/最坏为 882/2048 步，新策略为 61/132 步；Apple M5 1280×720 release smoke 的一次冷样本、三次连续样本与最终复核样本累计 compute 为 `101.9 / 150.2 / 124.9 / 105.4 / 192.2 ms`，max batch 为 `23.2 / 32.9 / 36.8 / 30.7 / 31.2 ms`。这些是本机工作量诊断，不是 60 FPS 或跨平台声明。该证据不外推到 Windows/Linux，也不替代 Phase 4 的三平台动态分辨率验收。当前只声明分配前的 frame-resource peak 上限，不声称已测得完整 driver GPU memory peak。
+- 没有 60 FPS 声明；batch 只控制 watchdog/主循环响应，原生完整画面的原子发布修正可见语义，outgoing chart、重新标定的 geometric step 与 endpoint reuse 才减少总计算。开发期 160×90 Metal A/B 中，旧实现平均/最坏为 882/2048 步，新策略为 61/132 步；Apple M5 1280×720 release smoke 的累计 compute 样本范围为 `80.5–192.2 ms`，对应 max batch 范围 `20.0–36.8 ms`。这些是本机工作量诊断，不是 60 FPS 或跨平台声明；最终无 seam 方向图的一次 smoke 为 7 batches / `80.5 ms` / max `20.0 ms`，也不应被当成稳定下界。该证据不外推到 Windows/Linux，也不替代 Phase 4 的三平台动态分辨率验收。当前只声明分配前的 frame-resource peak 上限，不声称已测得完整 driver GPU memory peak。
 
 ## 实现来源
 
