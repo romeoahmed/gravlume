@@ -14,4 +14,4 @@ pub use observer::{ObserverFrame, StationaryObserverDraft};
 pub use projection::{Angle, ViewportProjection, ViewportSample};
 pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneDraft};
 pub use spacetime::{GeodesicInvariants, GeometryError, KerrNewmanSpacetime, ParameterState};
-pub use validation::{ValidationIssue, ValidationIssueCode, ValidationReport, ValidationSeverity};
+pub use validation::{ValidationIssue, ValidationIssueCode, ValidationReport};

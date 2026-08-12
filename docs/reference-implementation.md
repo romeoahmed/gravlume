@@ -1,10 +1,10 @@
-# Phase 1 实现与证据
+# Reference 实现与证据
 
 本文记录当前 `gravlume-domain` 与 `gravlume-reference` 的实现边界。连续公式和阈值仍分别以[数学物理合同](physics.md)与[验证合同](validation.md)为准；这里不复制或改写 profile。
 
 ## 已实现闭环
 
-- `PhysicalSceneDraft → PhysicalScene → Observation` 是原子 validation seam；稳定字段为 issue code、field path 与 severity。Observer Frame 保存 Gram residual、orientation determinant 和 up-axis fallback 诊断。
+- `PhysicalSceneDraft → PhysicalScene → Observation` 是原子 validation seam；稳定字段为 issue code 与 field path，解释文本不是协议字段。Observer Frame 保存 Gram residual、orientation determinant 与 up-axis fallback 诊断。
 - `ViewportSample` 只保存 pixel/subpixel coordinates；`Observation::initial_ray` 针对自己的 projection 重新验证并独占 top-left sample 到 future-directed Photon Momentum 的 CPU 映射。`ReferenceRequest` 借用 Observation 解析 initial ray 后只保留追迹所需的 validated 值，`ReferenceInstrument` 只通过该接口构造 backward trace，负 affine traversal 不改写物理 momentum。
 - `KerrNewmanSpacetime` 使用 canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` 状态与闭式 Cartesian Kerr–Schild Hamilton RHS；参数状态以 exponent-aligned integer significand 精确比较实际 binary64 值，轴线 geometry 使用 $r=|z|$ 解析极限。metric/radius denominator 失败是 typed error，不 clamp 方程。
 - `ReferenceTracer` 在 seam 强制 v1 的 `M=1` 归一化，`ReferenceInstrument` 额外强制 `omega_obs=1`；随后使用七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差。拒步不提交 state/event side effect。

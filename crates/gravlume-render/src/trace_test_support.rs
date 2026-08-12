@@ -2,11 +2,19 @@ use gravlume_domain::Observation;
 
 use crate::{
     extent::RenderExtent,
-    trace::{TraceCompute, TraceRecord, trace_record_plane_size},
+    trace::{TraceCompute, trace_record_plane_size},
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
 const RECORD_FIELD_COUNT: u64 = 3;
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+pub struct TraceRecord {
+    pub direction_time: [f32; 4],
+    pub invariant_drift: [f32; 4],
+    pub metadata: [u32; 4],
+}
 
 #[derive(Clone, Copy)]
 pub enum TraceEntryPoint {
@@ -40,7 +48,7 @@ pub fn render_trace_for_test(
     .expect("validated observation extent is nonzero");
     let compute = match entry_point {
         TraceEntryPoint::InitialRay { subpixel } => {
-            TraceCompute::new_for_initial_rays(&gpu.device, observation, subpixel)
+            TraceCompute::for_initial_ray_capture(&gpu.device, observation, subpixel)
         }
         TraceEntryPoint::Trace => TraceCompute::new(&gpu.device, observation),
     }

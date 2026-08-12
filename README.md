@@ -6,7 +6,7 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 
 ## 当前状态
 
-项目目前已完成 **Phase 2：Interactive trace** 的首个可验证闭环。原生窗口运行独立的 WGSL `f32` Cartesian Kerr–Schild 光线追迹器，并把解析天空、视界和可见失败状态写入 scene-linear HDR；CPU `f64` reference 仍是独立比较路径，不与 GPU 共享离散实现。
+项目目前具备首个可验证的 **Interactive trace** 闭环。原生窗口运行独立的 WGSL `f32` Cartesian Kerr–Schild 光线追迹器，并把解析天空、视界和可见失败状态写入 scene-linear HDR；CPU `f64` reference 仍是独立比较路径，不与 GPU 共享离散实现。
 
 已经实现：
 
@@ -24,7 +24,7 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 - WGSL `f32` Kerr–Schild geometry/Hamilton RHS、负 affine RK4、事件定位、守恒量 drift 与 typed numerical failure；
 - headless trace/HDR readback、CPU/GPU 初始光线与 regular sample matrix 合同，以及非静默的 sky/horizon/failure 输出。
 
-尚未实现：吸积盘与辐射传输、频率比成像、自适应重建和研究工作台。CPU reference 与 GPU interactive path 的当前证据范围分别见 [Phase 1 实现与证据](docs/phase-1.md)和 [Phase 2 实现与证据](docs/phase-2.md)，不能从当前样本矩阵外推到 near-critical 或未验证平台。
+尚未实现：吸积盘与辐射传输、频率比成像、自适应重建和研究工作台。CPU reference 与 GPU interactive path 的当前证据范围分别见 [Reference 实现与证据](docs/reference-implementation.md)和 [Interactive Trace 实现与证据](docs/interactive-trace.md)，不能从当前样本矩阵外推到 near-critical 或未验证平台。
 
 macOS 使用 Metal；Windows 与 Linux 使用 Vulkan。Windows/Linux 发布支持仍需在具名系统、adapter 与 driver 上补齐验证证据。
 
@@ -84,7 +84,7 @@ Phase 1 建立领域模型与 CPU reference；Phase 2 已接通可诊断的 GPU 
 1. [产品范围](docs/product.md) — 能力、非目标与科学声明边界；
 2. [数学物理](docs/physics.md) — 坐标、时空、观察者与辐射约定；
 3. [验证合同](docs/validation.md) — reference policy、fixture 与误差预算；
-4. [Phase 2 实现与证据](docs/phase-2.md) — interactive tracer、GPU ABI、比较预算与适用域；
+4. [Interactive Trace 实现与证据](docs/interactive-trace.md) — interactive tracer、GPU ABI、比较预算与适用域；
 5. [架构合同](docs/architecture.md) — 模块接口、生命周期、GPU ABI 与资源换代；
 6. [渲染研究](docs/rendering.md) — solver、传输、重建和实验门槛；
 7. [平台合同](docs/platform.md) — Cargo 闭包、Metal/Vulkan 基线与能力协商；

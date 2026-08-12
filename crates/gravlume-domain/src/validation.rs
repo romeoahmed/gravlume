@@ -11,17 +11,10 @@ pub enum ValidationIssueCode {
     InternalInvariant,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ValidationSeverity {
-    Error,
-    Warning,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidationIssue {
     code: ValidationIssueCode,
     field_path: String,
-    severity: ValidationSeverity,
     explanation: String,
 }
 
@@ -34,7 +27,6 @@ impl ValidationIssue {
         Self {
             code,
             field_path: field_path.into(),
-            severity: ValidationSeverity::Error,
             explanation: explanation.into(),
         }
     }
@@ -47,11 +39,6 @@ impl ValidationIssue {
     #[must_use]
     pub fn field_path(&self) -> &str {
         &self.field_path
-    }
-
-    #[must_use]
-    pub const fn severity(&self) -> ValidationSeverity {
-        self.severity
     }
 
     /// Returns a diagnostic explanation whose wording is not a stable protocol field.
