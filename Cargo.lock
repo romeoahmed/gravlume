@@ -720,8 +720,12 @@ dependencies = [
 name = "gravlume-render"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "egui",
  "egui-wgpu",
+ "gravlume-domain",
+ "gravlume-reference",
+ "naga",
  "pollster",
  "thiserror 2.0.20",
  "tracing",

@@ -22,6 +22,7 @@ rust-version = "1.97"
 publish = false
 
 [workspace.dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
 egui = "0.36"
 egui-wgpu = { version = "0.36", default-features = false }
 egui-winit = { version = "0.36", default-features = false }
