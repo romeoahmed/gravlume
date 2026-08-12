@@ -220,6 +220,8 @@ near-critical fixture 不套一个全局 angle tolerance。它必须给成对的
 |---|---:|
 | regular termination / branch | exact reference equality |
 | regular escape/source angular error | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
+| regular travel-time absolute error | `1e-3 M` |
+| recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift | each `0.05` |
 | Frequency Ratio relative error | `2e-3` |
 | surface event position | `5e-3 M` |
 | numerical failure on regular matrix | `0` |

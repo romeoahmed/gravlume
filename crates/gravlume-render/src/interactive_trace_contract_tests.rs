@@ -11,8 +11,8 @@ use num_traits::ToPrimitive as _;
 
 use crate::{
     trace::{
-        TRACE_RECORD_SIZE, TRACE_SHADER, TraceRecord, TraceTermination, TraceUniforms,
-        UnknownTraceTermination,
+        INVARIANT_DRIFT_LIMIT, TRACE_RECORD_SIZE, TRACE_SHADER, TraceRecord, TraceTermination,
+        TraceUniforms, UnknownTraceTermination,
     },
     trace_test_support::{TraceEntryPoint, render_trace_for_test},
 };
@@ -43,7 +43,7 @@ fn trace_termination_discriminants_are_stable_and_checked() {
 }
 
 #[test]
-fn host_struct_offsets_match_the_wgsl_abi() {
+fn host_uniform_and_capture_layouts_match_the_gpu_abi() {
     assert_eq!(size_of::<TraceUniforms>(), 144);
     assert_eq!(offset_of!(TraceUniforms, spacetime), 0);
     assert_eq!(offset_of!(TraceUniforms, observer_event), 16);
@@ -79,6 +79,10 @@ fn observation_pack_is_dimensionless_and_retains_the_viewport_contract() {
     assert_eq!(packed.viewport[..2], [7, 5]);
     assert_eq!(packed.projection_policy[1].to_bits(), 200.0_f32.to_bits());
     assert_eq!(packed.projection_policy[2].to_bits(), 0x2b80_0000);
+    assert_eq!(
+        packed.integration[3].to_bits(),
+        INVARIANT_DRIFT_LIMIT.to_bits()
+    );
 }
 
 #[test]
@@ -106,7 +110,7 @@ fn shader_parses_validates_and_keeps_its_resource_contract() {
         .map(|binding| (binding.group, binding.binding))
         .collect::<Vec<_>>();
     bindings.sort_unstable();
-    assert_eq!(bindings, [(0, 0), (0, 1), (0, 2)]);
+    assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
 }
 
 #[test]
@@ -230,6 +234,26 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             event_residual <= 5.0e-3,
             "{viewport_sample:?}: event residual {event_residual:e}"
         );
+
+        let travel_time_error =
+            (f64::from(gpu.direction_time[3]) - reference.travel_time_m()).abs();
+        assert!(
+            travel_time_error <= 1.0e-3,
+            "{viewport_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
+            gpu.direction_time[3],
+            reference.travel_time_m(),
+            gpu.invariant_drift,
+            reference.diagnostics(),
+        );
+        for (invariant, drift) in ["null", "energy", "angular momentum", "Carter"]
+            .into_iter()
+            .zip(gpu.invariant_drift)
+        {
+            assert!(
+                (0.0..=INVARIANT_DRIFT_LIMIT).contains(&drift),
+                "{viewport_sample:?}: {invariant} drift {drift:e}"
+            );
+        }
     }
 }
 

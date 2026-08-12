@@ -2,8 +2,11 @@ use gravlume_domain::Observation;
 
 use crate::{
     extent::RenderExtent,
-    trace::{TRACE_RECORD_SIZE, TraceCompute, TraceRecord},
+    trace::{TraceCompute, TraceRecord, trace_record_plane_size},
 };
+
+const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
+const RECORD_FIELD_COUNT: u64 = 3;
 
 #[derive(Clone, Copy)]
 pub enum TraceEntryPoint {
@@ -43,8 +46,9 @@ pub fn render_trace_for_test(
     }
     .expect("observation packs for GPU");
     let target = compute.create_target(&gpu.device, extent);
-    let trace_bytes = u64::from(extent.width()) * u64::from(extent.height()) * TRACE_RECORD_SIZE;
-    let hdr_offset = trace_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT.into())
+    let plane_size = trace_record_plane_size(extent);
+    let record_bytes = plane_size * RECORD_FIELD_COUNT;
+    let hdr_offset = record_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT.into())
         * u64::from(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
     let (unpadded_bytes_per_row, padded_bytes_per_row) = readback_row_layout(extent);
     let hdr_bytes = u64::from(padded_bytes_per_row) * u64::from(extent.height());
@@ -63,7 +67,15 @@ pub fn render_trace_for_test(
         TraceEntryPoint::InitialRay { .. } => compute.encode_initial_rays(&mut encoder, &target),
         TraceEntryPoint::Trace => compute.encode(&mut encoder, &target, None),
     }
-    encoder.copy_buffer_to_buffer(target.records(), 0, &readback, 0, trace_bytes);
+    for (plane_index, plane) in target.record_planes().into_iter().enumerate() {
+        encoder.copy_buffer_to_buffer(
+            plane,
+            0,
+            &readback,
+            u64::try_from(plane_index).expect("record plane index fits u64") * plane_size,
+            plane_size,
+        );
+    }
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture: target.texture(),
@@ -87,12 +99,21 @@ pub fn render_trace_for_test(
     );
     let submission = gpu.queue.submit([encoder.finish()]);
     let mapped = gpu.read_buffer(&readback, submission);
-    let trace_end = usize::try_from(trace_bytes).expect("test trace size fits usize");
-    let trace_record_size =
-        usize::try_from(TRACE_RECORD_SIZE).expect("trace record ABI size fits usize");
-    let records = mapped[..trace_end]
-        .chunks_exact(trace_record_size)
-        .map(bytemuck::pod_read_unaligned)
+    let record_end = usize::try_from(record_bytes).expect("test trace size fits usize");
+    let plane_size = usize::try_from(plane_size).expect("test record plane size fits usize");
+    let direction_time = mapped[..plane_size].chunks_exact(RECORD_FIELD_SIZE);
+    let invariant_drift = mapped[plane_size..plane_size * 2].chunks_exact(RECORD_FIELD_SIZE);
+    let metadata = mapped[plane_size * 2..record_end].chunks_exact(RECORD_FIELD_SIZE);
+    let records = direction_time
+        .zip(invariant_drift)
+        .zip(metadata)
+        .map(
+            |((direction_time, invariant_drift), metadata)| TraceRecord {
+                direction_time: bytemuck::pod_read_unaligned(direction_time),
+                invariant_drift: bytemuck::pod_read_unaligned(invariant_drift),
+                metadata: bytemuck::pod_read_unaligned(metadata),
+            },
+        )
         .collect();
     let hdr_start = usize::try_from(hdr_offset).expect("test HDR offset fits usize");
     let hdr = remove_row_padding(

@@ -10,12 +10,6 @@ struct TraceUniforms {
     viewport: vec4<u32>,
 }
 
-struct TraceRecord {
-    direction_time: vec4<f32>,
-    invariant_drift: vec4<f32>,
-    metadata: vec4<u32>,
-}
-
 struct Geometry {
     radius: f32,
     radius_gradient: vec3<f32>,
@@ -75,7 +69,13 @@ var<uniform> trace_uniforms: TraceUniforms;
 var scene_hdr: texture_storage_2d<rgba16float, write>;
 
 @group(0) @binding(2)
-var<storage, read_write> trace_records: array<TraceRecord>;
+var<storage, read_write> trace_direction_time: array<vec4<f32>>;
+
+@group(0) @binding(3)
+var<storage, read_write> trace_invariant_drift: array<vec4<f32>>;
+
+@group(0) @binding(4)
+var<storage, read_write> trace_metadata: array<vec4<u32>>;
 
 fn finite_scalar(value: f32) -> bool {
     return value == value && abs(value) <= 3.402823466e38;
@@ -399,10 +399,29 @@ fn rk4_step(state: TraceState, step: f32) -> StepResult {
     return StepResult(next, 0u);
 }
 
-fn interpolate_state(start: TraceState, end: TraceState, amount: f32) -> TraceState {
+fn dense_state_at(
+    start: TraceState,
+    end: TraceState,
+    start_derivative: RhsResult,
+    end_derivative: RhsResult,
+    step: f32,
+    step_fraction: f32,
+) -> TraceState {
+    let fraction_squared = step_fraction * step_fraction;
+    let fraction_cubed = fraction_squared * step_fraction;
+    let start_weight = 2.0 * fraction_cubed - 3.0 * fraction_squared + 1.0;
+    let start_derivative_weight = fraction_cubed - 2.0 * fraction_squared + step_fraction;
+    let end_weight = -2.0 * fraction_cubed + 3.0 * fraction_squared;
+    let end_derivative_weight = fraction_cubed - fraction_squared;
     return TraceState(
-        mix(start.position, end.position, amount),
-        mix(start.momentum, end.momentum, amount),
+        start_weight * start.position
+            + step * start_derivative_weight * start_derivative.position
+            + end_weight * end.position
+            + step * end_derivative_weight * end_derivative.position,
+        start_weight * start.momentum
+            + step * start_derivative_weight * start_derivative.momentum
+            + end_weight * end.momentum
+            + step * end_derivative_weight * end_derivative.momentum,
     );
 }
 
@@ -528,11 +547,9 @@ fn store_trace_result(
     travel_time: f32,
     maximum_drift: vec4<f32>,
 ) {
-    trace_records[index] = TraceRecord(
-        vec4<f32>(direction, travel_time),
-        maximum_drift,
-        vec4<u32>(termination, flags, steps, bitcast<u32>(event_residual)),
-    );
+    trace_direction_time[index] = vec4<f32>(direction, travel_time);
+    trace_invariant_drift[index] = maximum_drift;
+    trace_metadata[index] = vec4<u32>(termination, flags, steps, bitcast<u32>(event_residual));
     var scene_linear = visible_failure_color(termination);
     if termination == TERMINATION_HORIZON {
         scene_linear = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -543,11 +560,9 @@ fn store_trace_result(
 }
 
 fn store_failure(index: u32, pixel: vec2<u32>, flags: u32) {
-    trace_records[index] = TraceRecord(
-        vec4<f32>(0.0),
-        vec4<f32>(0.0),
-        vec4<u32>(TERMINATION_NUMERICAL_FAILURE, flags, 0u, 0u),
-    );
+    trace_direction_time[index] = vec4<f32>(0.0);
+    trace_invariant_drift[index] = vec4<f32>(0.0);
+    trace_metadata[index] = vec4<u32>(TERMINATION_NUMERICAL_FAILURE, flags, 0u, 0u);
     textureStore(scene_hdr, vec2<i32>(pixel), vec4<f32>(1.0, 0.0, 1.0, 1.0));
 }
 
@@ -564,11 +579,12 @@ fn initial_ray_contract(@builtin(global_invocation_id) global_id: vec3<u32>) {
         store_failure(index, global_id.xy, initial.flags);
         return;
     }
-    trace_records[index] = TraceRecord(
-        vec4<f32>(initial.sight.yzw, trace_uniforms.projection_policy.w),
-        vec4<f32>(initial.null_residual, 0.0, 0.0, 0.0),
-        vec4<u32>(0u),
+    trace_direction_time[index] = vec4<f32>(
+        initial.sight.yzw,
+        trace_uniforms.projection_policy.w,
     );
+    trace_invariant_drift[index] = vec4<f32>(initial.null_residual, 0.0, 0.0, 0.0);
+    trace_metadata[index] = vec4<u32>(0u);
     textureStore(scene_hdr, vec2<i32>(global_id.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
 }
 
@@ -669,27 +685,6 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             );
             return;
         }
-        travel_time += abs(stepped.state.position.x - state.position.x);
-        let current_invariants = invariants(stepped.state);
-        if current_invariants.flags != 0u {
-            store_trace_result(
-                index,
-                global_id.xy,
-                TERMINATION_NUMERICAL_FAILURE,
-                current_invariants.flags,
-                step_index + 1u,
-                0.0,
-                vec3<f32>(0.0),
-                travel_time,
-                maximum_drift,
-            );
-            return;
-        }
-        maximum_drift = max(
-            maximum_drift,
-            invariant_drift(initial_invariants.values, current_invariants.values),
-        );
-
         var termination = 0u;
         var event_surface = 0.0;
         var start_value = 0.0;
@@ -732,16 +727,15 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 );
                 return;
             }
-            let amount = clamp((event_surface - start_value) / denominator, 0.0, 1.0);
-            let localized = interpolate_state(state, stepped.state, amount);
-            let localized_geometry = geometry_at(localized.position.yzw);
-            let localized_rhs = hamilton_rhs(localized);
-            if localized_geometry.flags != 0u || localized_rhs.flags != 0u {
+            let event_fraction = clamp((event_surface - start_value) / denominator, 0.0, 1.0);
+            let start_rhs = hamilton_rhs(state);
+            let end_rhs = hamilton_rhs(stepped.state);
+            if start_rhs.flags != 0u || end_rhs.flags != 0u {
                 store_trace_result(
                     index,
                     global_id.xy,
                     TERMINATION_NUMERICAL_FAILURE,
-                    localized_geometry.flags | localized_rhs.flags,
+                    start_rhs.flags | end_rhs.flags,
                     step_index + 1u,
                     0.0,
                     vec3<f32>(0.0),
@@ -750,6 +744,40 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 );
                 return;
             }
+            let localized = dense_state_at(
+                state,
+                stepped.state,
+                start_rhs,
+                end_rhs,
+                -step_magnitude,
+                event_fraction,
+            );
+            let localized_geometry = geometry_at(localized.position.yzw);
+            let localized_rhs = hamilton_rhs(localized);
+            let localized_invariants = invariants(localized);
+            let localized_flags = localized_geometry.flags
+                | localized_rhs.flags
+                | localized_invariants.flags;
+            if localized_flags != 0u {
+                store_trace_result(
+                    index,
+                    global_id.xy,
+                    TERMINATION_NUMERICAL_FAILURE,
+                    localized_flags,
+                    step_index + 1u,
+                    0.0,
+                    vec3<f32>(0.0),
+                    travel_time,
+                    maximum_drift,
+                );
+                return;
+            }
+            let committed_travel_time = travel_time
+                + abs(localized.position.x - state.position.x);
+            let committed_maximum_drift = max(
+                maximum_drift,
+                invariant_drift(initial_invariants.values, localized_invariants.values),
+            );
             var direction = vec3<f32>(0.0);
             if termination == TERMINATION_ESCAPE {
                 direction = normalize(-localized_rhs.position.yzw);
@@ -761,8 +789,8 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             );
             let event_residual = (localized_value - event_surface) / max(1.0, abs(event_surface));
             let uncertainty = select(
-                max(maximum_drift.x, maximum_drift.w),
-                maximum_drift.x,
+                max(committed_maximum_drift.x, committed_maximum_drift.w),
+                committed_maximum_drift.x,
                 termination == TERMINATION_HORIZON,
             );
             if uncertainty > trace_uniforms.integration.w {
@@ -776,11 +804,31 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 step_index + 1u,
                 event_residual,
                 direction,
+                committed_travel_time,
+                committed_maximum_drift,
+            );
+            return;
+        }
+        let current_invariants = invariants(stepped.state);
+        if current_invariants.flags != 0u {
+            store_trace_result(
+                index,
+                global_id.xy,
+                TERMINATION_NUMERICAL_FAILURE,
+                current_invariants.flags,
+                step_index + 1u,
+                0.0,
+                vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
             );
             return;
         }
+        travel_time += abs(stepped.state.position.x - state.position.x);
+        maximum_drift = max(
+            maximum_drift,
+            invariant_drift(initial_invariants.values, current_invariants.values),
+        );
         state = stepped.state;
     }
 

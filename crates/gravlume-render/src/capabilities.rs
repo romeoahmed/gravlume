@@ -1,5 +1,21 @@
 pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
+/// Resolves the exact limits consumed by the native renderer.
+///
+/// `using_resolution` intentionally covers only texture dimensions, so the two buffer limits
+/// used by the per-pixel trace record planes must be carried over explicitly.
+/// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html#method.using_resolution>
+pub fn required_device_limits(adapter: wgpu::Limits) -> wgpu::Limits {
+    let max_storage_buffer_binding_size = adapter.max_storage_buffer_binding_size;
+    let max_buffer_size = adapter.max_buffer_size;
+    let mut required = wgpu::Limits::default()
+        .using_resolution(adapter.clone())
+        .using_alignment(adapter);
+    required.max_storage_buffer_binding_size = max_storage_buffer_binding_size;
+    required.max_buffer_size = max_buffer_size;
+    required
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CapabilityError {
     #[error("software adapters are outside the native desktop baseline")]
@@ -136,7 +152,28 @@ pub fn select_surface(
 
 #[cfg(test)]
 mod tests {
-    use super::{BASELINE_FEATURES, CapabilityError, check_baseline_adapter, select_surface};
+    use super::{
+        BASELINE_FEATURES, CapabilityError, check_baseline_adapter, required_device_limits,
+        select_surface,
+    };
+
+    #[test]
+    fn device_limits_include_trace_record_capacity() {
+        let adapter = wgpu::Limits {
+            max_texture_dimension_2d: 16_384,
+            min_storage_buffer_offset_alignment: 64,
+            max_storage_buffer_binding_size: 1 << 30,
+            max_buffer_size: 2 << 30,
+            ..wgpu::Limits::default()
+        };
+
+        let required = required_device_limits(adapter);
+
+        assert_eq!(required.max_texture_dimension_2d, 16_384);
+        assert_eq!(required.min_storage_buffer_offset_alignment, 64);
+        assert_eq!(required.max_storage_buffer_binding_size, 1 << 30);
+        assert_eq!(required.max_buffer_size, 2 << 30);
+    }
 
     fn capabilities(
         formats: &[(wgpu::TextureFormat, wgpu::SurfaceColorSpaces)],
