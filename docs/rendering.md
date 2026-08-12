@@ -60,6 +60,8 @@ geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostic
 - metric/derivative 每步较贵，但状态与 event 语义通用；
 - backward trace 的 ingoing/outgoing chart 必须与传播/数值方向验证。
 
+默认相机从 observer 沿 negative affine direction 回溯，因此 interactive 路径选择 outgoing Kerr–Schild。Bozzola、Chan 与 Paschalidis 对该传播方向证明 ingoing chart 在过去视界形成 coordinate barrier，而 outgoing chart 给出数值正则的光线；这不是精度旋钮，而是算法定义域选择：[Phys. Rev. D 108, 084004 (2023)](https://doi.org/10.1103/PhysRevD.108.084004)。versioned ingoing reference fixture 保持原语义，不能静默换 chart。
+
 GPU 候选先比较固定 RK4 + 几何/量化 step 与少量有界 embedded tier。每 ray 的完全自适应 DP5(4) 容易产生 accept/reject 发散；它优先属于 CPU reference。选择基于 GPU milliseconds 对 observable error 曲线，不基于“阶数更高”的名字。
 
 ### 3.2 Schwarzschild 专用路径

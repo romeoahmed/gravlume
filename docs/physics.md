@@ -84,8 +84,8 @@ u=
 \[
 l_\mu=\left(
 1,
-\frac{s r x+a y}{r^2+a^2},
-\frac{s r y-a x}{r^2+a^2},
+\frac{s(r x+a y)}{r^2+a^2},
+\frac{s(r y-a x)}{r^2+a^2},
 \frac{s z}{r}
 \right),
 \]
@@ -93,8 +93,8 @@ l_\mu=\left(
 \[
 l^\mu=\eta^{\mu\nu}l_\nu=\left(
 -1,
-\frac{s r x+a y}{r^2+a^2},
-\frac{s r y-a x}{r^2+a^2},
+\frac{s(r x+a y)}{r^2+a^2},
+\frac{s(r y-a x)}{r^2+a^2},
 \frac{s z}{r}
 \right).
 \]
@@ -197,13 +197,13 @@ N_i=(6Mr^2-2q_e^2r)r_i,
 
 \[
 \partial_i\ell_x=
-\frac{s(r_i x+r\delta_{ix})+a\delta_{iy}}A
+\frac{s(r_i x+r\delta_{ix}+a\delta_{iy})}A
 -\ell_x\frac{2rr_i}A,
 \]
 
 \[
 \partial_i\ell_y=
-\frac{s(r_i y+r\delta_{iy})-a\delta_{ix}}A
+\frac{s(r_i y+r\delta_{iy}-a\delta_{ix})}A
 -\ell_y\frac{2rr_i}A,
 \]
 
@@ -214,7 +214,7 @@ N_i=(6Mr^2-2q_e^2r)r_i,
 
 这些表达与第 2.1 节的 $r_i$ 一起构成 Phase 1/2 的 Kerr–Schild RHS 合同；任一 denominator guard 在求值前触发 typed numerical failure，不能以 clamp 改写方程。上述导数、$l^2=0$ 和 rank-one inverse 已用精确符号代数独立复算。[A]
 
-stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。默认 ingoing chart 的 oblate coordinates 可写为
+stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。ingoing/outgoing 分支共享同一组 Cartesian spatial coordinates；固定 $l_t=1$ 时，$s=-1$ 是论文中 outgoing covector 的整体负号表示。因此 oblate coordinates 均写为
 
 \[
 x=(r\cos\phi-a\sin\phi)\sin\theta,\quad

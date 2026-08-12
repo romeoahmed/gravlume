@@ -308,7 +308,6 @@ impl DisplayPipeline {
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
         scene: &PublishedScene,
-        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let color_attachment = Some(wgpu::RenderPassColorAttachment {
             view: surface_view,
@@ -323,7 +322,7 @@ impl DisplayPipeline {
             label: Some("surface output pass"),
             color_attachments: &[color_attachment],
             depth_stencil_attachment: None,
-            timestamp_writes,
+            timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });

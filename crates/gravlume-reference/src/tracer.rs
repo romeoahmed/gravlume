@@ -705,7 +705,7 @@ fn select_earliest_event(
 
 #[cfg(test)]
 mod tests {
-    use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
+    use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates};
 
     use super::{
         EventArming, EventConfiguration, EventKind, ReferencePolicy, ReferenceTracer, Termination,
@@ -715,7 +715,8 @@ mod tests {
 
     #[test]
     fn accepted_step_limit_is_a_typed_terminal_condition() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("spacetime is valid");
+        let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("spacetime is valid");
         let state = GeodesicState::new([0.0, 50.0, 0.0, 0.0], [-1.0, -0.99, 0.1, 0.0])
             .expect("state is finite");
         let policy = ReferencePolicy::regular_v1().limited_to_one_step_for_test();
@@ -733,7 +734,8 @@ mod tests {
 
     #[test]
     fn singularity_guard_uses_the_unclamped_d_observable() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0).expect("spacetime is valid");
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("spacetime is valid");
         let policy = ReferencePolicy::regular_v1();
         let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
@@ -753,7 +755,8 @@ mod tests {
 
     #[test]
     fn singularity_guard_arms_only_after_leaving_the_full_band() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0).expect("spacetime is valid");
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("spacetime is valid");
         let policy = ReferencePolicy::regular_v1();
         let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
@@ -777,7 +780,8 @@ mod tests {
 
     #[test]
     fn superextremal_ring_approach_stops_at_the_singularity_guard() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0).expect("spacetime is valid");
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("spacetime is valid");
         let state = GeodesicState::new([0.0, 2.1, 0.0, 0.0], [-1.0, -1.0, 0.0, 0.0])
             .expect("state is finite");
         let tracer = ReferenceTracer::new(

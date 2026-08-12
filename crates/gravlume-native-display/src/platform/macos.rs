@@ -12,7 +12,7 @@ use objc2_app_kit::{
 use objc2_foundation::{NSNotification, NSNotificationCenter, NSObjectProtocol};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
-use crate::{DynamicRange, MonitorError, UnknownDisplayState};
+use crate::{DynamicRange, MonitorError, PlatformMonitor, UnknownDisplayState};
 
 pub struct Monitor {
     application: Retained<NSApplication>,
@@ -64,8 +64,10 @@ impl Monitor {
             observers,
         })
     }
+}
 
-    pub(super) fn dynamic_range(&self) -> DynamicRange {
+impl PlatformMonitor for Monitor {
+    fn dynamic_range(&self) -> DynamicRange {
         if self
             .application
             .applicationShouldSuppressHighDynamicRangeContent()
@@ -78,29 +80,20 @@ impl Monitor {
         )
     }
 
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        clippy::unused_self,
-        reason = "shared platform monitor interface; AppKit notifications are dispatched by winit"
-    )]
-    pub(super) const fn refresh(&mut self) {}
+    fn refresh(&mut self) {}
 
-    #[expect(
-        clippy::unused_self,
-        reason = "shared platform monitor interface; AppKit needs no external dispatch wake"
-    )]
-    pub(super) const fn next_dispatch_deadline(&self) -> Option<Instant> {
+    fn next_dispatch_deadline(&self) -> Option<Instant> {
         None
     }
 
-    pub(super) fn shutdown(&mut self) {
+    fn shutdown(&mut self) {
         for observer in self.observers.drain(..) {
             // SAFETY: each token came from this center and remains a valid Objective-C object.
             unsafe { self.center.removeObserver(observer.as_ref()) };
         }
     }
 
-    pub(super) fn shutdown_complete(&self) -> bool {
+    fn shutdown_complete(&self) -> bool {
         self.observers.is_empty()
     }
 }

@@ -150,6 +150,7 @@ fn invalid_geometry(flags: u32) -> Geometry {
 fn geometry_at(position: vec3<f32>) -> Geometry {
     let spin_physical = trace_uniforms.spacetime.y;
     let charge_physical = trace_uniforms.spacetime.z;
+    let principal_direction = trace_uniforms.spacetime.w;
     let scale = max(
         max(max(abs(position.x), abs(position.y)), abs(position.z)),
         abs(spin_physical),
@@ -185,19 +186,19 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let numerator_gradient = 2.0 * mass * radius_gradient;
         let scalar_f_gradient =
             (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
-        let null_covector = vec4<f32>(1.0, 0.0, 0.0, axis_sign);
-        let null_vector = vec4<f32>(-1.0, 0.0, 0.0, axis_sign);
+        let null_covector = vec4<f32>(1.0, 0.0, 0.0, principal_direction * axis_sign);
+        let null_vector = vec4<f32>(-1.0, 0.0, 0.0, principal_direction * axis_sign);
         let inverse_denominator_scale = 1.0 / (sigma * scale);
         let null_dx = vec4<f32>(
             0.0,
-            radius * inverse_denominator_scale,
-            -spin * inverse_denominator_scale,
+            principal_direction * radius * inverse_denominator_scale,
+            -principal_direction * spin * inverse_denominator_scale,
             0.0,
         );
         let null_dy = vec4<f32>(
             0.0,
-            spin * inverse_denominator_scale,
-            radius * inverse_denominator_scale,
+            principal_direction * spin * inverse_denominator_scale,
+            principal_direction * radius * inverse_denominator_scale,
             0.0,
         );
         let physical_radius = scale * radius;
@@ -272,7 +273,7 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
     if radial_denominator <= 0.0 || !finite_scalar(radial_denominator) {
         return invalid_geometry(FLAG_INVALID_DENOMINATOR);
     }
-    let null_spatial = vec3<f32>(
+    let null_spatial = principal_direction * vec3<f32>(
         (radius * x + spin * y) / radial_denominator,
         (radius * y - spin * x) / radial_denominator,
         z / radius,
@@ -289,13 +290,20 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let numerator_y = radius_i * y + radius * delta_y - spin * delta_x;
         let radial_derivative = 2.0 * radius * radius_i;
         let derivative_x =
-            (numerator_x / radial_denominator - null_spatial.x * radial_derivative / radial_denominator)
+            (numerator_x / radial_denominator
+                - principal_direction * null_spatial.x * radial_derivative / radial_denominator)
             / scale;
         let derivative_y =
-            (numerator_y / radial_denominator - null_spatial.y * radial_derivative / radial_denominator)
+            (numerator_y / radial_denominator
+                - principal_direction * null_spatial.y * radial_derivative / radial_denominator)
             / scale;
         let derivative_z = (delta_z / radius - coordinates.z * radius_i / radius_squared) / scale;
-        null_gradients[index] = vec4<f32>(0.0, derivative_x, derivative_y, derivative_z);
+        null_gradients[index] = vec4<f32>(
+            0.0,
+            principal_direction * derivative_x,
+            principal_direction * derivative_y,
+            principal_direction * derivative_z,
+        );
     }
     let physical_radius = scale * radius;
     let singularity = singularity_measure(physical_radius, spin_physical, position.z);
@@ -692,10 +700,9 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             return;
         }
 
-        let strong_field_scale = select(0.1, 1.0, start_geometry.radius > 6.0);
         let step_magnitude = clamp(
-            strong_field_scale * trace_uniforms.step_policy.x * start_geometry.radius,
-            strong_field_scale * trace_uniforms.step_policy.y,
+            trace_uniforms.step_policy.x * start_geometry.radius,
+            trace_uniforms.step_policy.y,
             trace_uniforms.step_policy.z,
         );
         let stepped = rk4_step(state, state_rhs, -step_magnitude);

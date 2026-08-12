@@ -1,7 +1,7 @@
 use crate::{
-    GeodesicState, KerrNewmanSpacetime, ObserverFrame, ParameterState, SpacetimeEvent,
-    StationaryObserverDraft, ValidationIssueCode, ValidationReport, ViewportProjection,
-    ViewportSample, math::FourVector, observer::StationaryObserver,
+    GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates, ObserverFrame, ParameterState,
+    SpacetimeEvent, StationaryObserverDraft, ValidationIssueCode, ValidationReport,
+    ViewportProjection, ViewportSample, math::FourVector, observer::StationaryObserver,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
@@ -11,6 +11,7 @@ pub struct PhysicalSceneDraft {
     mass_m: f64,
     spin_m: f64,
     charge_m: f64,
+    coordinates: KerrSchildCoordinates,
     observer: StationaryObserverDraft,
 }
 
@@ -20,12 +21,14 @@ impl PhysicalSceneDraft {
         mass_m: f64,
         spin_m: f64,
         charge_m: f64,
+        coordinates: KerrSchildCoordinates,
         observer: StationaryObserverDraft,
     ) -> Self {
         Self {
             mass_m,
             spin_m,
             charge_m,
+            coordinates,
             observer,
         }
     }
@@ -48,12 +51,14 @@ impl PhysicalScene {
             mass_m,
             spin_m,
             charge_m,
+            coordinates,
             observer,
         } = draft;
         let spacetime = KerrNewmanSpacetime::validated_with_prefix(
             mass_m,
             spin_m,
             charge_m,
+            coordinates,
             "physical_scene.spacetime",
         );
         let observer_report = observer.validate("physical_scene.observer");

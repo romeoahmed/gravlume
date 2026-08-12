@@ -23,7 +23,7 @@ use windows::{
     core::Interface as _,
 };
 
-use crate::{DynamicRange, MonitorError, UnknownDisplayState};
+use crate::{DynamicRange, MonitorError, PlatformMonitor, UnknownDisplayState};
 use windows_core::Type as _;
 use windows_future::IAsyncAction;
 
@@ -110,8 +110,10 @@ impl Monitor {
             unavailable_reason: unavailable_reason(error),
         }
     }
+}
 
-    pub(super) fn dynamic_range(&self) -> DynamicRange {
+impl PlatformMonitor for Monitor {
+    fn dynamic_range(&self) -> DynamicRange {
         self.display
             .as_ref()
             .map_or(DynamicRange::Unknown(self.unavailable_reason), |display| {
@@ -137,22 +139,13 @@ impl Monitor {
             })
     }
 
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        clippy::unused_self,
-        reason = "shared platform monitor interface; WinRT events are dispatched by winit"
-    )]
-    pub(super) const fn refresh(&mut self) {}
+    fn refresh(&mut self) {}
 
-    #[expect(
-        clippy::unused_self,
-        reason = "shared platform monitor interface; Windows needs no external dispatch wake"
-    )]
-    pub(super) const fn next_dispatch_deadline(&self) -> Option<Instant> {
+    fn next_dispatch_deadline(&self) -> Option<Instant> {
         None
     }
 
-    pub(super) fn shutdown(&mut self) {
+    fn shutdown(&mut self) {
         if let (Some(display), Some(token)) = (&self.display, self.event_token.take()) {
             let _ = display.RemoveAdvancedColorInfoChanged(token);
         }
@@ -189,7 +182,7 @@ impl Monitor {
         }
     }
 
-    pub(super) fn shutdown_complete(&self) -> bool {
+    fn shutdown_complete(&self) -> bool {
         self.shutdown_complete.load(Ordering::Acquire)
     }
 }

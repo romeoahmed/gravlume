@@ -15,7 +15,7 @@ use wayland_protocols::wp::color_management::v1::client::{
     wp_image_description_v1::{self, WpImageDescriptionV1},
 };
 
-use crate::{DynamicRange, MonitorError, UnknownDisplayState};
+use crate::{DynamicRange, MonitorError, PlatformMonitor, UnknownDisplayState};
 
 const MINIMUM_COLOR_MANAGEMENT_VERSION: u32 = 2;
 const MAXIMUM_COLOR_MANAGEMENT_VERSION: u32 = 3;
@@ -170,8 +170,10 @@ impl Monitor {
             snapshot: DynamicRange::Unknown(reason),
         }
     }
+}
 
-    pub(super) fn refresh(&mut self) {
+impl PlatformMonitor for Monitor {
+    fn refresh(&mut self) {
         let Some(live) = self.live.as_mut() else {
             return;
         };
@@ -190,17 +192,17 @@ impl Monitor {
         }
     }
 
-    pub(super) const fn dynamic_range(&self) -> DynamicRange {
+    fn dynamic_range(&self) -> DynamicRange {
         self.snapshot
     }
 
-    pub(super) fn next_dispatch_deadline(&self) -> Option<Instant> {
+    fn next_dispatch_deadline(&self) -> Option<Instant> {
         self.live
             .as_ref()
             .map(|_| Instant::now() + EVENT_LOOP_WAKE_GUARD)
     }
 
-    pub(super) fn shutdown(&mut self) {
+    fn shutdown(&mut self) {
         let Some(mut live) = self.live.take() else {
             return;
         };
@@ -214,7 +216,7 @@ impl Monitor {
         }
     }
 
-    pub(super) const fn shutdown_complete(&self) -> bool {
+    fn shutdown_complete(&self) -> bool {
         self.live.is_none()
     }
 }

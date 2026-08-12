@@ -1,8 +1,8 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, Observation, ParameterState, PhysicalScene, PhysicalSceneDraft, StationaryObserverDraft,
-    ValidationIssueCode, ViewportProjection,
+    Angle, KerrSchildCoordinates, Observation, ParameterState, PhysicalScene, PhysicalSceneDraft,
+    StationaryObserverDraft, ValidationIssueCode, ViewportProjection,
 };
 
 const OBSERVER_POSITION: [f64; 4] = [0.0, 25.980_762_113_533_16, 0.692_820_323_027_550_9, 15.0];
@@ -16,6 +16,7 @@ fn scene_with_frequency(measured_frequency: f64) -> PhysicalScene {
         1.0,
         0.8,
         0.0,
+        KerrSchildCoordinates::Ingoing,
         StationaryObserverDraft::new(
             OBSERVER_POSITION,
             [0.0; 4],
@@ -41,6 +42,7 @@ fn invalid_scene_reports_stable_codes_and_field_paths() {
         0.0,
         f64::NAN,
         0.0,
+        KerrSchildCoordinates::Ingoing,
         StationaryObserverDraft::new([0.0; 4], [0.0; 4], [0.0, 0.0, 1.0], 0.0),
     ));
 
@@ -87,6 +89,7 @@ fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
         1.0,
         spin,
         0.0,
+        KerrSchildCoordinates::Ingoing,
         StationaryObserverDraft::new([0.0, x, 0.0, 0.0], [0.0; 4], [0.0, 0.0, 1.0], 1.0),
     ))
     .expect("a finite stationary observer remains representable near g_tt = 0");
