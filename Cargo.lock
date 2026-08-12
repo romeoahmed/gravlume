@@ -690,6 +690,7 @@ version = "0.1.0"
 dependencies = [
  "egui",
  "egui-winit",
+ "gravlume-domain",
  "gravlume-render",
  "pollster",
  "thiserror 2.0.20",
@@ -726,6 +727,7 @@ dependencies = [
  "gravlume-domain",
  "gravlume-reference",
  "naga",
+ "num-traits",
  "pollster",
  "thiserror 2.0.20",
  "tracing",

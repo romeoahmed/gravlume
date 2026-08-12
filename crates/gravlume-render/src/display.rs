@@ -47,7 +47,7 @@ impl DisplayPipeline {
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Phase 0 display and presentation shader"),
+            label: Some("display and presentation shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/display.wgsl").into()),
         });
         let composite_pipeline = Self::create_render_pipeline(

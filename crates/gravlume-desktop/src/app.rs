@@ -1,9 +1,14 @@
 use std::{
     ffi::OsStr,
+    num::NonZeroU32,
     sync::Arc,
     time::{Duration, Instant},
 };
 
+use gravlume_domain::{
+    Angle, KerrNewmanSpacetime, Observation, PhysicalScene, PhysicalSceneDraft,
+    StationaryObserverDraft, ValidationReport, ViewportProjection,
+};
 use gravlume_render::{
     DeviceEvent, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics, RenderInitError,
     RenderRuntimeError, ResizeError,
@@ -31,6 +36,8 @@ pub enum RunError {
     Window(#[from] OsError),
     #[error("failed to initialize the GPU renderer: {0}")]
     RenderInit(#[from] RenderInitError),
+    #[error("failed to construct the validated default observation: {0}")]
+    DefaultObservation(#[from] ValidationReport),
     #[error("rendering failed: {0}")]
     RenderRuntime(#[from] RenderRuntimeError),
     #[error("fatal resize failure: {0}")]
@@ -134,7 +141,9 @@ impl DesktopApp {
             window.request_redraw();
             return Ok(());
         }
-        let renderer = pollster::block_on(GpuEngine::new(window.clone()))?;
+        let size = window.inner_size();
+        let observation = default_observation(size.width, size.height)?;
+        let renderer = pollster::block_on(GpuEngine::new(window.clone(), &observation))?;
         let diagnostics = renderer.diagnostics();
         tracing::info!(
             adapter = diagnostics.adapter_name(),
@@ -143,7 +152,7 @@ impl DesktopApp {
             format = diagnostics.surface_format(),
             color_space = diagnostics.color_space(),
             transfer = diagnostics.display_transfer(),
-            "initialized Phase 0 desktop renderer"
+            "initialized interactive desktop renderer"
         );
         self.renderer = Some(renderer);
         window.request_redraw();
@@ -328,7 +337,7 @@ impl ApplicationHandler<Instant> for DesktopApp {
                 let (completed_readback, events) = outcome.into_parts();
                 self.process_device_events(event_loop, events);
                 if self.smoke_once && self.presented_frames > 0 && completed_readback {
-                    tracing::info!("Phase 0 one-frame smoke completed");
+                    tracing::info!("interactive one-frame smoke completed");
                     event_loop.exit();
                     return;
                 }
@@ -372,13 +381,13 @@ fn show_overlay(
     diagnostics: &RenderDiagnostics<'_>,
     device_event: Option<&DeviceEvent>,
 ) {
-    egui::Window::new("Phase 0 · Desktop stack")
+    egui::Window::new("Interactive trace")
         .default_pos([16.0, 16.0])
         .resizable(false)
         .collapsible(false)
         .show(context, |ui| {
             ui.heading("Gravlume");
-            ui.label("scene-linear HDR compute → neutral display → egui");
+            ui.label("Kerr–Schild trace → analytic sky/horizon → neutral display → egui");
             ui.separator();
             ui.monospace(format!(
                 "{} · {}",
@@ -415,6 +424,24 @@ fn show_overlay(
                 );
             }
         });
+}
+
+fn default_observation(width: u32, height: u32) -> Result<Observation, ValidationReport> {
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0)?;
+    let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
+    let observer = StationaryObserverDraft::new(
+        [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
+        [0.0; 4],
+        [0.0, 0.0, 1.0],
+        1.0,
+    );
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(1.0, 0.8, 0.0, observer))?;
+    let projection = ViewportProjection::perspective(
+        NonZeroU32::new(width).unwrap_or(NonZeroU32::MIN),
+        NonZeroU32::new(height).unwrap_or(NonZeroU32::MIN),
+        Angle::from_radians(std::f64::consts::FRAC_PI_4)?,
+    )?;
+    Ok(Observation::new(scene, projection))
 }
 
 /// Keeps timer wakeups for GPU progress separate from repaint requests.

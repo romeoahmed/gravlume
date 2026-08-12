@@ -1,5 +1,7 @@
 use std::sync::{Arc, mpsc};
 
+use gravlume_domain::Observation;
+
 use crate::{
     capabilities::{BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, select_surface},
     display::{COMPOSITE_FORMAT, DisplayPipeline, DisplayTarget},
@@ -8,8 +10,8 @@ use crate::{
         DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
         install_device_callbacks, scoped_gpu_operation,
     },
-    scene::{SceneCompute, SceneTarget},
     timing::{GpuTimings, TimingSample},
+    trace::{TraceCompute, TraceTarget},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,7 +101,7 @@ impl RenderDiagnostics<'_> {
 }
 
 struct FrameResources {
-    scene: SceneTarget,
+    trace: TraceTarget,
     display: DisplayTarget,
 }
 
@@ -119,13 +121,13 @@ struct SurfaceUpdate {
 impl FrameResources {
     fn new(
         device: &wgpu::Device,
-        scene_compute: &SceneCompute,
+        trace: &TraceCompute,
         display: &DisplayPipeline,
         extent: RenderExtent,
     ) -> Self {
-        let scene = scene_compute.create_target(device, extent);
-        let display = display.create_target(device, scene.view(), extent);
-        Self { scene, display }
+        let trace = trace.create_target(device, extent);
+        let display = display.create_target(device, trace.view(), extent);
+        Self { trace, display }
     }
 }
 
@@ -178,7 +180,7 @@ pub struct GpuEngine {
     selection: SurfaceSelection,
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
-    scene_compute: SceneCompute,
+    trace: TraceCompute,
     display: DisplayPipeline,
     egui_renderer: egui_wgpu::Renderer,
     timings: GpuTimings,
@@ -188,13 +190,16 @@ pub struct GpuEngine {
 }
 
 impl GpuEngine {
-    /// Creates the Phase 0 GPU device and presentation resources for `window`.
+    /// Creates the GPU device, interactive trace, and presentation resources.
     ///
     /// # Errors
     ///
     /// Returns an error when the native surface, adapter, required capabilities, or device cannot
     /// be initialized.
-    pub async fn new(window: Arc<winit::window::Window>) -> Result<Self, RenderInitError> {
+    pub async fn new(
+        window: Arc<winit::window::Window>,
+        observation: &Observation,
+    ) -> Result<Self, RenderInitError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = crate::native_backends();
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -227,7 +232,7 @@ impl GpuEngine {
             .using_alignment(adapter_limits);
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("Gravlume Phase 0 device"),
+                label: Some("Gravlume renderer device"),
                 required_features: BASELINE_FEATURES,
                 required_limits,
                 ..Default::default()
@@ -236,7 +241,7 @@ impl GpuEngine {
 
         let (device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
-        let scene_compute = SceneCompute::new(&device);
+        let trace = TraceCompute::new(&device, observation)?;
         let display = DisplayPipeline::new(&device, selection.format());
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
@@ -256,7 +261,7 @@ impl GpuEngine {
             selection,
             extent: ExtentTracker::default(),
             frame_resources: None,
-            scene_compute,
+            trace,
             display,
             egui_renderer,
             timings,
@@ -269,7 +274,7 @@ impl GpuEngine {
             .finish()
             .await
             .map_err(|source| RenderInitError::GpuResource {
-                stage: "Phase 0 GPU resources",
+                stage: "interactive trace GPU resources",
                 source,
             })?;
         resize_result.map_err(RenderInitError::InitialResize)?;
@@ -302,12 +307,8 @@ impl GpuEngine {
                 let format_changed = selection.format() != self.selection.format();
                 let (replacement, presentation_pipeline) =
                     scoped_gpu_operation(&self.device, || {
-                        let replacement = FrameResources::new(
-                            &self.device,
-                            &self.scene_compute,
-                            &self.display,
-                            extent,
-                        );
+                        let replacement =
+                            FrameResources::new(&self.device, &self.trace, &self.display, extent);
                         let presentation_pipeline = format_changed.then(|| {
                             self.display
                                 .create_presentation_pipeline(&self.device, selection.format())
@@ -379,7 +380,7 @@ impl GpuEngine {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Gravlume Phase 0 frame encoder"),
+                label: Some("Gravlume frame encoder"),
             });
         let callback_buffers = self.egui_renderer.update_buffers(
             &self.device,
@@ -393,10 +394,10 @@ impl GpuEngine {
             .frame_resources
             .as_mut()
             .ok_or(RenderRuntimeError::MissingFrameResources)?;
-        debug_assert_eq!(frame.scene.extent(), extent);
+        debug_assert_eq!(frame.trace.extent(), extent);
         let compute_writes = capture_timing.then(|| self.timings.compute_writes());
-        self.scene_compute
-            .encode(&mut encoder, &frame.scene, compute_writes);
+        self.trace
+            .encode(&mut encoder, &frame.trace, compute_writes);
         let display_begin_writes = capture_timing.then(|| self.timings.display_begin_writes());
         self.display
             .encode_display(&mut encoder, &frame.display, display_begin_writes);

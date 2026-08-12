@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use crate::{CapabilityError, TimingError};
+use crate::{CapabilityError, TimingError, TraceInputError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RenderInitError {
@@ -11,12 +11,14 @@ pub enum RenderInitError {
     CreateSurface(#[from] wgpu::CreateSurfaceError),
     #[error("no adapter was available for the native surface: {0}")]
     RequestAdapter(#[from] wgpu::RequestAdapterError),
-    #[error("adapter {adapter:?} does not satisfy Phase 0: {reason}")]
+    #[error("adapter {adapter:?} does not satisfy the native renderer: {reason}")]
     UnsupportedAdapter { adapter: String, reason: String },
     #[error("surface does not satisfy the SDR presentation contract: {0}")]
     SurfaceCapabilities(#[from] CapabilityError),
-    #[error("failed to create the Phase 0 device: {0}")]
+    #[error("failed to create the renderer device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
+    #[error("validated observation cannot enter the interactive renderer: {0}")]
+    InteractiveTrace(#[from] TraceInputError),
     #[error("failed to create {stage}: {source}")]
     GpuResource {
         stage: &'static str,
