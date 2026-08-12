@@ -17,6 +17,11 @@ use crate::{
     trace::{TraceCompute, TraceTarget, trace_record_plane_size},
 };
 
+const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 2_560 * 1_440;
+const FRAME_RESOURCE_BYTES_PER_PIXEL: u64 = 3 * 16 + 8 + 4;
+const MAXIMUM_FRAME_RESOURCE_BYTES: u64 =
+    MAXIMUM_NATIVE_TRACE_PIXELS * FRAME_RESOURCE_BYTES_PER_PIXEL;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameSkip {
     ZeroExtent,
@@ -646,6 +651,16 @@ fn validate_render_extent(extent: RenderExtent, limits: &wgpu::Limits) -> Result
             max_texture_dimension_2d: limits.max_texture_dimension_2d,
         });
     }
+    let pixels = u64::from(extent.width()) * u64::from(extent.height());
+    let required_bytes = pixels.saturating_mul(FRAME_RESOURCE_BYTES_PER_PIXEL);
+    if required_bytes > MAXIMUM_FRAME_RESOURCE_BYTES {
+        return Err(ResizeError::FrameResourceBudget {
+            width: extent.width(),
+            height: extent.height(),
+            required_bytes,
+            maximum_bytes: MAXIMUM_FRAME_RESOURCE_BYTES,
+        });
+    }
     let required_bytes = trace_record_plane_size(extent);
     if required_bytes > limits.max_storage_buffer_binding_size
         || required_bytes > limits.max_buffer_size
@@ -726,29 +741,40 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
-    use super::{ResizeError, validate_render_extent};
+    use super::{MAXIMUM_FRAME_RESOURCE_BYTES, ResizeError, validate_render_extent};
     use crate::extent::RenderExtent;
 
     #[test]
-    fn resize_accepts_4k_with_webgpu_default_limits() {
+    fn resize_accepts_the_native_trace_budget_boundary() {
+        let limits = wgpu::Limits::default();
+        let extent = RenderExtent::new(2_560, 1_440).expect("extent is nonzero");
+
+        assert!(validate_render_extent(extent, &limits).is_ok());
+    }
+
+    #[test]
+    fn resize_rejects_4k_native_trace_before_allocation() {
         let limits = wgpu::Limits::default();
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
 
-        assert!(validate_render_extent(extent, &limits).is_ok());
+        assert!(matches!(
+            validate_render_extent(extent, &limits),
+            Err(ResizeError::FrameResourceBudget {
+                width: 3_840,
+                height: 2_160,
+                maximum_bytes: MAXIMUM_FRAME_RESOURCE_BYTES,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn resize_rejects_each_excess_texture_dimension() {
         let limits = wgpu::Limits::default();
         let maximum = limits.max_texture_dimension_2d;
-        let boundary = RenderExtent::new(maximum, maximum).expect("extent is nonzero");
         let too_wide = RenderExtent::new(maximum + 1, 1).expect("extent is nonzero");
         let too_tall = RenderExtent::new(1, maximum + 1).expect("extent is nonzero");
 
-        assert!(matches!(
-            validate_render_extent(boundary, &limits),
-            Err(ResizeError::TraceRecordLimit { .. })
-        ));
         assert!(matches!(
             validate_render_extent(too_wide, &limits),
             Err(ResizeError::ExtentLimit {

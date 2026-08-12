@@ -2,18 +2,13 @@ pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
 /// Resolves the exact limits consumed by the native renderer.
 ///
-/// `using_resolution` intentionally covers only texture dimensions, so the two buffer limits
-/// used by the per-pixel trace record planes must be carried over explicitly.
+/// Buffer limits remain at the WebGPU baseline because every trace plane fits within that project
+/// contract. Requesting adapter maxima would turn hardware capability into an allocation policy.
 /// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html#method.using_resolution>
 pub fn required_device_limits(adapter: wgpu::Limits) -> wgpu::Limits {
-    let max_storage_buffer_binding_size = adapter.max_storage_buffer_binding_size;
-    let max_buffer_size = adapter.max_buffer_size;
-    let mut required = wgpu::Limits::default()
+    wgpu::Limits::default()
         .using_resolution(adapter.clone())
-        .using_alignment(adapter);
-    required.max_storage_buffer_binding_size = max_storage_buffer_binding_size;
-    required.max_buffer_size = max_buffer_size;
-    required
+        .using_alignment(adapter)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -158,7 +153,7 @@ mod tests {
     };
 
     #[test]
-    fn device_limits_include_trace_record_capacity() {
+    fn device_limits_do_not_copy_adapter_buffer_capacity() {
         let adapter = wgpu::Limits {
             max_texture_dimension_2d: 16_384,
             min_storage_buffer_offset_alignment: 64,
@@ -171,8 +166,14 @@ mod tests {
 
         assert_eq!(required.max_texture_dimension_2d, 16_384);
         assert_eq!(required.min_storage_buffer_offset_alignment, 64);
-        assert_eq!(required.max_storage_buffer_binding_size, 1 << 30);
-        assert_eq!(required.max_buffer_size, 2 << 30);
+        assert_eq!(
+            required.max_storage_buffer_binding_size,
+            wgpu::Limits::default().max_storage_buffer_binding_size
+        );
+        assert_eq!(
+            required.max_buffer_size,
+            wgpu::Limits::default().max_buffer_size
+        );
     }
 
     fn capabilities(

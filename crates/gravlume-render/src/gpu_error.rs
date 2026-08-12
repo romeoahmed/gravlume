@@ -54,6 +54,15 @@ pub enum ResizeError {
         max_texture_dimension_2d: u32,
     },
     #[error(
+        "requested render extent {width}x{height} needs {required_bytes} bytes of frame resources, exceeding the project budget of {maximum_bytes} bytes"
+    )]
+    FrameResourceBudget {
+        width: u32,
+        height: u32,
+        required_bytes: u64,
+        maximum_bytes: u64,
+    },
+    #[error(
         "requested render extent {width}x{height} needs {required_bytes} bytes per trace record plane, exceeding the device storage-binding limit of {max_storage_buffer_binding_size} bytes or buffer limit of {max_buffer_size} bytes"
     )]
     TraceRecordLimit {
@@ -78,6 +87,7 @@ impl ResizeError {
     pub const fn kind(&self) -> DeviceEventKind {
         match self {
             Self::ExtentLimit { .. }
+            | Self::FrameResourceBudget { .. }
             | Self::TraceRecordLimit { .. }
             | Self::SurfaceCapabilities(_) => DeviceEventKind::Validation,
             Self::GpuResource { source, .. } => device_error_kind(source),

@@ -17,7 +17,7 @@ use crate::{
         INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
         production_shader_source,
     },
-    trace_test_support::{capture_initial_rays, capture_trace},
+    trace_test_support::{capture_initial_rays, capture_invariant_gate_cases, capture_trace},
 };
 
 #[test]
@@ -60,6 +60,34 @@ fn trace_uniform_layout_matches_the_shader_abi() {
 }
 
 #[test]
+fn interactive_trace_rejects_non_normalized_observer_frequency() {
+    let observation = observation_with(1.0, 0.8, 0.0, [30.0, 0.0, 0.0], 1.0e-6, 1, 1);
+
+    assert!(matches!(
+        TraceUniforms::from_observation(&observation),
+        Err(crate::TraceInputError::NonNormalizedObserverFrequency { .. })
+    ));
+}
+
+#[test]
+fn interactive_trace_rejects_parameter_state_changed_by_f32_packing() {
+    let observation = observation_with(
+        1.0,
+        0.157_132_806_437_842_44,
+        0.987_577_480_983_596_3,
+        [30.0, 0.0, 0.0],
+        1.0,
+        1,
+        1,
+    );
+
+    assert!(matches!(
+        TraceUniforms::from_observation(&observation),
+        Err(crate::TraceInputError::ParameterStateChangedByPacking { .. })
+    ));
+}
+
+#[test]
 fn mass_scale_does_not_change_the_dimensionless_trace_result() {
     let unit = capture_trace(&observation_at_scale(7, 5, 1.0));
     let scaled = capture_trace(&observation_at_scale(7, 5, 8.0));
@@ -69,6 +97,29 @@ fn mass_scale_does_not_change_the_dimensionless_trace_result() {
         assert_same_bits(unit.direction_time, scaled.direction_time);
         assert_same_bits(unit.invariant_drift, scaled.invariant_drift);
         assert_eq!(unit.metadata, scaled.metadata);
+    }
+}
+
+#[test]
+fn far_field_geometry_does_not_fail_when_the_guard_observable_exceeds_f32() {
+    let observation = observation_with(1.0, 0.8, 0.0, [1.0e10, 0.0, 0.0], 1.0, 1, 1);
+    let capture = capture_initial_rays(&observation, [0.5, 0.5]);
+
+    assert_eq!(capture.records[0].metadata, [0; 4]);
+}
+
+#[test]
+fn every_recorded_invariant_can_make_a_terminal_uncertain() {
+    let observation = default_observation(4, 1);
+    let capture = capture_invariant_gate_cases(&observation);
+
+    for (component, record) in capture.records.iter().enumerate() {
+        assert_eq!(
+            TraceTermination::try_from(record.metadata[0]),
+            Ok(TraceTermination::Uncertain),
+            "invariant component {component} did not gate the terminal"
+        );
+        assert!(record.invariant_drift[component] > INVARIANT_DRIFT_LIMIT);
     }
 }
 
@@ -261,13 +312,25 @@ fn observation_at_scale(width: u32, height: u32, mass: f64) -> Observation {
     let spin = 0.8 * mass;
     let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
     let observer_xyz = spacetime.oblate_to_cartesian(30.0 * mass, std::f64::consts::FRAC_PI_3, 0.0);
+    observation_with(mass, spin, 0.0, observer_xyz, 1.0, width, height)
+}
+
+fn observation_with(
+    mass: f64,
+    spin: f64,
+    charge: f64,
+    observer_xyz: [f64; 3],
+    observer_frequency: f64,
+    width: u32,
+    height: u32,
+) -> Observation {
     let observer = StationaryObserverDraft::new(
         [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
         [0.0; 4],
         [0.0, 0.0, 1.0],
-        1.0,
+        observer_frequency,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(mass, spin, 0.0, observer))
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(mass, spin, charge, observer))
         .expect("fixture scene is valid");
     let projection = ViewportProjection::perspective(
         NonZeroU32::new(width).expect("test width is nonzero"),
