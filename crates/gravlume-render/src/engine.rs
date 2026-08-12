@@ -1,6 +1,7 @@
 use std::sync::{Arc, mpsc};
 
 use gravlume_domain::Observation;
+use num_traits::ToPrimitive as _;
 
 use crate::{
     capabilities::{
@@ -13,7 +14,7 @@ use crate::{
         DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
         install_device_callbacks, scoped_gpu_operation,
     },
-    timing::{GpuTimings, TimingSample},
+    timing::GpuTimings,
     trace::{
         TRACE_WORKGROUP_HEIGHT, TRACE_WORKGROUP_WIDTH, TraceCompute, TracePixels, TraceTarget,
         trace_record_plane_size,
@@ -24,7 +25,7 @@ const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 2_560 * 1_440;
 const FRAME_RESOURCE_BYTES_PER_PIXEL: u64 = 3 * 16 + 8 + 8 + 4;
 const MAXIMUM_FRAME_RESOURCE_BYTES: u64 =
     MAXIMUM_NATIVE_TRACE_PIXELS * FRAME_RESOURCE_BYTES_PER_PIXEL;
-const INITIAL_TRACE_PIXELS_PER_BATCH: u32 = 2_048;
+const INITIAL_TRACE_PIXELS_PER_BATCH: u32 = 32_768;
 const TARGET_TRACE_BATCH_MS: f64 = 32.0;
 const MAXIMUM_TRACE_BATCH_MS: f64 = 50.0;
 const MAXIMUM_BATCH_SCALE: f64 = 1.5;
@@ -68,8 +69,6 @@ pub struct RenderDiagnostics<'a> {
     surface_format: &'a str,
     color_space: &'a str,
     display_transfer: &'static str,
-    extent_generation: u64,
-    timing: Option<TimingSample>,
     trace_progress: Option<TraceProgressDiagnostics>,
 }
 
@@ -114,19 +113,6 @@ impl RenderDiagnostics<'_> {
     }
 
     #[must_use]
-    pub const fn extent_generation(&self) -> u64 {
-        self.extent_generation
-    }
-
-    pub fn compute_ms(&self) -> Option<f64> {
-        self.timing.map(TimingSample::compute_ms)
-    }
-
-    pub fn display_ms(&self) -> Option<f64> {
-        self.timing.map(TimingSample::display_ms)
-    }
-
-    #[must_use]
     pub fn trace_completion(&self) -> Option<f64> {
         self.trace_progress
             .map(|progress| f64::from(progress.completed_pixels) / f64::from(progress.total_pixels))
@@ -156,7 +142,6 @@ struct FrameResources {
     published: PublishedScene,
     display: DisplayTarget,
     presentation_extent: RenderExtent,
-    next_tier: u8,
     completed_batches: u32,
     total_compute_ms: f64,
     maximum_batch_ms: f64,
@@ -207,13 +192,12 @@ impl FrameResources {
     ) -> Self {
         let display_target = DisplayPipeline::create_target(device, extent);
         let published = display.create_published_scene(device, queue, &display_target, extent);
-        let candidate = Self::create_candidate(device, trace, display, extent, 0);
+        let candidate = Self::create_candidate(device, trace, display, extent);
         Self {
             candidate: Some(candidate),
             published,
             display: display_target,
             presentation_extent: extent,
-            next_tier: 1,
             completed_batches: 0,
             total_compute_ms: 0.0,
             maximum_batch_ms: 0.0,
@@ -224,10 +208,8 @@ impl FrameResources {
         device: &wgpu::Device,
         trace: &TraceCompute,
         display: &DisplayPipeline,
-        presentation_extent: RenderExtent,
-        tier: u8,
+        extent: RenderExtent,
     ) -> TraceCandidate {
-        let extent = trace_extent(presentation_extent, tier);
         let trace = trace.create_target(device, extent);
         let publication = display.bind_candidate(device, trace.view());
         TraceCandidate {
@@ -266,25 +248,10 @@ impl FrameResources {
         candidate_complete
     }
 
-    fn advance_after_completion(
-        &mut self,
-        device: &wgpu::Device,
-        trace: &TraceCompute,
-        display: &DisplayPipeline,
-    ) {
-        // Timestamp readback proves the publication submission is complete. Drop the old record
-        // planes before allocating the next tier so the allocator may reuse their storage.
+    fn release_completed_candidate(&mut self) {
+        // Timestamp readback proves the publication submission is complete and the native-sized
+        // candidate may be released. Incomplete candidates are never displayable.
         self.candidate = None;
-        if self.next_tier < TRACE_TIER_COUNT {
-            self.candidate = Some(Self::create_candidate(
-                device,
-                trace,
-                display,
-                self.presentation_extent,
-                self.next_tier,
-            ));
-            self.next_tier += 1;
-        }
     }
 
     fn diagnostics(&self) -> TraceProgressDiagnostics {
@@ -306,21 +273,6 @@ impl FrameResources {
             maximum_batch_ms: self.maximum_batch_ms,
         }
     }
-}
-
-const TRACE_TIER_COUNT: u8 = 3;
-
-fn trace_extent(presentation: RenderExtent, tier: u8) -> RenderExtent {
-    let divisor = match tier {
-        0 => 4,
-        1 => 2,
-        _ => 1,
-    };
-    RenderExtent::new(
-        presentation.width().div_ceil(divisor),
-        presentation.height().div_ceil(divisor),
-    )
-    .unwrap_or(presentation)
 }
 
 impl TraceProgress {
@@ -373,18 +325,11 @@ impl TraceProgress {
         } else {
             (TARGET_TRACE_BATCH_MS / compute_ms).clamp(MINIMUM_BATCH_SCALE, MAXIMUM_BATCH_SCALE)
         };
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "the value is clamped to the finite u32 viewport pixel range below"
-        )]
-        #[expect(
-            clippy::cast_sign_loss,
-            reason = "positive timing and batch sizes make the scaled value non-negative"
-        )]
         let scaled = (f64::from(batch.len()) * scale).round().clamp(
             f64::from(TRACE_WORKGROUP_PIXELS),
             f64::from(self.total_pixels),
-        ) as u32;
+        );
+        let scaled = scaled.to_u32().unwrap_or(self.total_pixels);
         self.pixels_per_batch = scaled.div_ceil(TRACE_WORKGROUP_PIXELS) * TRACE_WORKGROUP_PIXELS;
     }
 
@@ -437,11 +382,10 @@ impl DiagnosticLabels {
     }
 }
 
-fn display_transfer_label(selection: SurfaceSelection) -> &'static str {
+const fn display_transfer_label(selection: SurfaceSelection) -> &'static str {
     match selection.output_mode() {
-        OutputMode::Hdr => "extended-linear sRGB HDR",
-        OutputMode::Sdr(_) if selection.requires_manual_srgb_encoding() => "shader sRGB SDR",
-        OutputMode::Sdr(_) => "hardware sRGB SDR",
+        OutputMode::Hdr => "HDR",
+        OutputMode::Sdr(_) => "SDR",
     }
 }
 
@@ -702,12 +646,8 @@ impl GpuEngine {
             paint_jobs,
             &screen,
         );
-        self.display.encode_presentation(
-            &mut encoder,
-            &surface_view,
-            &frame.published,
-            trace_batch.map(|_| self.timings.display_writes()),
-        );
+        self.display
+            .encode_presentation(&mut encoder, &surface_view, &frame.published);
         if trace_batch.is_some() {
             self.timings.encode_resolve(&mut encoder);
         }
@@ -751,7 +691,7 @@ impl GpuEngine {
                 && let Some(frame) = self.frame_resources.as_mut()
                 && frame.completed(timing.compute_ms())
             {
-                frame.advance_after_completion(&self.device, &self.trace, &self.display);
+                frame.release_completed_candidate();
             }
         }
         let events = self.device_events.try_iter().collect();
@@ -806,8 +746,6 @@ impl GpuEngine {
             surface_format: &self.diagnostic_labels.surface_format,
             color_space: &self.diagnostic_labels.color_space,
             display_transfer: self.diagnostic_labels.display_transfer,
-            extent_generation: self.extent.generation(),
-            timing: self.timings.latest(),
             trace_progress: self
                 .frame_resources
                 .as_ref()

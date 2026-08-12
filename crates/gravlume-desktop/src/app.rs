@@ -9,8 +9,8 @@ use std::{
 };
 
 use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, Observation, PhysicalScene, PhysicalSceneDraft,
-    StationaryObserverDraft, ValidationReport, ViewportProjection,
+    Angle, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, PhysicalScene,
+    PhysicalSceneDraft, StationaryObserverDraft, ValidationReport, ViewportProjection,
 };
 use gravlume_native_display::DisplayMonitor;
 use gravlume_render::{
@@ -31,6 +31,8 @@ use crate::{Launch, lifecycle::Lifecycle};
 const PENDING_GPU_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const RETRY_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SMOKE_ONCE_ENV: &str = "GRAVLUME_SMOKE_ONCE";
+const UI_FONT_NAME: &str = "Noto Sans SC";
+const UI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.otf");
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -97,12 +99,14 @@ struct DesktopApp {
 
 impl DesktopApp {
     fn new(launch: Launch, event_proxy: EventLoopProxy<AppEvent>) -> Self {
+        let egui_context = egui::Context::default();
+        install_ui_font(&egui_context);
         Self {
             launch,
             lifecycle: Lifecycle::default(),
             window: None,
             renderer: None,
-            egui_context: egui::Context::default(),
+            egui_context,
             event_proxy,
             schedule: EventLoopSchedule::default(),
             pending_textures: egui::TexturesDelta::default(),
@@ -347,6 +351,22 @@ impl DesktopApp {
     }
 }
 
+fn install_ui_font(context: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        UI_FONT_NAME.to_owned(),
+        std::sync::Arc::new(egui::FontData::from_static(UI_FONT_BYTES)),
+    );
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .push(UI_FONT_NAME.to_owned());
+    }
+    context.set_fonts(fonts);
+}
+
 impl ApplicationHandler<AppEvent> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.lifecycle.resume()
@@ -555,53 +575,35 @@ fn show_overlay(
     diagnostics: &RenderDiagnostics<'_>,
     device_event: Option<&DeviceEvent>,
 ) {
-    egui::Window::new("Interactive trace")
+    egui::Window::new("Gravlume")
         .default_pos([16.0, 16.0])
         .resizable(false)
         .collapsible(false)
         .show(context, |ui| {
-            ui.heading("Gravlume");
-            ui.label("Kerr–Schild trace → analytic scene → HDR/SDR output + linear UI");
-            ui.separator();
-            ui.monospace(format!(
-                "{} · {}",
-                diagnostics.adapter_name(),
-                diagnostics.backend()
-            ));
-            if !diagnostics.driver().is_empty() {
-                ui.monospace(diagnostics.driver());
+            ui.strong("Interactive Kerr black-hole lensing");
+            match diagnostics.trace_completion() {
+                Some(completion) if completion < 1.0 => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(format!(
+                            "Tracing the native-resolution image: {:.0}%",
+                            completion * 100.0
+                        ));
+                    });
+                }
+                _ => {
+                    ui.label("Ready — the complete native-resolution image is published.");
+                }
             }
-            ui.monospace(format!(
-                "{} / {} / {}",
-                diagnostics.surface_format(),
-                diagnostics.color_space(),
+            ui.label("Kerr spin 0.8 · observer radius 30 M · vertical field of view 45°.");
+            ui.label(
+                "Black is the event-horizon shadow; the colored grid is a lensed sky test pattern.",
+            );
+            ui.label("This preview validates geometry; it is not an accretion-disk simulation.");
+            ui.label(format!(
+                "Display output: {}",
                 diagnostics.display_transfer()
             ));
-            ui.monospace(format!(
-                "extent generation {}",
-                diagnostics.extent_generation()
-            ));
-            if let (Some(compute_ms), Some(display_ms)) =
-                (diagnostics.compute_ms(), diagnostics.display_ms())
-            {
-                ui.monospace(format!(
-                    "GPU compute {compute_ms:.3} ms · display {display_ms:.3} ms"
-                ));
-            } else {
-                ui.monospace("GPU timing pending");
-            }
-            if let Some(completion) = diagnostics.trace_completion() {
-                ui.monospace(format!("trace {:.1}%", completion * 100.0));
-            }
-            if let (Some(batch_count), Some(maximum_batch_ms)) = (
-                diagnostics.completed_trace_batches(),
-                diagnostics.maximum_trace_batch_ms(),
-            ) && batch_count > 0
-            {
-                ui.monospace(format!(
-                    "{batch_count} trace batches · max {maximum_batch_ms:.3} ms"
-                ));
-            }
             if let Some(event) = device_event {
                 ui.separator();
                 ui.colored_label(
@@ -612,8 +614,28 @@ fn show_overlay(
         });
 }
 
+#[cfg(test)]
+mod font_tests {
+    use super::install_ui_font;
+
+    #[test]
+    fn bundled_ui_font_covers_required_unicode_fallbacks() {
+        let context = egui::Context::default();
+        install_ui_font(&context);
+        let mut output = context.run_ui(egui::RawInput::default(), |_| {});
+
+        context.fonts_mut(|fonts| {
+            assert!(fonts.has_glyphs(
+                &egui::FontId::proportional(14.0),
+                "\u{4e2d}\u{6587} \u{2192} Kerr\u{2013}Schild \u{00b7} HDR/SDR"
+            ));
+        });
+        output.textures_delta.clear();
+    }
+}
+
 fn default_observation(width: u32, height: u32) -> Result<Observation, ValidationReport> {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0)?;
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Outgoing)?;
     let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
     let observer = StationaryObserverDraft::new(
         [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
@@ -621,7 +643,13 @@ fn default_observation(width: u32, height: u32) -> Result<Observation, Validatio
         [0.0, 0.0, 1.0],
         1.0,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(1.0, 0.8, 0.0, observer))?;
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
+        1.0,
+        0.8,
+        0.0,
+        KerrSchildCoordinates::Outgoing,
+        observer,
+    ))?;
     let projection = ViewportProjection::perspective(
         NonZeroU32::new(width).unwrap_or(NonZeroU32::MIN),
         NonZeroU32::new(height).unwrap_or(NonZeroU32::MIN),

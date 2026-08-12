@@ -1,4 +1,4 @@
-use gravlume_domain::{GeodesicState, KerrNewmanSpacetime};
+use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates};
 use gravlume_reference::{
     AffineDirection, EventConfiguration, ReferenceConfigurationError, ReferencePolicy,
     ReferenceTracer, Termination, TraceInputId, TraceRequest,
@@ -48,7 +48,8 @@ fn reference_policy_ids_are_stable_and_strict_refines_every_bound() {
 #[test]
 fn v1_reference_seam_rejects_a_non_normalized_mass_scale() {
     for mass_m in [2.0, 1.0_f64.next_up()] {
-        let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0).expect("spacetime is valid");
+        let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("spacetime is valid");
         let error = ReferenceTracer::new(
             spacetime,
             ReferencePolicy::regular_v1(),
@@ -77,7 +78,8 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
         [-1.0, radial_momentum, tangential_momentum, 0.0],
     )
     .expect("constructed state is finite");
-    let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0).expect("spacetime is valid");
+    let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("spacetime is valid");
     let events =
         EventConfiguration::with_escape_radius(boundary_radius_m).expect("escape surface is valid");
     let outcome = ReferenceTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
@@ -100,7 +102,8 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
 
 #[test]
 fn equatorial_surface_is_localized_as_a_distinct_terminal_event() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("spacetime is valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("spacetime is valid");
     let state = GeodesicState::new([0.0, 50.0, 0.0, 1.0], [-1.0, -0.9, 0.0, -0.2])
         .expect("state is finite");
     let events = EventConfiguration::horizon_only()

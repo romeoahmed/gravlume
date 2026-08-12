@@ -1,34 +1,30 @@
 use std::sync::mpsc::{self, TryRecvError};
 
-const QUERY_COUNT: u32 = 4;
+use num_traits::ToPrimitive as _;
+
+const QUERY_COUNT: u32 = 2;
 const QUERY_BYTES: u64 = QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
 const QUERY_BYTE_COUNT: usize = QUERY_COUNT as usize * size_of::<u64>();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimingSample {
     compute_ms: f64,
-    display_ms: f64,
 }
 
 impl TimingSample {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "single-pass GPU tick deltas stay far below f64's exact integer range"
-    )]
-    pub(crate) fn from_ticks(ticks: [u64; 4], timestamp_period_ns: f32) -> Self {
+    pub(crate) fn from_ticks(ticks: [u64; 2], timestamp_period_ns: f32) -> Self {
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
         Self {
-            compute_ms: ticks[1].saturating_sub(ticks[0]) as f64 * milliseconds_per_tick,
-            display_ms: ticks[3].saturating_sub(ticks[2]) as f64 * milliseconds_per_tick,
+            compute_ms: ticks[1]
+                .saturating_sub(ticks[0])
+                .to_f64()
+                .unwrap_or(f64::INFINITY)
+                * milliseconds_per_tick,
         }
     }
 
     pub(crate) const fn compute_ms(self) -> f64 {
         self.compute_ms
-    }
-
-    pub(crate) const fn display_ms(self) -> f64 {
-        self.display_ms
     }
 }
 
@@ -63,7 +59,6 @@ pub struct GpuTimings {
     resolve_buffer: wgpu::Buffer,
     readback_buffer: wgpu::Buffer,
     callback_receiver: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    latest: Option<TimingSample>,
 }
 
 impl GpuTimings {
@@ -90,7 +85,6 @@ impl GpuTimings {
             resolve_buffer,
             readback_buffer,
             callback_receiver: None,
-            latest: None,
         }
     }
 
@@ -103,14 +97,6 @@ impl GpuTimings {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(0),
             end_of_pass_write_index: Some(1),
-        }
-    }
-
-    pub(crate) const fn display_writes(&self) -> wgpu::RenderPassTimestampWrites<'_> {
-        wgpu::RenderPassTimestampWrites {
-            query_set: &self.query_set,
-            beginning_of_pass_write_index: Some(2),
-            end_of_pass_write_index: Some(3),
         }
     }
 
@@ -156,7 +142,6 @@ impl GpuTimings {
                 self.finish_readback();
                 let ticks = ticks?;
                 let sample = TimingSample::from_ticks(ticks, timestamp_period_ns);
-                self.latest = Some(sample);
                 Ok(Some(sample))
             }
             Ok(Err(error)) => {
@@ -186,10 +171,6 @@ impl GpuTimings {
     pub(crate) const fn has_pending_readback(&self) -> bool {
         self.callback_receiver.is_some()
     }
-
-    pub(crate) const fn latest(&self) -> Option<TimingSample> {
-        self.latest
-    }
 }
 
 #[cfg(test)]
@@ -198,41 +179,25 @@ mod tests {
 
     #[test]
     fn timestamp_ticks_are_converted_with_queue_period() {
-        let sample = TimingSample::from_ticks([100, 250, 300, 550], 2.0);
+        let sample = TimingSample::from_ticks([100, 250], 2.0);
 
         assert!((sample.compute_ms() - 0.000_3).abs() < f64::EPSILON);
-        assert!((sample.display_ms() - 0.000_5).abs() < f64::EPSILON);
     }
 
     #[test]
     fn mapped_query_bytes_are_decoded_without_alignment_assumptions() {
-        let bytes: Vec<u8> = [10_u64, 30, 40, 90]
+        let bytes: Vec<u8> = [10_u64, 30]
             .into_iter()
             .flat_map(u64::to_le_bytes)
             .collect();
 
-        assert_eq!(super::decode_query_ticks(&bytes), Some([10, 30, 40, 90]));
-        assert_eq!(super::decode_query_ticks(&bytes[..31]), None);
+        assert_eq!(super::decode_query_ticks(&bytes), Some([10, 30]));
+        assert_eq!(super::decode_query_ticks(&bytes[..15]), None);
     }
 
     #[test]
     fn one_shot_readback_completes_after_submission_goes_idle() {
         let gpu = crate::test_gpu::native_gpu();
-        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("one-shot timestamp render target"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let mut timings = GpuTimings::new(&gpu.device);
         let mut encoder = gpu
             .device
@@ -243,25 +208,6 @@ mod tests {
             let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("one-shot timestamp compute pass"),
                 timestamp_writes: Some(timings.compute_writes()),
-            });
-        }
-        {
-            let attachment = Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    store: wgpu::StoreOp::Store,
-                },
-            });
-            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("one-shot timestamp display pass"),
-                color_attachments: &[attachment],
-                depth_stencil_attachment: None,
-                timestamp_writes: Some(timings.display_writes()),
-                occlusion_query_set: None,
-                multiview_mask: None,
             });
         }
         timings.encode_resolve(&mut encoder);
@@ -279,7 +225,7 @@ mod tests {
             .expect("timestamp readback succeeds")
             .expect("timestamp readback completed after its submission");
 
-        assert_eq!(timings.latest(), Some(sample));
+        assert!(sample.compute_ms().is_finite());
         assert!(!timings.has_pending_readback());
     }
 }

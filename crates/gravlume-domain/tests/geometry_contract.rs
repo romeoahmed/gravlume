@@ -1,12 +1,16 @@
 use gravlume_domain::{
-    GeometryError, KerrNewmanSpacetime, ParameterState, SpacetimeEvent, ValidationIssueCode,
+    GeometryError, KerrNewmanSpacetime, KerrSchildCoordinates, ParameterState, SpacetimeEvent,
+    ValidationIssueCode,
 };
 
 #[test]
 fn parameter_state_and_horizon_are_classified_without_clamping() {
-    let subextremal = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("parameters are valid");
-    let extremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.0).expect("parameters are valid");
-    let superextremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.5).expect("parameters are valid");
+    let subextremal = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
+    let extremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
+    let superextremal = KerrNewmanSpacetime::new(1.0, 1.0, 0.5, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
 
     assert_eq!(subextremal.parameter_state(), ParameterState::Subextremal);
     assert_eq!(extremal.parameter_state(), ParameterState::Extremal);
@@ -23,7 +27,8 @@ fn parameter_state_and_horizon_are_classified_without_clamping() {
 fn finite_extreme_scales_preserve_extremality_and_horizon_classification() {
     for mass_m in [f64::MAX / 2.0, f64::MIN_POSITIVE] {
         let extremal =
-            KerrNewmanSpacetime::new(mass_m, mass_m, 0.0).expect("parameters are finite");
+            KerrNewmanSpacetime::new(mass_m, mass_m, 0.0, KerrSchildCoordinates::Ingoing)
+                .expect("parameters are finite");
 
         assert_eq!(extremal.parameter_state(), ParameterState::Extremal);
         assert_eq!(extremal.outer_horizon_radius(), Some(mass_m));
@@ -35,9 +40,10 @@ fn near_extremal_state_uses_the_exact_binary64_parameter_values() {
     let spin_m = 1.0_f64.next_down();
     let charge_m = 2.0_f64.powi(-26);
     let superextremal =
-        KerrNewmanSpacetime::new(1.0, spin_m, charge_m).expect("finite parameters are valid");
-    let subextremal =
-        KerrNewmanSpacetime::new(1.0, spin_m, 0.0).expect("finite parameters are valid");
+        KerrNewmanSpacetime::new(1.0, spin_m, charge_m, KerrSchildCoordinates::Ingoing)
+            .expect("finite parameters are valid");
+    let subextremal = KerrNewmanSpacetime::new(1.0, spin_m, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("finite parameters are valid");
 
     assert_eq!(
         superextremal.parameter_state(),
@@ -53,7 +59,7 @@ fn near_extremal_state_uses_the_exact_binary64_parameter_values() {
 
 #[test]
 fn validated_spacetime_rejects_an_unrepresentable_outer_horizon() {
-    let report = KerrNewmanSpacetime::new(f64::MAX, 0.0, 0.0)
+    let report = KerrNewmanSpacetime::new(f64::MAX, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
         .expect_err("validated geometry must have a finite outer horizon");
 
     assert!(report.issues().iter().any(|issue| {
@@ -64,7 +70,8 @@ fn validated_spacetime_rejects_an_unrepresentable_outer_horizon() {
 
 #[test]
 fn oblate_radius_and_rank_one_metric_inverse_satisfy_the_algebra_contract() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.2).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.2, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
 
     for event in [
         SpacetimeEvent::from_txyz([0.0, 30.0, 2.0, 5.0]).expect("event is finite"),
@@ -88,8 +95,33 @@ fn oblate_radius_and_rank_one_metric_inverse_satisfy_the_algebra_contract() {
 }
 
 #[test]
+fn kerr_schild_branch_reverses_the_principal_null_direction() {
+    let ingoing = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
+    let outgoing = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Outgoing)
+        .expect("parameters are valid");
+    let state = gravlume_domain::GeodesicState::new([0.0, 10.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0])
+        .expect("state is finite");
+    let ingoing_rhs = ingoing.hamiltonian_rhs(state).expect("geometry is regular");
+    let outgoing_rhs = outgoing
+        .hamiltonian_rhs(state)
+        .expect("geometry is regular");
+
+    assert!((ingoing_rhs[1] + outgoing_rhs[1]).abs() < 4.0 * f64::EPSILON);
+
+    let polar = std::f64::consts::FRAC_PI_3;
+    let ingoing_position = ingoing.oblate_to_cartesian(30.0, polar, 0.0);
+    let outgoing_position = outgoing.oblate_to_cartesian(30.0, polar, 0.0);
+    assert_eq!(
+        ingoing_position.map(f64::to_bits),
+        outgoing_position.map(f64::to_bits)
+    );
+}
+
+#[test]
 fn metric_inverse_residual_is_term_normalized_under_strong_cancellation() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([0.0, 1.0e-4, 2.0e-4, 3.0e-4]).expect("event is finite");
     let residual = spacetime
         .metric_inverse_residual(event)
@@ -100,7 +132,8 @@ fn metric_inverse_residual_is_term_normalized_under_strong_cancellation() {
 
 #[test]
 fn metric_inverse_residual_preserves_representable_values_when_term_norm_overflows() {
-    let spacetime = KerrNewmanSpacetime::new(5.0e113, 0.0, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(5.0e113, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([0.0, 1.0e-40, 0.0, 0.0]).expect("event is finite");
     let residual = spacetime
         .metric_inverse_residual(event)
@@ -111,7 +144,8 @@ fn metric_inverse_residual_preserves_representable_values_when_term_norm_overflo
 
 #[test]
 fn schwarzschild_limit_is_spherical_and_stationary() {
-    let spacetime = KerrNewmanSpacetime::new(2.0, 0.0, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(2.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([7.0, 3.0, 4.0, 12.0]).expect("event is finite");
 
     assert!((spacetime.radius(event).expect("radius exists") - 13.0).abs() < f64::EPSILON);
@@ -127,7 +161,8 @@ fn schwarzschild_limit_is_spherical_and_stationary() {
 
 #[test]
 fn representable_far_field_coordinates_do_not_overflow_internal_squares() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
 
     for coordinate in [1.0e100, 1.0e200] {
         let event =
@@ -153,7 +188,8 @@ fn representable_far_field_coordinates_do_not_overflow_internal_squares() {
 
 #[test]
 fn representable_axis_radius_does_not_require_a_representable_square() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 1.0, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 1.0, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, 1.0e-200]).expect("event is finite");
 
     assert_eq!(spacetime.radius(event), Ok(1.0e-200));
@@ -163,7 +199,9 @@ fn representable_axis_radius_does_not_require_a_representable_square() {
 #[test]
 fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
     let event = SpacetimeEvent::from_txyz([0.0, 10.0, 0.0, 0.0]).expect("event is finite");
-    let reissner_nordstrom = KerrNewmanSpacetime::new(1.0, 0.0, 0.6).expect("parameters are valid");
+    let reissner_nordstrom =
+        KerrNewmanSpacetime::new(1.0, 0.0, 0.6, KerrSchildCoordinates::Ingoing)
+            .expect("parameters are valid");
     let expected_g_tt = -1.0 + 2.0 / 10.0 - 0.6_f64.powi(2) / 10.0_f64.powi(2);
     assert!(
         (reissner_nordstrom
@@ -175,7 +213,8 @@ fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
     );
 
     let minkowski_limit =
-        KerrNewmanSpacetime::new(1.0e-12, 0.0, 0.0).expect("positive mass is valid");
+        KerrNewmanSpacetime::new(1.0e-12, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+            .expect("positive mass is valid");
     assert!(
         (minkowski_limit
             .metric_component_tt(event)
@@ -194,7 +233,8 @@ fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
 
 #[test]
 fn ring_singularity_and_nonnegative_radius_branch_disk_are_distinct_failures() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("parameters are valid");
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Ingoing)
+        .expect("parameters are valid");
     let ring = SpacetimeEvent::from_txyz([0.0, 0.8, 0.0, 0.0]).expect("event is finite");
     let branch_disk = SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, 0.0]).expect("event is finite");
 

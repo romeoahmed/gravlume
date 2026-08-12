@@ -4,8 +4,8 @@ use std::{
 };
 
 use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, Observation, PhysicalScene, PhysicalSceneDraft,
-    StationaryObserverDraft, ViewportProjection, ViewportSample,
+    Angle, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, PhysicalScene,
+    PhysicalSceneDraft, StationaryObserverDraft, ViewportProjection, ViewportSample,
 };
 use gravlume_reference::{
     ReferenceInstrument, ReferencePolicy, ReferenceRequest, Termination, TraceInputId,
@@ -148,6 +148,30 @@ fn far_field_geometry_does_not_fail_when_the_guard_observable_exceeds_f32() {
 }
 
 #[test]
+fn default_view_produces_only_determinate_rays() {
+    let capture = capture_trace(&default_observation(80, 45));
+    let mut horizon = 0;
+    let mut escape = 0;
+
+    for record in capture.records {
+        match TraceTermination::try_from(record.metadata[0]) {
+            Ok(TraceTermination::HorizonCrossing) => horizon += 1,
+            Ok(TraceTermination::Escape) => escape += 1,
+            termination => panic!(
+                "default view contains {termination:?} after {} steps with drift {:?}",
+                record.metadata[2], record.invariant_drift
+            ),
+        }
+    }
+
+    assert!(
+        horizon > 0,
+        "default view does not contain the black-hole shadow"
+    );
+    assert!(escape > 0, "default view does not contain the lensed sky");
+}
+
+#[test]
 fn every_recorded_invariant_can_make_a_terminal_uncertain() {
     let observation = default_observation(4, 1);
     let capture = capture_invariant_gate_cases(&observation);
@@ -280,6 +304,7 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
         sample(&observation, 0, 4, 0.5, 0.5),
         sample(&observation, 6, 4, 0.5, 0.5),
         sample(&observation, 3, 0, 0.5, 0.5),
+        sample(&observation, 3, 2, 0.5, 0.5),
     ];
     let instrument = ReferenceInstrument::baseline_v1();
 
@@ -351,6 +376,48 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
     }
 }
 
+#[test]
+fn shadow_edge_pair_matches_reference_classification() {
+    let observation = default_observation(160, 90);
+    let capture = capture_trace(&observation);
+    let instrument = ReferenceInstrument::baseline_v1();
+    let mut terminations = Vec::new();
+
+    for viewport_sample in [
+        sample(&observation, 69, 27, 0.5, 0.5),
+        sample(&observation, 70, 27, 0.5, 0.5),
+    ] {
+        let [pixel_x, pixel_y] = viewport_sample.pixel();
+        let index = usize::try_from(pixel_y * 160 + pixel_x).expect("test index fits usize");
+        let gpu = TraceTermination::try_from(capture.records[index].metadata[0])
+            .expect("GPU writes a typed termination");
+        let reference = instrument
+            .trace(
+                ReferenceRequest::new(
+                    TraceInputId::new(format!("shadow-edge-{pixel_x}-{pixel_y}")),
+                    &observation,
+                    viewport_sample,
+                    ReferencePolicy::regular_v1(),
+                )
+                .expect("reference request resolves"),
+            )
+            .expect("default observation is normalized");
+        let expected = match reference.termination() {
+            Termination::HorizonCrossing => TraceTermination::HorizonCrossing,
+            Termination::Escape => TraceTermination::Escape,
+            other => panic!("shadow-edge reference produced {other:?}"),
+        };
+
+        assert_eq!(gpu, expected, "{viewport_sample:?}");
+        terminations.push(gpu);
+    }
+
+    assert_eq!(
+        terminations,
+        [TraceTermination::Escape, TraceTermination::HorizonCrossing]
+    );
+}
+
 const fn f16_one_bits() -> u16 {
     0x3c00
 }
@@ -366,7 +433,8 @@ fn default_observation(width: u32, height: u32) -> Observation {
 fn observation_at_coordinate_time(width: u32, height: u32, coordinate_time_m: f64) -> Observation {
     let mass = 1.0;
     let spin = 0.8;
-    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildCoordinates::Outgoing)
+        .expect("fixture spacetime is valid");
     let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
     observation_with_time(
         mass,
@@ -381,7 +449,8 @@ fn observation_at_coordinate_time(width: u32, height: u32, coordinate_time_m: f6
 
 fn observation_at_scale(width: u32, height: u32, mass: f64) -> Observation {
     let spin = 0.8 * mass;
-    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildCoordinates::Outgoing)
+        .expect("fixture spacetime is valid");
     let observer_xyz = spacetime.oblate_to_cartesian(30.0 * mass, std::f64::consts::FRAC_PI_3, 0.0);
     observation_with(mass, spin, 0.0, observer_xyz, 1.0, width, height)
 }
@@ -426,8 +495,14 @@ fn observation_with_time(
         [0.0, 0.0, 1.0],
         observer_frequency,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(mass, spin, charge, observer))
-        .expect("fixture scene is valid");
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
+        mass,
+        spin,
+        charge,
+        KerrSchildCoordinates::Outgoing,
+        observer,
+    ))
+    .expect("fixture scene is valid");
     let projection = ViewportProjection::perspective(
         NonZeroU32::new(extent[0]).expect("test width is nonzero"),
         NonZeroU32::new(extent[1]).expect("test height is nonzero"),

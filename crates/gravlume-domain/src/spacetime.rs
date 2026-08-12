@@ -18,6 +18,21 @@ pub enum ParameterState {
     Superextremal,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KerrSchildCoordinates {
+    Ingoing,
+    Outgoing,
+}
+
+impl KerrSchildCoordinates {
+    const fn principal_direction(self) -> f64 {
+        match self {
+            Self::Ingoing => 1.0,
+            Self::Outgoing => -1.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeodesicInvariants {
     energy: f64,
@@ -65,6 +80,7 @@ pub struct KerrNewmanSpacetime {
     mass_m: f64,
     spin_m: f64,
     charge_m: f64,
+    coordinates: KerrSchildCoordinates,
     parameter_state: ParameterState,
 }
 
@@ -111,14 +127,20 @@ impl KerrNewmanSpacetime {
     /// # Errors
     ///
     /// Returns every finite/positive boundary violation as a structured validation report.
-    pub fn new(mass_m: f64, spin_m: f64, charge_m: f64) -> Result<Self, ValidationReport> {
-        Self::validated_with_prefix(mass_m, spin_m, charge_m, "spacetime")
+    pub fn new(
+        mass_m: f64,
+        spin_m: f64,
+        charge_m: f64,
+        coordinates: KerrSchildCoordinates,
+    ) -> Result<Self, ValidationReport> {
+        Self::validated_with_prefix(mass_m, spin_m, charge_m, coordinates, "spacetime")
     }
 
     pub(super) fn validated_with_prefix(
         mass_m: f64,
         spin_m: f64,
         charge_m: f64,
+        coordinates: KerrSchildCoordinates,
         prefix: &str,
     ) -> Result<Self, ValidationReport> {
         let mut report = ValidationReport::default();
@@ -156,6 +178,7 @@ impl KerrNewmanSpacetime {
             mass_m,
             spin_m,
             charge_m,
+            coordinates,
             parameter_state,
         };
         if spacetime
@@ -187,6 +210,11 @@ impl KerrNewmanSpacetime {
     }
 
     #[must_use]
+    pub const fn coordinates(self) -> KerrSchildCoordinates {
+        self.coordinates
+    }
+
+    #[must_use]
     pub const fn parameter_state(self) -> ParameterState {
         self.parameter_state
     }
@@ -205,7 +233,7 @@ impl KerrNewmanSpacetime {
         }
     }
 
-    /// Converts ingoing oblate coordinates to canonical Cartesian spatial coordinates.
+    /// Converts oblate coordinates to this spacetime's Cartesian Kerr-Schild coordinates.
     #[must_use]
     pub fn oblate_to_cartesian(self, radius: f64, polar: f64, azimuth: f64) -> [f64; 3] {
         let (sin_theta, cos_theta) = polar.sin_cos();
@@ -496,15 +524,17 @@ impl KerrNewmanSpacetime {
         if radial_denominator <= 0.0 || !radial_denominator.is_finite() {
             return Err(GeometryError::InvalidDenominator);
         }
-        let null_spatial = DVec3::new(
-            spin.mul_add(y, scaled_radius * x) / radial_denominator,
-            spin.mul_add(-x, scaled_radius * y) / radial_denominator,
-            z / scaled_radius,
-        );
+        let null_spatial = self.coordinates.principal_direction()
+            * DVec3::new(
+                spin.mul_add(y, scaled_radius * x) / radial_denominator,
+                spin.mul_add(-x, scaled_radius * y) / radial_denominator,
+                z / scaled_radius,
+            );
         let null_covector = [1.0, null_spatial.x, null_spatial.y, null_spatial.z];
         let null_vector = [-1.0, null_spatial.x, null_spatial.y, null_spatial.z];
         let coordinates = [x, y, z];
         let radius_gradients = radius_gradient.to_array();
+        let direction = self.coordinates.principal_direction();
         let null_vector_gradient = std::array::from_fn(|index| {
             let radius_i = radius_gradients[index];
             let delta_x = f64::from(index == 0);
@@ -513,15 +543,20 @@ impl KerrNewmanSpacetime {
             let numerator_x = spin.mul_add(delta_y, radius_i.mul_add(x, scaled_radius * delta_x));
             let numerator_y = spin.mul_add(-delta_x, radius_i.mul_add(y, scaled_radius * delta_y));
             let radial_derivative = 2.0 * scaled_radius * radius_i;
-            let derivative_x = ((-null_spatial.x * radial_derivative)
+            let derivative_x = ((-direction * null_spatial.x * radial_derivative)
                 .mul_add(radial_denominator.recip(), numerator_x / radial_denominator))
                 / scale;
-            let derivative_y = ((-null_spatial.y * radial_derivative)
+            let derivative_y = ((-direction * null_spatial.y * radial_derivative)
                 .mul_add(radial_denominator.recip(), numerator_y / radial_denominator))
                 / scale;
             let derivative_z =
                 (delta_z / scaled_radius - coordinates[2] * radius_i / radius_squared) / scale;
-            [0.0, derivative_x, derivative_y, derivative_z]
+            [
+                0.0,
+                direction * derivative_x,
+                direction * derivative_y,
+                direction * derivative_z,
+            ]
         });
         let geometry = Geometry {
             radius,
@@ -558,20 +593,21 @@ impl KerrNewmanSpacetime {
         let numerator_gradient = radius_gradient * (2.0 * mass);
         let scalar_f_gradient =
             (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
-        let null_covector = [1.0, 0.0, 0.0, axis_sign];
-        let null_vector = [-1.0, 0.0, 0.0, axis_sign];
+        let direction = self.coordinates.principal_direction();
+        let null_covector = [1.0, 0.0, 0.0, direction * axis_sign];
+        let null_vector = [-1.0, 0.0, 0.0, direction * axis_sign];
         let inverse_denominator_scale = sigma.recip() / scale;
         let null_vector_gradient = [
             [
                 0.0,
-                scaled_radius * inverse_denominator_scale,
-                -spin * inverse_denominator_scale,
+                direction * scaled_radius * inverse_denominator_scale,
+                -direction * spin * inverse_denominator_scale,
                 0.0,
             ],
             [
                 0.0,
-                spin * inverse_denominator_scale,
-                scaled_radius * inverse_denominator_scale,
+                direction * spin * inverse_denominator_scale,
+                direction * scaled_radius * inverse_denominator_scale,
                 0.0,
             ],
             [0.0; 4],

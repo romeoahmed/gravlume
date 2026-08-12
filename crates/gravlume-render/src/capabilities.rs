@@ -121,6 +121,7 @@ impl SurfaceSelection {
         self.alpha_mode
     }
 
+    #[cfg(test)]
     pub(crate) fn requires_manual_srgb_encoding(self) -> bool {
         !self.format.is_srgb()
     }

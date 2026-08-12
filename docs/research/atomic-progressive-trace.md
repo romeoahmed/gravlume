@@ -1,6 +1,6 @@
 # 完整帧发布与交互式 geodesic trace 研究
 
-状态：研究结论；Stage 0–2 已按本文边界实现，后续 bake-off 仍是研究候选。范围锁定为 Rust 1.97、wgpu/wgpu-core/wgpu-types/Naga 30.0.0、Metal/Vulkan 与当前 Phase 2 Cartesian Kerr–Schild WGSL tracer。
+状态：历史研究结论。隐藏 candidate 与原子发布已采用；完整低分辨率阶梯经实际观感评估后被否决，生产实现只发布原生分辨率完整帧。后续算法 bake-off 仍是研究候选。范围锁定为 Rust 1.97、wgpu/wgpu-core/wgpu-types/Naga 30.0.0、Metal/Vulkan 与当前 Phase 2 Cartesian Kerr–Schild WGSL tracer。
 
 ## 结论
 
@@ -9,10 +9,10 @@
 1. display 始终采样一个只含完整画面的 `published HDR`；
 2. compute 分批写不可见的 `candidate trace target`；
 3. candidate 的全部像素完成且 generation 仍有效时，在同一 queue 上执行最后一批 compute、candidate HDR 到 published HDR 的整图 copy 或 nearest reconstruction、display/present；画面只发生一次完整帧切换；
-4. 需要更快反馈时，先计算并发布一个**完整低分辨率帧**，再在隐藏 candidate 中完成更高分辨率版本；分辨率之间可以跳变，不能暴露半幅或混代纹理；
+4. 研究阶段曾考虑以**完整低分辨率帧**缩短反馈，但实测仍产生明显的分辨率跳变，现已淘汰；生产路径从空白/上一完整 generation 直接原子切换到原生分辨率完整帧；
 5. 调度只解决 watchdog 和观感。真正的性能工作应先去除每步重复的 geometry/RHS 求值，再以固定 RK4、少量有界 embedded tier、事件局部细化和 active-ray wavefront 做可归因 A/B；不应直接把 CPU 式无界 DP5(4) accept/reject loop 搬进每条 GPU ray。
 
-这一方案符合项目对 generation、timestamp、dynamic resolution 和 stale history 的已有约束：[architecture §3](../architecture.md#3-snapshot-generation-与事务提交)、[architecture §8–11](../architecture.md#8-frame-graph-与资源生命周期)、[rendering §7–8](../rendering.md#7-adaptive-sampling-与执行策略)、[validation interactive gate](../validation.md#53-interactive-agreement)。
+采用的原生分辨率原子发布方案符合项目对 generation、timestamp 和 stale history 的已有约束：[architecture §3](../architecture.md#3-snapshot-generation-与事务提交)、[architecture §8–11](../architecture.md#8-frame-graph-与资源生命周期)、[validation interactive gate](../validation.md#53-interactive-agreement)。
 
 ## 1. 已观察到的根因
 
@@ -105,9 +105,9 @@ GPU timestamp 只测查询点之间的 queue time，不能代替交互延迟。�
 - 1440p resize 的 in-flight 资源峰值接近项目总内存目标。
 - 每次 native publish 多一次 8 B/pixel 的整图 GPU copy；它大概率远小于 geodesic compute，但仍必须单独 timestamp，不能凭直觉忽略。
 
-**判断**：这是视觉正确性的最低实现，也是 full-resolution 最终发布路径，但不能单独承担“交互首帧”。
+**判断**：已采用。它保证视觉正确性；交互延迟必须靠追迹算法本身降低，不能以可见的分辨率退化掩盖。
 
-### B. 完整低分辨率帧后逐级提升
+### B. 完整低分辨率帧后逐级提升（已否决）
 
 **语义**：使用有限 resolution ladder，例如 `1/4 linear -> 1/2 -> native`；每一级都完整 trace 到隐藏 candidate，完成后才 publish。下一等级开始前，屏幕持续显示上一完整等级。
 
@@ -123,7 +123,7 @@ GPU timestamp 只测查询点之间的 queue time，不能代替交互延迟。�
 - 简单双线性颜色上采样会跨 horizon/escape、branch 与 cubemap seam，违反“先保存几何语义”的合同。最低限度应按 termination/source direction discontinuity 做 edge-aware reconstruction，不同 semantic key 不插值：[rendering source footprint](../rendering.md#6-source-footprint-jacobian-与-differential-ray)、[history key](../rendering.md#82-history-key)；
 - 分辨率变化改变 sample spacing，必须进入 resolved trace/history key；不能只把低分纹理拉伸后声称与 native 等价。
 
-**判断**：推荐作为交互首帧。第一阶段即使暂用 nearest reconstruction，也必须清楚标记 quality tier；最终进入主线前应以 termination/direction/travel-time field error 而非 PSNR 验收。
+**判断**：实测分辨率跳变仍明显，且会引入 reconstruction 与 sample-lattice 语义；不进入生产路径。本节保留为被否决方案的决策记录。
 
 ### C. 交错/空间填充，并在每 pass 重建完整画面
 
@@ -141,7 +141,7 @@ GPU timestamp 只测查询点之间的 queue time，不能代替交互延迟。�
 - critical curve、多像、branch split 处的一阶重建失效，必须真实 refine：[rendering failure boundary](../rendering.md#64-failure-boundary)；
 - 当前 Phase 2 尚无 Jacobian/branch/parity/source anchor 全套字段，过早实现会把 Phase 4 复杂度拉进基础 tracer。
 
-**判断**：暂不作为根因修复。只有 B 已建立 field-aware reconstruction 且 A/B 证明同一误差预算下优于 resolution ladder，才进入研究 variant。
+**判断**：不作为根因修复。只有未来独立研究证明 field-aware reconstruction 在同一误差预算下优于原生追迹，才进入实验 variant。
 
 ## 4. 算法根因与候选优化
 
@@ -195,12 +195,14 @@ Dormand–Prince 5(4) 每个首次 step 7 stages，FSAL 后每 accepted step 6 �
 
 必须测试的是 state-machine observable：incomplete 不 publish、complete 恰好 publish 一次、resize/cut 使旧 completion失效、in-flight 资源不被主动 destroy。不要钉死 tile 顺序或 batch 数。
 
-### Stage 1：完整低分辨率首帧
+### Stage 1：完整低分辨率首帧（已淘汰）
 
 - 使用有限 resolution ladder，每一级独立完成后 publish；
 - internal extent/sample spacing/quality tier 进入 generation 与 diagnostics；
 - 初始可用 nearest/semantic edge-preserving reconstruction 做实验，但不得跨 termination/branch 插值；
 - timestamp controller 有上下阈值、hysteresis、最小驻留帧，不能按单帧噪声来回跳档。
+
+该 stage 未进入最终实现：观感评估否决了分辨率阶梯，生产路径保留原生分辨率原子发布，并转向消除坐标屏障、重新标定 geometric step 与复用 endpoint 求值。
 
 ### Stage 2：去除重复 geometry/RHS
 

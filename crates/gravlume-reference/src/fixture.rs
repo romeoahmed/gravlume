@@ -1,8 +1,8 @@
 use std::{fmt, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, GeodesicState, KerrNewmanSpacetime, Observation, ParameterState, PhysicalScene,
-    PhysicalSceneDraft, StationaryObserverDraft, ViewportProjection,
+    Angle, GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, ParameterState,
+    PhysicalScene, PhysicalSceneDraft, StationaryObserverDraft, ViewportProjection,
 };
 use serde::{Deserialize, Deserializer, de};
 
@@ -480,6 +480,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             raw.spacetime.mass_m.value,
             raw.spacetime.spin_m.value,
             raw.spacetime.charge_m.value,
+            KerrSchildCoordinates::Ingoing,
         )
         .map_err(|error| FixtureError::InvalidPhysicalData(error.to_string()))?;
         let initial_state = GeodesicState::new(
@@ -791,6 +792,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         raw.spacetime.mass_m.value,
         raw.spacetime.spin_m.value,
         raw.spacetime.charge_m.value,
+        KerrSchildCoordinates::Ingoing,
     )
     .map_err(invalid_physical_data)?;
     let observer_xyz = spacetime.oblate_to_cartesian(
@@ -813,6 +815,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         raw.spacetime.mass_m.value,
         raw.spacetime.spin_m.value,
         raw.spacetime.charge_m.value,
+        KerrSchildCoordinates::Ingoing,
         observer_draft,
     ))
     .map_err(invalid_physical_data)?;

@@ -43,6 +43,14 @@ pub struct DisplayMonitor {
     platform: platform::Monitor,
 }
 
+trait PlatformMonitor {
+    fn refresh(&mut self);
+    fn dynamic_range(&self) -> DynamicRange;
+    fn next_dispatch_deadline(&self) -> Option<Instant>;
+    fn shutdown(&mut self);
+    fn shutdown_complete(&self) -> bool;
+}
+
 impl DisplayMonitor {
     /// Creates a live monitor for the native display backing `window`.
     ///
@@ -61,25 +69,11 @@ impl DisplayMonitor {
     ///
     /// This is a no-op on platforms whose native callback mechanism is driven directly by the
     /// event loop.
-    #[cfg_attr(
-        not(target_os = "linux"),
-        expect(
-            clippy::missing_const_for_fn,
-            reason = "the platform-neutral API dispatches a runtime Wayland event queue"
-        )
-    )]
     pub fn refresh(&mut self) {
         self.platform.refresh();
     }
 
     #[must_use]
-    #[cfg_attr(
-        target_os = "linux",
-        expect(
-            clippy::missing_const_for_fn,
-            reason = "the platform-neutral API must also support runtime AppKit and WinRT queries"
-        )
-    )]
     pub fn dynamic_range(&self) -> DynamicRange {
         self.platform.dynamic_range()
     }
@@ -90,13 +84,6 @@ impl DisplayMonitor {
     /// readable display fd as a spurious wake when the event belongs only to this monitor's guest
     /// queue.
     #[must_use]
-    #[cfg_attr(
-        not(target_os = "linux"),
-        expect(
-            clippy::missing_const_for_fn,
-            reason = "the platform-neutral API computes a runtime Wayland wake deadline"
-        )
-    )]
     pub fn next_dispatch_deadline(&self) -> Option<Instant> {
         self.platform.next_dispatch_deadline()
     }
@@ -108,13 +95,6 @@ impl DisplayMonitor {
 
     /// Reports whether platform shutdown has completed and the event loop may stop pumping.
     #[must_use]
-    #[cfg_attr(
-        target_os = "linux",
-        expect(
-            clippy::missing_const_for_fn,
-            reason = "the platform-neutral API must also support asynchronous WinRT shutdown"
-        )
-    )]
     pub fn shutdown_complete(&self) -> bool {
         self.platform.shutdown_complete()
     }
@@ -153,20 +133,22 @@ mod platform {
             let _ = window.window_handle()?;
             Ok(Self)
         }
+    }
 
-        pub(super) const fn dynamic_range(&self) -> DynamicRange {
+    impl crate::PlatformMonitor for Monitor {
+        fn dynamic_range(&self) -> DynamicRange {
             DynamicRange::Unknown(UnknownDisplayState::PlatformIntegrationUnavailable)
         }
 
-        pub(super) const fn refresh(&mut self) {}
+        fn refresh(&mut self) {}
 
-        pub(super) const fn next_dispatch_deadline(&self) -> Option<Instant> {
+        fn next_dispatch_deadline(&self) -> Option<Instant> {
             None
         }
 
-        pub(super) const fn shutdown(&mut self) {}
+        fn shutdown(&mut self) {}
 
-        pub(super) const fn shutdown_complete(&self) -> bool {
+        fn shutdown_complete(&self) -> bool {
             true
         }
     }

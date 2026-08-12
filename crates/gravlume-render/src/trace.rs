@@ -1,6 +1,8 @@
 use std::borrow::Cow;
 
-use gravlume_domain::{KerrNewmanSpacetime, Observation, ParameterState, ValidationReport};
+use gravlume_domain::{
+    KerrNewmanSpacetime, KerrSchildCoordinates, Observation, ParameterState, ValidationReport,
+};
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
 
@@ -59,7 +61,10 @@ impl TraceUniforms {
                 1.0,
                 physical_spacetime.spin_m() / mass,
                 physical_spacetime.charge_m() / mass,
-                0.0,
+                match physical_spacetime.coordinates() {
+                    KerrSchildCoordinates::Ingoing => 1.0,
+                    KerrSchildCoordinates::Outgoing => -1.0,
+                },
             ],
             "spacetime",
         )?;
@@ -67,6 +72,7 @@ impl TraceUniforms {
             f64::from(spacetime_uniform[0]),
             f64::from(spacetime_uniform[1]),
             f64::from(spacetime_uniform[2]),
+            physical_spacetime.coordinates(),
         )
         .map_err(TraceInputError::DomainInvariant)?;
         let canonical_state = physical_spacetime.parameter_state();
@@ -103,7 +109,7 @@ impl TraceUniforms {
                 [200.0, f64::from(f32::from_bits(0x2b80_0000)), horizon, 0.0],
                 "event_surfaces",
             )?,
-            step_policy: [0.01, 0.005, 0.5, INVARIANT_DRIFT_LIMIT],
+            step_policy: [0.1, 0.005, 8.0, INVARIANT_DRIFT_LIMIT],
         })
     }
 }
@@ -350,7 +356,6 @@ impl TraceCompute {
             ],
         });
         TraceTarget {
-            texture,
             view,
             #[cfg(test)]
             direction_time,
@@ -431,11 +436,6 @@ pub const fn production_shader_source() -> &'static str {
 }
 
 pub struct TraceTarget {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "keeps the storage texture alive for its view")
-    )]
-    texture: wgpu::Texture,
     view: wgpu::TextureView,
     #[cfg(test)]
     direction_time: wgpu::Buffer,
@@ -452,8 +452,8 @@ impl TraceTarget {
     }
 
     #[cfg(test)]
-    pub(crate) const fn texture(&self) -> &wgpu::Texture {
-        &self.texture
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
+        self.view.texture()
     }
 
     #[cfg(test)]
