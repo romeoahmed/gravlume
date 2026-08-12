@@ -8,6 +8,7 @@ publish.workspace = true
 [dependencies]
 egui.workspace = true
 egui-winit.workspace = true
+gravlume-domain = { path = "../gravlume-domain" }
 gravlume-render = { path = "../gravlume-render" }
 pollster.workspace = true
 thiserror.workspace = true

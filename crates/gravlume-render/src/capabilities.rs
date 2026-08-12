@@ -6,7 +6,7 @@ pub enum CapabilityError {
     SoftwareAdapter,
     #[error("adapter is not WebGPU compliant")]
     DownlevelAdapter,
-    #[error("adapter is missing Phase 0 features: {0:?}")]
+    #[error("adapter is missing required renderer features: {0:?}")]
     MissingFeatures(wgpu::Features),
     #[error("rgba16float is missing required usages: {0:?}")]
     MissingHdrTextureUsages(wgpu::TextureUsages),

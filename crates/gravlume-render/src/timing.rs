@@ -69,18 +69,18 @@ pub struct GpuTimings {
 impl GpuTimings {
     pub(crate) fn new(device: &wgpu::Device) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("Phase 0 pass timestamps"),
+            label: Some("frame pass timestamps"),
             ty: wgpu::QueryType::Timestamp,
             count: QUERY_COUNT,
         });
         let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Phase 0 timestamp resolve buffer"),
+            label: Some("frame timestamp resolve buffer"),
             size: QUERY_BYTES,
             usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Phase 0 timestamp readback buffer"),
+            label: Some("frame timestamp readback buffer"),
             size: QUERY_BYTES,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,

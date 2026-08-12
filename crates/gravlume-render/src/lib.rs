@@ -7,14 +7,15 @@ mod display;
 mod engine;
 mod extent;
 mod gpu_error;
-mod scene;
 mod timing;
 mod trace;
 
 #[cfg(test)]
-mod phase2_contract_tests;
+mod interactive_trace_contract_tests;
 #[cfg(test)]
 mod test_gpu;
+#[cfg(test)]
+mod trace_test_support;
 
 #[doc(hidden)]
 pub use capabilities::CapabilityError;
@@ -27,7 +28,7 @@ pub use gpu_error::{
 #[doc(hidden)]
 pub use timing::TimingError;
 #[doc(hidden)]
-pub use trace::{TraceTermination, UnknownTraceTermination};
+pub use trace::{TraceInputError, TraceTermination, UnknownTraceTermination};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("gravlume-render supports only native macOS, Windows, and Linux targets");

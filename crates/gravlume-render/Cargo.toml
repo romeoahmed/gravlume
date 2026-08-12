@@ -10,6 +10,7 @@ bytemuck.workspace = true
 egui.workspace = true
 egui-wgpu.workspace = true
 gravlume-domain = { path = "../gravlume-domain" }
+num-traits.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
