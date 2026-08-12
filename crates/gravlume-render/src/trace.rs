@@ -14,6 +14,8 @@ const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate
 pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
 const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
+pub const TRACE_WORKGROUP_WIDTH: u32 = 8;
+pub const TRACE_WORKGROUP_HEIGHT: u32 = 8;
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -27,6 +29,12 @@ pub struct TraceUniforms {
     pub projection: [f32; 4],
     pub event_surfaces: [f32; 4],
     pub step_policy: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct TraceDispatch {
+    pixels: [u32; 4],
 }
 
 impl TraceUniforms {
@@ -70,11 +78,12 @@ impl TraceUniforms {
             });
         }
         let horizon = interactive_spacetime.outer_horizon_radius().unwrap_or(-1.0);
+        let [_, observer_x, observer_y, observer_z] = scene.observer_event().to_txyz();
 
         Ok(Self {
             spacetime: spacetime_uniform,
             observer_event: pack4(
-                scene.observer_event().to_txyz().map(|value| value / mass),
+                [0.0, observer_x / mass, observer_y / mass, observer_z / mass],
                 "observer_event",
             )?,
             observer_velocity: pack4(frame.four_velocity_txyz(), "observer_velocity")?,
@@ -131,6 +140,7 @@ pub struct TraceCompute {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
+    dispatch: wgpu::Buffer,
 }
 
 impl TraceCompute {
@@ -189,6 +199,11 @@ impl TraceCompute {
             contents: bytemuck::bytes_of(&uniforms),
             usage: wgpu::BufferUsages::UNIFORM,
         });
+        let dispatch = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("interactive trace dispatch"),
+            contents: bytemuck::bytes_of(&TraceDispatch { pixels: [0; 4] }),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("interactive trace bind group layout"),
             entries: &[
@@ -242,6 +257,16 @@ impl TraceCompute {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(size_of::<TraceDispatch>()),
+                    },
+                    count: None,
+                },
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -266,6 +291,7 @@ impl TraceCompute {
             pipeline,
             bind_group_layout,
             uniforms,
+            dispatch,
         }
     }
 
@@ -317,11 +343,13 @@ impl TraceCompute {
                     binding: 4,
                     resource: metadata.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: self.dispatch.as_entire_binding(),
+                },
             ],
         });
         TraceTarget {
-            extent,
-            #[cfg(test)]
             texture,
             view,
             #[cfg(test)]
@@ -336,10 +364,13 @@ impl TraceCompute {
 
     pub(crate) fn encode(
         &self,
+        queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceTarget,
+        pixels: TracePixels,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
+        self.set_pixel_offset(queue, pixels.start());
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("interactive trace pass"),
             timestamp_writes,
@@ -348,10 +379,49 @@ impl TraceCompute {
         pass.set_bind_group(0, &target.bind_group, &[]);
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePass.html#method.dispatch_workgroups
         pass.dispatch_workgroups(
-            target.extent.width().div_ceil(8),
-            target.extent.height().div_ceil(8),
+            1,
+            pixels
+                .len()
+                .div_ceil(TRACE_WORKGROUP_WIDTH * TRACE_WORKGROUP_HEIGHT),
             1,
         );
+    }
+
+    fn set_pixel_offset(&self, queue: &wgpu::Queue, pixel: u32) {
+        let dispatch = TraceDispatch {
+            pixels: [pixel, 0, 0, 0],
+        };
+        // Small queue writes are staged immediately and execute before the following submission.
+        // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Queue.html#method.write_buffer
+        queue.write_buffer(&self.dispatch, 0, bytemuck::bytes_of(&dispatch));
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TracePixels {
+    start: u32,
+    end: u32,
+}
+
+impl TracePixels {
+    #[cfg(test)]
+    pub(crate) const fn all(extent: RenderExtent) -> Self {
+        Self {
+            start: 0,
+            end: extent.width() * extent.height(),
+        }
+    }
+
+    pub(crate) const fn new(start: u32, end: u32) -> Self {
+        Self { start, end }
+    }
+
+    pub(crate) const fn start(self) -> u32 {
+        self.start
+    }
+
+    pub(crate) const fn len(self) -> u32 {
+        self.end - self.start
     }
 }
 
@@ -361,8 +431,10 @@ pub const fn production_shader_source() -> &'static str {
 }
 
 pub struct TraceTarget {
-    extent: RenderExtent,
-    #[cfg(test)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "keeps the storage texture alive for its view")
+    )]
     texture: wgpu::Texture,
     view: wgpu::TextureView,
     #[cfg(test)]
@@ -375,10 +447,6 @@ pub struct TraceTarget {
 }
 
 impl TraceTarget {
-    pub(crate) const fn extent(&self) -> RenderExtent {
-        self.extent
-    }
-
     pub(crate) const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }

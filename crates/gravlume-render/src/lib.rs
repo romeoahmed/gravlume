@@ -18,7 +18,7 @@ mod test_gpu;
 mod trace_test_support;
 
 #[doc(hidden)]
-pub use capabilities::CapabilityError;
+pub use capabilities::{CapabilityError, DisplayState, HdrParameters, UnknownDisplayState};
 #[doc(hidden)]
 pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
 #[doc(hidden)]

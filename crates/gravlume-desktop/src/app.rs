@@ -1,7 +1,10 @@
 use std::{
     ffi::OsStr,
     num::NonZeroU32,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -9,9 +12,10 @@ use gravlume_domain::{
     Angle, KerrNewmanSpacetime, Observation, PhysicalScene, PhysicalSceneDraft,
     StationaryObserverDraft, ValidationReport, ViewportProjection,
 };
+use gravlume_native_display::DisplayMonitor;
 use gravlume_render::{
-    DeviceEvent, FrameSkip, FrameStatus, GpuEngine, RenderDiagnostics, RenderInitError,
-    RenderRuntimeError, ResizeError,
+    DeviceEvent, DisplayState, FrameSkip, FrameStatus, GpuEngine, HdrParameters, RenderDiagnostics,
+    RenderInitError, RenderRuntimeError, ResizeError, UnknownDisplayState,
 };
 use winit::{
     application::ApplicationHandler,
@@ -34,6 +38,8 @@ pub enum RunError {
     EventLoop(#[from] EventLoopError),
     #[error("failed to create the native window: {0}")]
     Window(#[from] OsError),
+    #[error("failed to monitor the native display: {0}")]
+    NativeDisplay(#[from] gravlume_native_display::MonitorError),
     #[error("failed to initialize the GPU renderer: {0}")]
     RenderInit(#[from] RenderInitError),
     #[error("failed to construct the validated default observation: {0}")]
@@ -52,7 +58,7 @@ pub enum RunError {
 ///
 /// Returns an error when event-loop, window, renderer, or device initialization/runtime fails.
 pub fn run(launch: Launch) -> Result<(), RunError> {
-    let mut builder = EventLoop::<Instant>::with_user_event();
+    let mut builder = EventLoop::<AppEvent>::with_user_event();
     let event_loop = builder.build()?;
     let mut app = DesktopApp::new(launch, event_loop.create_proxy());
     event_loop.run_app(&mut app)?;
@@ -60,8 +66,17 @@ pub fn run(launch: Launch) -> Result<(), RunError> {
 }
 
 struct WindowState {
-    window: Arc<Window>,
+    // Native observers must be removed before their NSWindow/HWND is destroyed.
+    display_monitor: DisplayMonitor,
+    output_event_pending: Arc<AtomicBool>,
     egui: egui_winit::State,
+    window: Arc<Window>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum AppEvent {
+    RepaintAt(Instant),
+    OutputStateDirty,
 }
 
 struct DesktopApp {
@@ -70,17 +85,18 @@ struct DesktopApp {
     window: Option<WindowState>,
     renderer: Option<GpuEngine>,
     egui_context: egui::Context,
-    event_proxy: EventLoopProxy<Instant>,
+    event_proxy: EventLoopProxy<AppEvent>,
     schedule: EventLoopSchedule,
     pending_textures: egui::TexturesDelta,
     last_device_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
     presented_frames: u64,
     smoke_once: bool,
+    exit_requested: bool,
 }
 
 impl DesktopApp {
-    fn new(launch: Launch, event_proxy: EventLoopProxy<Instant>) -> Self {
+    fn new(launch: Launch, event_proxy: EventLoopProxy<AppEvent>) -> Self {
         Self {
             launch,
             lifecycle: Lifecycle::default(),
@@ -95,6 +111,7 @@ impl DesktopApp {
             presented_frames: 0,
             smoke_once: std::env::var_os(SMOKE_ONCE_ENV)
                 .is_some_and(|value| value == OsStr::new("1")),
+            exit_requested: false,
         }
     }
 
@@ -126,25 +143,48 @@ impl DesktopApp {
                     }
                     let now = Instant::now();
                     let deadline = now.checked_add(request.delay).unwrap_or(now);
-                    if repaint_proxy.send_event(deadline).is_err() {
+                    if repaint_proxy
+                        .send_event(AppEvent::RepaintAt(deadline))
+                        .is_err()
+                    {
                         tracing::debug!("event loop closed before egui repaint request");
                     }
                 });
+            let output_proxy = self.event_proxy.clone();
+            let output_event_pending = Arc::new(AtomicBool::new(false));
+            let callback_pending = Arc::clone(&output_event_pending);
+            let display_monitor = DisplayMonitor::new(window.as_ref(), move || {
+                if callback_pending.swap(true, Ordering::AcqRel) {
+                    return;
+                }
+                if output_proxy.send_event(AppEvent::OutputStateDirty).is_err() {
+                    callback_pending.store(false, Ordering::Release);
+                    tracing::debug!("event loop closed before display-state notification");
+                }
+            })?;
             self.window = Some(WindowState {
-                window: Arc::clone(&window),
+                display_monitor,
+                output_event_pending,
                 egui,
+                window: Arc::clone(&window),
             });
             window
         };
 
+        let display_state = self.current_display_state();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resume_surface()?;
+            renderer.refresh_output(display_state)?;
             window.request_redraw();
             return Ok(());
         }
         let size = window.inner_size();
         let observation = default_observation(size.width, size.height)?;
-        let renderer = pollster::block_on(GpuEngine::new(window.clone(), &observation))?;
+        let mut renderer =
+            pollster::block_on(GpuEngine::new(window.clone(), &observation, display_state))?;
+        // Configuring extended-linear output can arm macOS EDR. Re-read the live snapshot after
+        // the surface exists so current headroom is not left at its pre-configuration value.
+        renderer.refresh_output(self.current_display_state())?;
         let diagnostics = renderer.diagnostics();
         tracing::info!(
             adapter = diagnostics.adapter_name(),
@@ -266,6 +306,13 @@ impl DesktopApp {
         }
     }
 
+    fn current_display_state(&self) -> DisplayState {
+        self.window.as_ref().map_or(
+            DisplayState::Unknown(UnknownDisplayState::PlatformIntegrationUnavailable),
+            |state| map_dynamic_range(state.display_monitor.dynamic_range()),
+        )
+    }
+
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: RunError) {
         if self.fatal_error.is_none() {
             tracing::error!(error = %error, "desktop runtime is stopping");
@@ -273,11 +320,34 @@ impl DesktopApp {
             self.pending_textures.clear();
             self.fatal_error = Some(error);
         }
-        event_loop.exit();
+        self.request_exit(event_loop);
+    }
+
+    fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.exit_requested {
+            self.exit_requested = true;
+            self.pending_textures.clear();
+            if let Some(window) = self.window.as_mut() {
+                window.display_monitor.shutdown();
+            }
+        }
+        self.finish_exit(event_loop);
+    }
+
+    fn finish_exit(&self, event_loop: &ActiveEventLoop) {
+        let shutdown_complete = self
+            .window
+            .as_ref()
+            .is_none_or(|window| window.display_monitor.shutdown_complete());
+        if shutdown_complete {
+            event_loop.exit();
+        } else {
+            event_loop.set_control_flow(ControlFlow::Wait);
+        }
     }
 }
 
-impl ApplicationHandler<Instant> for DesktopApp {
+impl ApplicationHandler<AppEvent> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.lifecycle.resume()
             && let Err(error) = self.initialize(event_loop)
@@ -286,8 +356,30 @@ impl ApplicationHandler<Instant> for DesktopApp {
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, deadline: Instant) {
-        self.schedule.request_repaint_at(deadline);
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
+        match event {
+            AppEvent::RepaintAt(deadline) if !self.exit_requested => {
+                self.schedule.request_repaint_at(deadline);
+            }
+            AppEvent::RepaintAt(_) => {}
+            AppEvent::OutputStateDirty => {
+                if let Some(window) = self.window.as_ref() {
+                    window.output_event_pending.store(false, Ordering::Release);
+                }
+                if self.exit_requested {
+                    self.finish_exit(event_loop);
+                    return;
+                }
+                let display_state = self.current_display_state();
+                if let Some(renderer) = self.renderer.as_mut()
+                    && let Err(error) = renderer.refresh_output(display_state)
+                {
+                    self.fail(event_loop, error.into());
+                    return;
+                }
+                self.request_redraw();
+            }
+        }
     }
 
     fn window_event(
@@ -296,6 +388,9 @@ impl ApplicationHandler<Instant> for DesktopApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
+        if self.exit_requested {
+            return;
+        }
         let Some(window_state) = self.window.as_mut() else {
             return;
         };
@@ -311,7 +406,7 @@ impl ApplicationHandler<Instant> for DesktopApp {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => self.request_exit(event_loop),
             WindowEvent::Resized(size) => {
                 self.resize_renderer(event_loop, size.width, size.height);
             }
@@ -326,14 +421,33 @@ impl ApplicationHandler<Instant> for DesktopApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            self.finish_exit(event_loop);
+            return;
+        }
         let poll_result = self.renderer.as_mut().map(GpuEngine::poll);
         match poll_result {
             Some(Ok(outcome)) => {
                 let (completed_readback, events) = outcome.into_parts();
                 self.process_device_events(event_loop, events);
-                if self.smoke_once && self.presented_frames > 0 && completed_readback {
-                    tracing::info!("interactive one-frame smoke completed");
-                    event_loop.exit();
+                let trace_complete = self
+                    .renderer
+                    .as_ref()
+                    .is_some_and(GpuEngine::trace_is_complete);
+                if self.smoke_once
+                    && self.presented_frames > 0
+                    && completed_readback
+                    && trace_complete
+                {
+                    if let Some(diagnostics) = self.renderer.as_ref().map(GpuEngine::diagnostics) {
+                        tracing::info!(
+                            trace_batches = diagnostics.completed_trace_batches(),
+                            total_trace_compute_ms = diagnostics.total_trace_compute_ms(),
+                            maximum_trace_batch_ms = diagnostics.maximum_trace_batch_ms(),
+                            "interactive one-frame smoke completed"
+                        );
+                    }
+                    self.request_exit(event_loop);
                     return;
                 }
             }
@@ -347,16 +461,31 @@ impl ApplicationHandler<Instant> for DesktopApp {
             return;
         }
 
+        if let Some(window) = self.window.as_mut() {
+            window.display_monitor.refresh();
+        }
+
         let now = Instant::now();
         let has_pending_gpu_work = self
             .renderer
             .as_ref()
             .is_some_and(GpuEngine::has_pending_gpu_work);
         self.schedule.after_gpu_poll(now, has_pending_gpu_work);
+        if self
+            .renderer
+            .as_ref()
+            .is_some_and(GpuEngine::trace_needs_redraw)
+        {
+            self.schedule.request_repaint(now, Duration::ZERO);
+        }
         if self.schedule.take_due_repaint(now) {
             self.request_redraw();
         }
-        match self.schedule.next_wake() {
+        let native_dispatch_deadline = self
+            .window
+            .as_ref()
+            .and_then(|window| window.display_monitor.next_dispatch_deadline());
+        match earliest_deadline(self.schedule.next_wake(), native_dispatch_deadline) {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
@@ -368,6 +497,56 @@ impl ApplicationHandler<Instant> for DesktopApp {
         {
             renderer.suspend();
         }
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(window) = self.window.as_mut() {
+            window.display_monitor.shutdown();
+        }
+    }
+}
+
+fn map_dynamic_range(dynamic_range: gravlume_native_display::DynamicRange) -> DisplayState {
+    match dynamic_range {
+        gravlume_native_display::DynamicRange::Hdr {
+            tone_map_headroom,
+            reference_white_scale,
+        } => HdrParameters::new(tone_map_headroom, reference_white_scale).map_or(
+            DisplayState::Unknown(UnknownDisplayState::StateQueryFailed),
+            DisplayState::Hdr,
+        ),
+        gravlume_native_display::DynamicRange::Sdr => DisplayState::Sdr,
+        gravlume_native_display::DynamicRange::Suppressed => DisplayState::Suppressed,
+        gravlume_native_display::DynamicRange::Unknown(reason) => {
+            DisplayState::Unknown(match reason {
+                gravlume_native_display::UnknownDisplayState::PlatformIntegrationUnavailable => {
+                    UnknownDisplayState::PlatformIntegrationUnavailable
+                }
+                gravlume_native_display::UnknownDisplayState::UnsupportedOsVersion => {
+                    UnknownDisplayState::UnsupportedOsVersion
+                }
+                gravlume_native_display::UnknownDisplayState::StateQueryFailed => {
+                    UnknownDisplayState::StateQueryFailed
+                }
+                gravlume_native_display::UnknownDisplayState::WaylandColorManagementUnavailable => {
+                    UnknownDisplayState::WaylandColorManagementUnavailable
+                }
+                gravlume_native_display::UnknownDisplayState::WaylandProtocolTooOld => {
+                    UnknownDisplayState::WaylandProtocolTooOld
+                }
+                gravlume_native_display::UnknownDisplayState::WaylandEncodingUnavailable => {
+                    UnknownDisplayState::WaylandEncodingUnavailable
+                }
+            })
+        }
+    }
+}
+
+fn earliest_deadline(first: Option<Instant>, second: Option<Instant>) -> Option<Instant> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(first.min(second)),
+        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
+        (None, None) => None,
     }
 }
 
@@ -382,7 +561,7 @@ fn show_overlay(
         .collapsible(false)
         .show(context, |ui| {
             ui.heading("Gravlume");
-            ui.label("Kerr–Schild trace → analytic sky/horizon → neutral display → egui");
+            ui.label("Kerr–Schild trace → analytic scene → HDR/SDR output + linear UI");
             ui.separator();
             ui.monospace(format!(
                 "{} · {}",
@@ -410,6 +589,18 @@ fn show_overlay(
                 ));
             } else {
                 ui.monospace("GPU timing pending");
+            }
+            if let Some(completion) = diagnostics.trace_completion() {
+                ui.monospace(format!("trace {:.1}%", completion * 100.0));
+            }
+            if let (Some(batch_count), Some(maximum_batch_ms)) = (
+                diagnostics.completed_trace_batches(),
+                diagnostics.maximum_trace_batch_ms(),
+            ) && batch_count > 0
+            {
+                ui.monospace(format!(
+                    "{batch_count} trace batches · max {maximum_batch_ms:.3} ms"
+                ));
             }
             if let Some(event) = device_event {
                 ui.separator();

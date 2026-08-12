@@ -2,7 +2,7 @@ use gravlume_domain::Observation;
 
 use crate::{
     extent::RenderExtent,
-    trace::{TraceCompute, trace_record_plane_size},
+    trace::{TraceCompute, TracePixels, trace_record_plane_size},
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
@@ -35,6 +35,12 @@ pub fn capture_trace(observation: &Observation) -> TraceCapture {
     capture(gpu, observation, &compute)
 }
 
+pub fn capture_trace_in_batches(observation: &Observation, pixels_per_batch: u32) -> TraceCapture {
+    let gpu = crate::test_gpu::native_gpu();
+    let compute = TraceCompute::new(&gpu.device, observation).expect("observation packs for GPU");
+    capture_in_batches(gpu, observation, &compute, pixels_per_batch)
+}
+
 pub fn capture_initial_rays(observation: &Observation, subpixel: [f32; 2]) -> TraceCapture {
     let gpu = crate::test_gpu::native_gpu();
     let compute = TraceCompute::for_initial_ray_capture(&gpu.device, observation, subpixel)
@@ -60,6 +66,65 @@ fn capture(
     )
     .expect("validated observation extent is nonzero");
     let target = compute.create_target(&gpu.device, extent);
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("headless trace encoder"),
+        });
+    let pixels = TracePixels::all(extent);
+    compute.encode(&gpu.queue, &mut encoder, &target, pixels, None);
+    finish_capture(gpu, extent, &target, encoder)
+}
+
+fn capture_in_batches(
+    gpu: &crate::test_gpu::TestGpu,
+    observation: &Observation,
+    compute: &TraceCompute,
+    pixels_per_batch: u32,
+) -> TraceCapture {
+    let extent = RenderExtent::new(
+        observation.projection().width().get(),
+        observation.projection().height().get(),
+    )
+    .expect("validated observation extent is nonzero");
+    let target = compute.create_target(&gpu.device, extent);
+    let total_pixels = extent.width() * extent.height();
+    let mut start = 0;
+    while start < total_pixels {
+        let batch = TracePixels::new(
+            start,
+            start.saturating_add(pixels_per_batch).min(total_pixels),
+        );
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("headless trace batch encoder"),
+            });
+        compute.encode(&gpu.queue, &mut encoder, &target, batch, None);
+        let submission = gpu.queue.submit([encoder.finish()]);
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("trace batch completes");
+        start += batch.len();
+    }
+
+    let encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("headless trace readback encoder"),
+        });
+    finish_capture(gpu, extent, &target, encoder)
+}
+
+fn finish_capture(
+    gpu: &crate::test_gpu::TestGpu,
+    extent: RenderExtent,
+    target: &crate::trace::TraceTarget,
+    mut encoder: wgpu::CommandEncoder,
+) -> TraceCapture {
     let plane_size = trace_record_plane_size(extent);
     let record_bytes = plane_size * RECORD_FIELD_COUNT;
     let hdr_offset = record_bytes.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT.into())
@@ -72,12 +137,6 @@ fn capture(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("headless trace encoder"),
-        });
-    compute.encode(&mut encoder, &target, None);
     for (plane_index, plane) in target.record_planes().into_iter().enumerate() {
         encoder.copy_buffer_to_buffer(
             plane,

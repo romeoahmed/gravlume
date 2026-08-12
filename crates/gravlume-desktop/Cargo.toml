@@ -9,6 +9,7 @@ publish.workspace = true
 egui.workspace = true
 egui-winit.workspace = true
 gravlume-domain = { path = "../gravlume-domain" }
+gravlume-native-display = { path = "../gravlume-native-display" }
 gravlume-render = { path = "../gravlume-render" }
 pollster.workspace = true
 thiserror.workspace = true
@@ -16,8 +17,8 @@ tracing.workspace = true
 winit.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-egui-winit = { workspace = true, features = ["wayland", "x11"] }
-winit = { workspace = true, features = ["wayland", "wayland-dlopen", "x11"] }
+egui-winit = { workspace = true, features = ["wayland"] }
+winit = { workspace = true, features = ["wayland", "wayland-dlopen"] }
 
 [lints]
 workspace = true

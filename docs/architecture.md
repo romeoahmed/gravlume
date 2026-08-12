@@ -73,6 +73,7 @@ gravlume/
 │  ├─ gravlume-domain/        # validated scene、observables、纯 f64 基础数学
 │  ├─ gravlume-reference/     # 独立 CPU oracle、fixture/LUT、比较报告
 │  ├─ gravlume-render/        # 私有 wgpu frame engine、WGSL、offscreen target
+│  ├─ gravlume-native-display/# AppKit/WinRT/Wayland display-state safe boundary
 │  ├─ gravlume-desktop/       # winit/egui panels 与封闭 run lifecycle
 │  └─ gravlume-research/      # bounded workbench、capture/readback、experiment
 ├─ shaders/                   # WESL source + checked-in generated WGSL
@@ -83,13 +84,15 @@ gravlume/
 依赖只向内：
 
 ```text
-root -> desktop -> domain + render
+root -> desktop -> domain + native-display + render
 render -> domain
 reference -> domain
 research -> domain + reference + render(offscreen)
 ```
 
 `domain` 不依赖 wgpu/winit/egui；`reference` 不依赖 renderer。assets、math、passes 和 UI 先作为真实消费者内部模块，不预先创建浅 crate。CPU reference 与 GPU interactive 共享领域输入、termination 语义、fixture schema 和容差政策，**不共享一份自动生成的核心方程**，以免同一符号错误污染 oracle 与被测对象。
+
+`native-display` 是一个例外但必要的深边界：它拥有 raw window handle、AppKit observer/WinRT event/dispatcher lifetime，并只导出 `Hdr { tone_map_headroom, reference_white_scale } | Sdr | Suppressed | Unknown(reason)`。render 不导入 AppKit、WinRT 或 Wayland 类型；平台 snapshot 和 exact wgpu surface pair 在纯 resolver 中合成完整 output contract。
 
 ## 4. 对外接口
 
@@ -263,7 +266,7 @@ ReferenceTrace、InteractiveAgreement 和 SolverBakeOff 接收不可变 `Arc<Obs
 - `Timeout`/`Occluded` 跳帧，`Outdated` 重配，`Lost` 重建 surface，`Validation` 消化已捕获的 validation error；device loss 由独立 callback 处理；
 - size-dependent texture、bind group 与 history 总是同一 extent generation。
 
-surface format/color-space 从 `format_capabilities` 的合法组合选择。wgpu 不替应用做 tone/gamut mapping：对 `*Srgb` surface 写 linear 由硬件编码；其他 HDR/wide-gamut color space 由 display pass 输出所需 transfer 与 gamut。首版发布合同是 SDR；HDR surface 只有完成色彩与显示验证后才加入，并把选择记录进 frame diagnostics。[wgpu HDR output](https://docs.rs/wgpu/30.0.0/wgpu/#surface-color-spaces-and-hdr-output)
+surface format/color-space 从 `format_capabilities` 的合法组合选择。wgpu 不替应用做 tone/gamut mapping：对 `*Srgb` surface 写 linear 由硬件编码；`Rgba16Float + ExtendedSrgbLinear` 由 display pass 写扩展线性值。renderer 只有在可靠平台状态与精确 pair 同时允许时启用 HDR；其他情况带原因走 SDR，并把 format、color space 与 transfer 记录进 frame diagnostics。[wgpu HDR output](https://docs.rs/wgpu/30.0.0/wgpu/#surface-color-spaces-and-hdr-output)
 
 ## 6. GPU 能力与 WGSL 合同
 
@@ -327,9 +330,9 @@ egui input + validate/commit
   -> spatial reconstruction
   -> stationary/branch-aware history
   -> scene-linear bloom
-  -> display transform into gamma-space composite
-  -> egui overlay on composite
-  -> surface presentation encoding
+  -> complete scene generation publish
+  -> egui overlay into transparent gamma target
+  -> tone map + linear scene/UI composite + surface encoding
   -> submit + present
 ```
 
@@ -339,7 +342,7 @@ renderer 内部资源分三层：
 
 - `DeviceResources`：device/queue、shader、layout、pipeline、sampler，直到 device lost；只有无状态的最终 presentation pipeline 随 surface format 换代；
 - `SceneResources`：sky/disk/LUT、scene buffer，随 geometry/transport/asset generation；
-- `FrameResources`：HDR/coarse/history/bloom、gamma-space display composite 与 readback ring，随 extent/quality generation。
+- `FrameResources`：hidden candidate、complete published HDR、透明 gamma UI、coarse/history/bloom 与 readback ring，随 extent/quality generation。
 
 重建使用 two-phase install：先完整创建新 bundle、验证 binding，再原子 swap；失败时保留旧 bundle并报告事件。旧 wgpu handle 可由引用计数延寿到已提交 command 完成，但显存预算必须测新旧两套并存的峰值。
 
@@ -349,9 +352,9 @@ renderer 内部资源分三层：
 
 1. 安装 `textures_delta.set`；
 2. 调 `Renderer::update_buffers` 并收集 paint callback command buffers；
-3. 编码 scene compute/HDR，并把 display transform 写入固定 `Rgba8Unorm` gamma-space composite；
-4. 在 composite 的最后一个 overlay pass 调 `Renderer::render`；
-5. 把 composite 编码到当前 surface format；surface format 改变时只事务式替换这个无状态 pipeline；
+3. 编码 scene compute；只有完整 candidate 才发布到 FP16 scene；
+4. clear 固定 `Rgba8Unorm` UI target，并调用 `Renderer::render`；
+5. final pass 解码 premultiplied gamma UI，按 reference white 在线性空间与 tone-mapped scene 合成并写当前 surface；surface contract 改变时只事务式替换 presentation pipeline/uniform；
 6. 按 `update_buffers` 返回顺序提交 callback buffers 和 main buffer；
 7. egui render 编码完成后处理 `textures_delta.free`，不在本帧使用它之前释放；
 8. `window.pre_present_notify()`，再 present。

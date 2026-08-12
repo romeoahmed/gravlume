@@ -17,7 +17,9 @@ use crate::{
         INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
         production_shader_source,
     },
-    trace_test_support::{capture_initial_rays, capture_invariant_gate_cases, capture_trace},
+    trace_test_support::{
+        capture_initial_rays, capture_invariant_gate_cases, capture_trace, capture_trace_in_batches,
+    },
 };
 
 #[test]
@@ -101,6 +103,43 @@ fn mass_scale_does_not_change_the_dimensionless_trace_result() {
 }
 
 #[test]
+fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
+    let origin = capture_trace(&observation_at_coordinate_time(7, 5, 0.0));
+    let translated = capture_trace(&observation_at_coordinate_time(7, 5, 1.0e8));
+    let origin = origin.records[0];
+    let translated = translated.records[0];
+
+    let origin_termination =
+        TraceTermination::try_from(origin.metadata[0]).expect("trace writes a typed termination");
+    assert_eq!(origin_termination, TraceTermination::Escape);
+    assert_eq!(
+        Ok(origin_termination),
+        TraceTermination::try_from(translated.metadata[0])
+    );
+    let origin_direction: [f32; 3] = origin.direction_time[..3]
+        .try_into()
+        .expect("trace direction contains three components");
+    let translated_direction: [f32; 3] = translated.direction_time[..3]
+        .try_into()
+        .expect("trace direction contains three components");
+    let angular_difference = angle_between(
+        origin_direction.map(f64::from),
+        translated_direction.map(f64::from),
+    );
+    assert!(
+        angular_difference <= 2.0e-6,
+        "time translation changed the trace direction by {angular_difference:e} rad"
+    );
+    let travel_time_difference = (origin.direction_time[3] - translated.direction_time[3]).abs();
+    assert!(
+        travel_time_difference <= 1.0e-3,
+        "time translation changed travel time from {} to {}",
+        origin.direction_time[3],
+        translated.direction_time[3]
+    );
+}
+
+#[test]
 fn far_field_geometry_does_not_fail_when_the_guard_observable_exceeds_f32() {
     let observation = observation_with(1.0, 0.8, 0.0, [1.0e10, 0.0, 0.0], 1.0, 1, 1);
     let capture = capture_initial_rays(&observation, [0.5, 0.5]);
@@ -149,7 +188,7 @@ fn production_shader_parses_validates_and_keeps_its_resource_contract() {
         .map(|binding| (binding.group, binding.binding))
         .collect::<Vec<_>>();
     bindings.sort_unstable();
-    assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]);
+    assert_eq!(bindings, [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5)]);
 }
 
 #[test]
@@ -166,6 +205,22 @@ fn trace_dispatch_writes_every_pixel_across_workgroup_boundaries() {
             &f16_one_bits().to_le_bytes(),
             "pixel {index} was not written"
         );
+    }
+}
+
+#[test]
+fn progressive_dispatch_matches_single_dispatch_across_batch_boundaries() {
+    let observation = default_observation(17, 9);
+    let single = capture_trace(&observation);
+    let progressive = capture_trace_in_batches(&observation, 64);
+
+    assert_eq!(single.records.len(), progressive.records.len());
+    for (pixel, (single, progressive)) in
+        single.records.iter().zip(&progressive.records).enumerate()
+    {
+        assert_same_bits(single.direction_time, progressive.direction_time);
+        assert_same_bits(single.invariant_drift, progressive.invariant_drift);
+        assert_eq!(single.metadata, progressive.metadata, "pixel {pixel}");
     }
 }
 
@@ -308,6 +363,22 @@ fn default_observation(width: u32, height: u32) -> Observation {
     observation_at_scale(width, height, 1.0)
 }
 
+fn observation_at_coordinate_time(width: u32, height: u32, coordinate_time_m: f64) -> Observation {
+    let mass = 1.0;
+    let spin = 0.8;
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
+    let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
+    observation_with_time(
+        mass,
+        spin,
+        0.0,
+        observer_xyz,
+        1.0,
+        coordinate_time_m,
+        [width, height],
+    )
+}
+
 fn observation_at_scale(width: u32, height: u32, mass: f64) -> Observation {
     let spin = 0.8 * mass;
     let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
@@ -324,17 +395,42 @@ fn observation_with(
     width: u32,
     height: u32,
 ) -> Observation {
+    observation_with_time(
+        mass,
+        spin,
+        charge,
+        observer_xyz,
+        observer_frequency,
+        0.0,
+        [width, height],
+    )
+}
+
+fn observation_with_time(
+    mass: f64,
+    spin: f64,
+    charge: f64,
+    observer_xyz: [f64; 3],
+    observer_frequency: f64,
+    coordinate_time_m: f64,
+    extent: [u32; 2],
+) -> Observation {
     let observer = StationaryObserverDraft::new(
-        [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
-        [0.0; 4],
+        [
+            coordinate_time_m,
+            observer_xyz[0],
+            observer_xyz[1],
+            observer_xyz[2],
+        ],
+        [coordinate_time_m, 0.0, 0.0, 0.0],
         [0.0, 0.0, 1.0],
         observer_frequency,
     );
     let scene = PhysicalScene::commit(PhysicalSceneDraft::new(mass, spin, charge, observer))
         .expect("fixture scene is valid");
     let projection = ViewportProjection::perspective(
-        NonZeroU32::new(width).expect("test width is nonzero"),
-        NonZeroU32::new(height).expect("test height is nonzero"),
+        NonZeroU32::new(extent[0]).expect("test width is nonzero"),
+        NonZeroU32::new(extent[1]).expect("test height is nonzero"),
         Angle::from_radians(std::f64::consts::FRAC_PI_4).expect("fixture FOV is finite"),
     )
     .expect("fixture projection is valid");

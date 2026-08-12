@@ -9,6 +9,7 @@ Gravlume 面向原生桌面：最新 macOS 使用 Metal，Windows 与 Linux 使�
 | 职责 | 版本组 | 使用边界 |
 |---|---|---|
 | desktop GPU/UI | [`wgpu 30.0.0`](https://docs.rs/wgpu/30.0.0/wgpu/)、[`winit 0.30.13`](https://docs.rs/winit/0.30.13/winit/)、`egui` / `egui-winit` / [`egui-wgpu 0.36.1`](https://docs.rs/crate/egui-wgpu/0.36.1/source/Cargo.toml) | 同组升级；egui-wgpu 的 manifest 已对齐 wgpu 30 与 winit 0.30.13 |
+| native display state | `objc2` / `objc2-app-kit 0.3.2`；Microsoft `windows 0.62.2`；`wayland-client 0.31.15` / `wayland-protocols 0.32.13` | 私有 safe boundary；AppKit EDR、inbox WinRT `DisplayInformation` + HWND interop，或 Wayland surface color feedback |
 | math/ABI | [`glam 0.33.3`](https://docs.rs/glam/0.33.3/glam/)、[`encase 0.12.0`](https://docs.rs/encase/0.12.0/encase/) | glam 只作实现数学；领域类型和 WGSL DTO 独立 |
 | shader tool | [`naga 30.0.0`](https://docs.rs/naga/30.0.0/naga/)、[`wesl 0.4.2`](https://docs.rs/wesl/0.4.2/wesl/) | 只在 build/tool/test graph；runtime 加载已验证 WGSL |
 | runtime support | `thiserror 2.0.20`、`tracing 0.1.44`、[`tracing-subscriber 0.3.23`](https://docs.rs/tracing-subscriber/0.3.23/tracing_subscriber/)、`pollster 1.0.1`、`serde 1.0.229`、`toml 1.1.4`、`image 0.25.10`、`rayon 1.12.0` | 按真实调用者加入；image 只启用资产格式，Rayon 使用有界专用 pool |
@@ -27,9 +28,23 @@ desktop executable 安装唯一 `tracing-subscriber`，首版只需 `fmt` 与 `e
 |---|---|---|
 | 最新稳定 macOS | Metal | native surface、headless compute、shader 与生命周期测试通过 |
 | Windows desktop | Vulkan | 具名系统、adapter、driver 通过同一测试集 |
-| Linux desktop | Vulkan | 具名发行版、adapter、driver 通过同一测试集 |
+| Linux desktop | Vulkan + Wayland | 具名发行版、compositor、adapter、driver 通过同一测试集；不编译或回退到 X11 |
 
 D3D12、GLES、Web/WebGL 不在首版兼容声明内。release build 只创建目标后端的 instance，不用 `Backends::PRIMARY` 或 `all()` 扩大测试责任。
+
+### 3.1 HDR/SDR 输出状态
+
+renderer 只消费平台层给出的 typed display snapshot，并与 `SurfaceCapabilities::format_capabilities` 中的精确 pair 求交集。HDR transport 当前唯一候选是 `Rgba16Float + ExtendedSrgbLinear`；缺 pair、系统 suppression、显示器明确 SDR、状态查询失败或平台 integration 未验证都产生带原因的 SDR，而不是 fatal error 或随意 fallback。final pass 负责 tone mapping、reference-white scaling 与线性 UI composite；surface 格式本身不等于端到端 HDR。
+
+- macOS：`NSWindowDidChangeScreenNotification`、screen-parameter 与 begin/end HDR suppression notifications 只发送脏事件；主线程重新读取承载 `NSScreen` 的 current/potential EDR 和 suppression。potential 允许先 arm extended-linear transport，current 决定实时 tone-map headroom。
+- Windows 11 build 22621+：创建/缓存 `IDisplayInformationStaticsInterop::GetForWindow` 返回的 inbox `Windows.Graphics.Display.DisplayInformation`，订阅 `AdvancedColorInfoChanged`，以 `CurrentAdvancedColorKind` 决定 active HDR，以 `MaxLuminanceInNits / SdrWhiteLevelInNits` 和 `SdrWhiteLevelInNits / 80` 构造输出合同。应用层不调用 `Surface::display_hdr_info`，因 wgpu 的 Windows implementation 会进入 DXGI；WinRT 桥只需要正式的 HWND interop，不引入 Windows App SDK/runtime。
+- Wayland：X11 已从 feature closure 移除。平台层从 winit 的 raw display/surface handle 创建不拥有连接的 guest backend，绑定 `wp_color_manager_v1` v2–v3，并读取整个 surface 的 preferred parametric description；这由 compositor 统一处理跨 output 窗口。`ready2 -> get_information -> done` 完成后才事务式安装状态，以 primary maximum/reference luminance 得到 headroom，并以 reference/80 得到 scRGB white scale。协议缺失、过旧、无 parametric description、字段不完整或 dispatch 失败均保留 typed 原因并走 SDR。
+
+  winit 仍负责唯一的 socket read；应用只在 `about_to_wait` 调 guest `EventQueue::dispatch_pending`，不另起线程竞争连接。winit 0.30.13 在无限 `Wait` 下会丢弃“只进入 guest queue”的 readable-fd wake，因此 Linux 使用一个 24 小时外的 `WaitUntil` guard：fd readiness 仍立即进入 callback，而 deadline 本身不是轮询周期。应用只创建 read-only surface feedback；Vulkan WSI 继续独占 `wp_color_management_surface_v1`，实际 encoding 只由精确 `Rgba16Float + ExtendedSrgbLinear` pair 配置。[Wayland color-management-v1](https://wayland.app/protocols/color-management-v1) [`wayland-client::EventQueue`](https://docs.rs/wayland-client/0.31.15/wayland_client/struct.EventQueue.html) [Vulkan Wayland WSI](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html#platformCreateSurface_wayland)
+
+原生 observer token 在 window 前释放。Windows 当前线程若没有 `Windows.System.DispatcherQueue`，用 inbox `CreateDispatcherQueueController(DQTYPE_THREAD_CURRENT)` 创建；正常退出先注销 event、启动并持有 `ShutdownQueueAsync` action，继续由 winit Win32 message loop 泵消息，完成回调唤醒主循环后才真正退出。[Microsoft `GetForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.display.interop/nf-windows-graphics-display-interop-idisplayinformationstaticsinterop-getforwindow) [Microsoft dispatcher queue lifetime](https://learn.microsoft.com/en-us/windows/win32/api/dispatcherqueue/nf-dispatcherqueue-createdispatcherqueuecontroller) [wgpu HDR guide](https://docs.rs/wgpu/30.0.0/wgpu/#surface-color-spaces-and-hdr-output)
+
+本次实现与 Metal native smoke 在 macOS 完成；Linux/Windows code path 只完成 target compile、Clippy、协议/API source review，不能替代对应平台的 HDR toggle、跨屏、hotplug 与 compositor/driver 实机矩阵。
 
 候选 adapter 必须：
 
