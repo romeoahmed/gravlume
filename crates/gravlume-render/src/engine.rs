@@ -4,23 +4,32 @@ use gravlume_domain::Observation;
 
 use crate::{
     capabilities::{
-        BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, required_device_limits,
-        select_surface,
+        BASELINE_FEATURES, DisplayState, OutputMode, SurfaceSelection, check_baseline_adapter,
+        required_device_limits, select_surface,
     },
-    display::{COMPOSITE_FORMAT, DisplayPipeline, DisplayTarget},
+    display::{CandidatePublication, DisplayPipeline, DisplayTarget, PublishedScene, UI_FORMAT},
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     gpu_error::{
         DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
         install_device_callbacks, scoped_gpu_operation,
     },
     timing::{GpuTimings, TimingSample},
-    trace::{TraceCompute, TraceTarget, trace_record_plane_size},
+    trace::{
+        TRACE_WORKGROUP_HEIGHT, TRACE_WORKGROUP_WIDTH, TraceCompute, TracePixels, TraceTarget,
+        trace_record_plane_size,
+    },
 };
 
 const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 2_560 * 1_440;
-const FRAME_RESOURCE_BYTES_PER_PIXEL: u64 = 3 * 16 + 8 + 4;
+const FRAME_RESOURCE_BYTES_PER_PIXEL: u64 = 3 * 16 + 8 + 8 + 4;
 const MAXIMUM_FRAME_RESOURCE_BYTES: u64 =
     MAXIMUM_NATIVE_TRACE_PIXELS * FRAME_RESOURCE_BYTES_PER_PIXEL;
+const INITIAL_TRACE_PIXELS_PER_BATCH: u32 = 2_048;
+const TARGET_TRACE_BATCH_MS: f64 = 32.0;
+const MAXIMUM_TRACE_BATCH_MS: f64 = 50.0;
+const MAXIMUM_BATCH_SCALE: f64 = 1.5;
+const MINIMUM_BATCH_SCALE: f64 = 0.5;
+const TRACE_WORKGROUP_PIXELS: u32 = TRACE_WORKGROUP_WIDTH * TRACE_WORKGROUP_HEIGHT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameSkip {
@@ -61,6 +70,16 @@ pub struct RenderDiagnostics<'a> {
     display_transfer: &'static str,
     extent_generation: u64,
     timing: Option<TimingSample>,
+    trace_progress: Option<TraceProgressDiagnostics>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TraceProgressDiagnostics {
+    completed_pixels: u32,
+    total_pixels: u32,
+    completed_batches: u32,
+    total_compute_ms: f64,
+    maximum_batch_ms: f64,
 }
 
 impl RenderDiagnostics<'_> {
@@ -106,11 +125,58 @@ impl RenderDiagnostics<'_> {
     pub fn display_ms(&self) -> Option<f64> {
         self.timing.map(TimingSample::display_ms)
     }
+
+    #[must_use]
+    pub fn trace_completion(&self) -> Option<f64> {
+        self.trace_progress
+            .map(|progress| f64::from(progress.completed_pixels) / f64::from(progress.total_pixels))
+    }
+
+    #[must_use]
+    pub fn completed_trace_batches(&self) -> Option<u32> {
+        self.trace_progress
+            .map(|progress| progress.completed_batches)
+    }
+
+    #[must_use]
+    pub fn total_trace_compute_ms(&self) -> Option<f64> {
+        self.trace_progress
+            .map(|progress| progress.total_compute_ms)
+    }
+
+    #[must_use]
+    pub fn maximum_trace_batch_ms(&self) -> Option<f64> {
+        self.trace_progress
+            .map(|progress| progress.maximum_batch_ms)
+    }
 }
 
 struct FrameResources {
-    trace: TraceTarget,
+    candidate: Option<TraceCandidate>,
+    published: PublishedScene,
     display: DisplayTarget,
+    presentation_extent: RenderExtent,
+    next_tier: u8,
+    completed_batches: u32,
+    total_compute_ms: f64,
+    maximum_batch_ms: f64,
+}
+
+struct TraceCandidate {
+    trace: TraceTarget,
+    publication: CandidatePublication,
+    progress: TraceProgress,
+}
+
+#[derive(Debug)]
+struct TraceProgress {
+    total_pixels: u32,
+    next_pixel: u32,
+    pixels_per_batch: u32,
+    in_flight: Option<TracePixels>,
+    completed_batches: u32,
+    total_compute_ms: f64,
+    maximum_batch_ms: f64,
 }
 
 enum PreparedSurfaceFrame {
@@ -126,16 +192,218 @@ struct SurfaceUpdate {
     presentation_pipeline: Option<wgpu::RenderPipeline>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TraceSubmission {
+    extent_generation: u64,
+}
+
 impl FrameResources {
     fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         trace: &TraceCompute,
         display: &DisplayPipeline,
         extent: RenderExtent,
     ) -> Self {
+        let display_target = DisplayPipeline::create_target(device, extent);
+        let published = display.create_published_scene(device, queue, &display_target, extent);
+        let candidate = Self::create_candidate(device, trace, display, extent, 0);
+        Self {
+            candidate: Some(candidate),
+            published,
+            display: display_target,
+            presentation_extent: extent,
+            next_tier: 1,
+            completed_batches: 0,
+            total_compute_ms: 0.0,
+            maximum_batch_ms: 0.0,
+        }
+    }
+
+    fn create_candidate(
+        device: &wgpu::Device,
+        trace: &TraceCompute,
+        display: &DisplayPipeline,
+        presentation_extent: RenderExtent,
+        tier: u8,
+    ) -> TraceCandidate {
+        let extent = trace_extent(presentation_extent, tier);
         let trace = trace.create_target(device, extent);
-        let display = display.create_target(device, trace.view(), extent);
-        Self { trace, display }
+        let publication = display.bind_candidate(device, trace.view());
+        TraceCandidate {
+            trace,
+            publication,
+            progress: TraceProgress::new(extent),
+        }
+    }
+
+    fn next_batch(&self) -> Option<TracePixels> {
+        self.candidate.as_ref()?.progress.next_batch()
+    }
+
+    fn submitted(&mut self, batch: TracePixels) {
+        if let Some(candidate) = self.candidate.as_mut() {
+            candidate.progress.submitted(batch);
+        }
+    }
+
+    fn publishes(&self, batch: TracePixels) -> bool {
+        self.candidate
+            .as_ref()
+            .is_some_and(|candidate| batch.start() + batch.len() == candidate.progress.total_pixels)
+    }
+
+    fn completed(&mut self, compute_ms: f64) -> bool {
+        let candidate_complete = self.candidate.as_mut().is_some_and(|candidate| {
+            candidate.progress.completed(compute_ms);
+            candidate.progress.is_complete()
+        });
+        self.completed_batches += 1;
+        if compute_ms.is_finite() {
+            self.total_compute_ms += compute_ms;
+            self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
+        }
+        candidate_complete
+    }
+
+    fn advance_after_completion(
+        &mut self,
+        device: &wgpu::Device,
+        trace: &TraceCompute,
+        display: &DisplayPipeline,
+    ) {
+        // Timestamp readback proves the publication submission is complete. Drop the old record
+        // planes before allocating the next tier so the allocator may reuse their storage.
+        self.candidate = None;
+        if self.next_tier < TRACE_TIER_COUNT {
+            self.candidate = Some(Self::create_candidate(
+                device,
+                trace,
+                display,
+                self.presentation_extent,
+                self.next_tier,
+            ));
+            self.next_tier += 1;
+        }
+    }
+
+    fn diagnostics(&self) -> TraceProgressDiagnostics {
+        let (completed_pixels, total_pixels) = self.candidate.as_ref().map_or_else(
+            || {
+                let pixels = self.presentation_extent.width() * self.presentation_extent.height();
+                (pixels, pixels)
+            },
+            |candidate| {
+                let diagnostics = candidate.progress.diagnostics();
+                (diagnostics.completed_pixels, diagnostics.total_pixels)
+            },
+        );
+        TraceProgressDiagnostics {
+            completed_pixels,
+            total_pixels,
+            completed_batches: self.completed_batches,
+            total_compute_ms: self.total_compute_ms,
+            maximum_batch_ms: self.maximum_batch_ms,
+        }
+    }
+}
+
+const TRACE_TIER_COUNT: u8 = 3;
+
+fn trace_extent(presentation: RenderExtent, tier: u8) -> RenderExtent {
+    let divisor = match tier {
+        0 => 4,
+        1 => 2,
+        _ => 1,
+    };
+    RenderExtent::new(
+        presentation.width().div_ceil(divisor),
+        presentation.height().div_ceil(divisor),
+    )
+    .unwrap_or(presentation)
+}
+
+impl TraceProgress {
+    const fn new(extent: RenderExtent) -> Self {
+        Self {
+            total_pixels: extent.width() * extent.height(),
+            next_pixel: 0,
+            pixels_per_batch: INITIAL_TRACE_PIXELS_PER_BATCH,
+            in_flight: None,
+            completed_batches: 0,
+            total_compute_ms: 0.0,
+            maximum_batch_ms: 0.0,
+        }
+    }
+
+    fn next_batch(&self) -> Option<TracePixels> {
+        if self.in_flight.is_some() || self.next_pixel == self.total_pixels {
+            return None;
+        }
+        Some(TracePixels::new(
+            self.next_pixel,
+            self.next_pixel
+                .saturating_add(self.pixels_per_batch)
+                .min(self.total_pixels),
+        ))
+    }
+
+    fn submitted(&mut self, batch: TracePixels) {
+        debug_assert_eq!(batch.start(), self.next_pixel);
+        debug_assert!(self.in_flight.is_none());
+        self.next_pixel += batch.len();
+        self.in_flight = Some(batch);
+    }
+
+    fn completed(&mut self, compute_ms: f64) {
+        let Some(batch) = self.in_flight.take() else {
+            return;
+        };
+        self.completed_batches += 1;
+        if compute_ms.is_finite() {
+            self.total_compute_ms += compute_ms;
+            self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
+        }
+        if self.next_pixel == self.total_pixels || !compute_ms.is_finite() || compute_ms <= 0.0 {
+            return;
+        }
+
+        let scale = if compute_ms > MAXIMUM_TRACE_BATCH_MS {
+            MINIMUM_BATCH_SCALE
+        } else {
+            (TARGET_TRACE_BATCH_MS / compute_ms).clamp(MINIMUM_BATCH_SCALE, MAXIMUM_BATCH_SCALE)
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the value is clamped to the finite u32 viewport pixel range below"
+        )]
+        #[expect(
+            clippy::cast_sign_loss,
+            reason = "positive timing and batch sizes make the scaled value non-negative"
+        )]
+        let scaled = (f64::from(batch.len()) * scale).round().clamp(
+            f64::from(TRACE_WORKGROUP_PIXELS),
+            f64::from(self.total_pixels),
+        ) as u32;
+        self.pixels_per_batch = scaled.div_ceil(TRACE_WORKGROUP_PIXELS) * TRACE_WORKGROUP_PIXELS;
+    }
+
+    const fn is_complete(&self) -> bool {
+        self.next_pixel == self.total_pixels && self.in_flight.is_none()
+    }
+
+    const fn diagnostics(&self) -> TraceProgressDiagnostics {
+        let completed_pixels = match self.in_flight {
+            Some(batch) => batch.start(),
+            None => self.next_pixel,
+        };
+        TraceProgressDiagnostics {
+            completed_pixels,
+            total_pixels: self.total_pixels,
+            completed_batches: self.completed_batches,
+            total_compute_ms: self.total_compute_ms,
+            maximum_batch_ms: self.maximum_batch_ms,
+        }
     }
 }
 
@@ -170,10 +438,10 @@ impl DiagnosticLabels {
 }
 
 fn display_transfer_label(selection: SurfaceSelection) -> &'static str {
-    if selection.requires_manual_srgb_encoding() {
-        "gamma composite passthrough"
-    } else {
-        "surface sRGB re-encoding"
+    match selection.output_mode() {
+        OutputMode::Hdr => "extended-linear sRGB HDR",
+        OutputMode::Sdr(_) if selection.requires_manual_srgb_encoding() => "shader sRGB SDR",
+        OutputMode::Sdr(_) => "hardware sRGB SDR",
     }
 }
 
@@ -186,12 +454,14 @@ pub struct GpuEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
     selection: SurfaceSelection,
+    display_state: DisplayState,
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
     trace: TraceCompute,
     display: DisplayPipeline,
     egui_renderer: egui_wgpu::Renderer,
     timings: GpuTimings,
+    trace_submission: Option<TraceSubmission>,
     diagnostic_labels: DiagnosticLabels,
     device_event_sender: mpsc::Sender<DeviceEvent>,
     device_events: mpsc::Receiver<DeviceEvent>,
@@ -207,6 +477,7 @@ impl GpuEngine {
     pub async fn new(
         window: Arc<winit::window::Window>,
         observation: &Observation,
+        display_state: DisplayState,
     ) -> Result<Self, RenderInitError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = crate::native_backends();
@@ -232,7 +503,7 @@ impl GpuEngine {
             adapter: adapter_info.name.clone(),
             reason: reason.to_string(),
         })?;
-        let selection = select_surface(&surface.get_capabilities(&adapter))?;
+        let selection = select_surface(&surface.get_capabilities(&adapter), display_state)?;
         let diagnostic_labels = DiagnosticLabels::new(&adapter_info, selection);
         let required_limits = required_device_limits(adapter.limits());
         let (device, queue) = adapter
@@ -247,12 +518,9 @@ impl GpuEngine {
         let (device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = TraceCompute::new(&device, observation)?;
-        let display = DisplayPipeline::new(&device, selection.format());
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &device,
-            COMPOSITE_FORMAT,
-            egui_wgpu::RendererOptions::default(),
-        );
+        let display = DisplayPipeline::new(&device, selection);
+        let egui_renderer =
+            egui_wgpu::Renderer::new(&device, UI_FORMAT, egui_wgpu::RendererOptions::default());
         let timings = GpuTimings::new(&device);
         let initial_size = window.inner_size();
         let mut engine = Self {
@@ -264,12 +532,14 @@ impl GpuEngine {
             device,
             queue,
             selection,
+            display_state,
             extent: ExtentTracker::default(),
             frame_resources: None,
             trace,
             display,
             egui_renderer,
             timings,
+            trace_submission: None,
             diagnostic_labels,
             device_event_sender,
             device_events,
@@ -304,19 +574,25 @@ impl GpuEngine {
                 validate_render_extent(extent, &self.device.limits())?;
                 let selection = if let Some(surface) = &self.surface {
                     let capabilities = surface.get_capabilities(&self.adapter);
-                    select_surface(&capabilities)?
+                    select_surface(&capabilities, self.display_state)?
                 } else {
                     self.selection
                 };
 
-                let format_changed = selection.format() != self.selection.format();
+                let pipeline_changed = selection.format() != self.selection.format()
+                    || selection.fragment_entry() != self.selection.fragment_entry();
                 let (replacement, presentation_pipeline) =
                     scoped_gpu_operation(&self.device, || {
-                        let replacement =
-                            FrameResources::new(&self.device, &self.trace, &self.display, extent);
-                        let presentation_pipeline = format_changed.then(|| {
+                        let replacement = FrameResources::new(
+                            &self.device,
+                            &self.queue,
+                            &self.trace,
+                            &self.display,
+                            extent,
+                        );
+                        let presentation_pipeline = pipeline_changed.then(|| {
                             self.display
-                                .create_presentation_pipeline(&self.device, selection.format())
+                                .create_presentation_pipeline(&self.device, selection)
                         });
                         (replacement, presentation_pipeline)
                     })
@@ -394,41 +670,57 @@ impl GpuEngine {
             paint_jobs,
             &screen,
         );
-        let capture_timing = self.timings.capture_available();
         let frame = self
             .frame_resources
             .as_mut()
             .ok_or(RenderRuntimeError::MissingFrameResources)?;
-        debug_assert_eq!(frame.trace.extent(), extent);
-        let compute_writes = capture_timing.then(|| self.timings.compute_writes());
-        self.trace
-            .encode(&mut encoder, &frame.trace, compute_writes);
-        let display_begin_writes = capture_timing.then(|| self.timings.display_begin_writes());
-        self.display
-            .encode_display(&mut encoder, &frame.display, display_begin_writes);
+        let trace_batch = self
+            .timings
+            .capture_available()
+            .then(|| frame.next_batch())
+            .flatten();
+        if let Some(batch) = trace_batch
+            && let Some(candidate) = frame.candidate.as_ref()
+        {
+            self.trace.encode(
+                &self.queue,
+                &mut encoder,
+                &candidate.trace,
+                batch,
+                Some(self.timings.compute_writes()),
+            );
+        }
+        let publishes_candidate = trace_batch.is_some_and(|batch| frame.publishes(batch));
+        if publishes_candidate && let Some(candidate) = frame.candidate.as_ref() {
+            self.display
+                .encode_publication(&mut encoder, &frame.published, &candidate.publication);
+        }
         encode_egui(
             &self.egui_renderer,
             &mut encoder,
-            frame.display.view(),
+            frame.display.ui_view(),
             paint_jobs,
             &screen,
         );
-        let display_end_writes = capture_timing.then(|| self.timings.display_end_writes());
         self.display.encode_presentation(
             &mut encoder,
             &surface_view,
-            &frame.display,
-            display_end_writes,
+            &frame.published,
+            trace_batch.map(|_| self.timings.display_writes()),
         );
-        if capture_timing {
+        if trace_batch.is_some() {
             self.timings.encode_resolve(&mut encoder);
         }
         let main_buffer = encoder.finish();
         self.queue
             .submit(callback_buffers.into_iter().chain([main_buffer]));
         free_egui_textures_after_submit(&mut self.egui_renderer, textures_delta);
-        if capture_timing {
+        if let Some(batch) = trace_batch {
+            frame.submitted(batch);
             self.timings.begin_readback();
+            self.trace_submission = Some(TraceSubmission {
+                extent_generation: self.extent.generation(),
+            });
         }
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
@@ -445,23 +737,47 @@ impl GpuEngine {
     ///
     /// Returns an error when device polling or timestamp readback fails.
     pub fn poll(&mut self) -> Result<PollOutcome, RenderRuntimeError> {
-        let completed_readback = if self.timings.has_pending_readback() {
+        let timing = if self.timings.has_pending_readback() {
             self.timings
                 .poll(&self.device, self.queue.get_timestamp_period())?
-                .is_some()
         } else {
             self.device.poll(wgpu::PollType::Poll)?;
-            false
+            None
         };
+        if let Some(timing) = timing {
+            let submission = self.trace_submission.take();
+            if submission
+                .is_some_and(|submission| submission.extent_generation == self.extent.generation())
+                && let Some(frame) = self.frame_resources.as_mut()
+                && frame.completed(timing.compute_ms())
+            {
+                frame.advance_after_completion(&self.device, &self.trace, &self.display);
+            }
+        }
         let events = self.device_events.try_iter().collect();
         Ok(PollOutcome {
-            completed_readback,
+            completed_readback: timing.is_some(),
             events,
         })
     }
 
     pub const fn has_pending_gpu_work(&self) -> bool {
         self.timings.has_pending_readback()
+    }
+
+    pub fn trace_is_complete(&self) -> bool {
+        self.frame_resources
+            .as_ref()
+            .is_none_or(|frame| frame.candidate.is_none())
+    }
+
+    pub fn trace_needs_redraw(&self) -> bool {
+        !self.surface_suspended
+            && self.timings.capture_available()
+            && self
+                .frame_resources
+                .as_ref()
+                .is_some_and(|frame| frame.next_batch().is_some())
     }
 
     pub fn suspend(&mut self) {
@@ -492,7 +808,28 @@ impl GpuEngine {
             display_transfer: self.diagnostic_labels.display_transfer,
             extent_generation: self.extent.generation(),
             timing: self.timings.latest(),
+            trace_progress: self
+                .frame_resources
+                .as_ref()
+                .map(FrameResources::diagnostics),
         }
+    }
+
+    /// Re-resolves the output transport without invalidating the published trace scene.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the live surface no longer has a presentable SDR fallback.
+    pub fn refresh_output(
+        &mut self,
+        display_state: DisplayState,
+    ) -> Result<(), RenderRuntimeError> {
+        self.display_state = display_state;
+        let Some(extent) = self.extent.extent() else {
+            return Ok(());
+        };
+        let _ = self.reconfigure_surface(extent)?;
+        Ok(())
     }
 
     fn prepare_surface_frame(
@@ -555,8 +892,9 @@ impl GpuEngine {
         let Some(update) = self.prepare_runtime_surface_update(&capabilities)? else {
             return Ok(false);
         };
-        if let Err(error) =
-            configure_surface_scoped(surface, &self.device, update.selection, extent)
+        if surface_configuration_changed(self.selection, update.selection)
+            && let Err(error) =
+                configure_surface_scoped(surface, &self.device, update.selection, extent)
         {
             self.enqueue_device_event(DeviceEvent::from_wgpu(
                 "failed to configure the presentation surface",
@@ -592,7 +930,7 @@ impl GpuEngine {
         &self,
         capabilities: &wgpu::SurfaceCapabilities,
     ) -> Result<Option<SurfaceUpdate>, RenderRuntimeError> {
-        let selection = select_surface(capabilities)?;
+        let selection = select_surface(capabilities, self.display_state)?;
         match self.create_presentation_pipeline_if_needed(selection) {
             Ok(presentation_pipeline) => Ok(Some(SurfaceUpdate {
                 selection,
@@ -612,12 +950,14 @@ impl GpuEngine {
         &self,
         selection: SurfaceSelection,
     ) -> Result<Option<wgpu::RenderPipeline>, wgpu::Error> {
-        if selection.format() == self.selection.format() {
+        if selection.format() == self.selection.format()
+            && selection.fragment_entry() == self.selection.fragment_entry()
+        {
             return Ok(None);
         }
         scoped_gpu_operation(&self.device, || {
             self.display
-                .create_presentation_pipeline(&self.device, selection.format())
+                .create_presentation_pipeline(&self.device, selection)
         })
         .map(Some)
     }
@@ -627,9 +967,8 @@ impl GpuEngine {
         selection: SurfaceSelection,
         presentation_pipeline: Option<wgpu::RenderPipeline>,
     ) {
-        if let Some(pipeline) = presentation_pipeline {
-            self.display.install_presentation_pipeline(pipeline);
-        }
+        self.display
+            .install_output(&self.queue, selection, presentation_pipeline);
         self.selection = selection;
         self.diagnostic_labels.update_surface(selection);
     }
@@ -676,6 +1015,13 @@ fn validate_render_extent(extent: RenderExtent, limits: &wgpu::Limits) -> Result
     Ok(())
 }
 
+fn surface_configuration_changed(current: SurfaceSelection, next: SurfaceSelection) -> bool {
+    current.format() != next.format()
+        || current.color_space() != next.color_space()
+        || current.present_mode() != next.present_mode()
+        || current.alpha_mode() != next.alpha_mode()
+}
+
 fn configure_surface_scoped(
     surface: &wgpu::Surface<'_>,
     device: &wgpu::Device,
@@ -712,7 +1058,7 @@ fn encode_egui(
         depth_slice: None,
         resolve_target: None,
         ops: wgpu::Operations {
-            load: wgpu::LoadOp::Load,
+            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             store: wgpu::StoreOp::Store,
         },
     });
@@ -741,8 +1087,36 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAXIMUM_FRAME_RESOURCE_BYTES, ResizeError, validate_render_extent};
+    use super::{
+        INITIAL_TRACE_PIXELS_PER_BATCH, MAXIMUM_FRAME_RESOURCE_BYTES, ResizeError, TraceProgress,
+        validate_render_extent,
+    };
     use crate::extent::RenderExtent;
+
+    #[test]
+    fn trace_progress_covers_a_generation_once_with_bounded_batches() {
+        let extent =
+            RenderExtent::new(INITIAL_TRACE_PIXELS_PER_BATCH + 13, 2).expect("extent is nonzero");
+        let mut progress = TraceProgress::new(extent);
+        let mut covered = 0;
+
+        while let Some(batch) = progress.next_batch() {
+            assert_eq!(batch.start(), covered);
+            assert!(batch.len() <= progress.pixels_per_batch);
+            progress.submitted(batch);
+            assert!(progress.next_batch().is_none(), "one batch stays in flight");
+            covered += batch.len();
+            progress.completed(super::TARGET_TRACE_BATCH_MS);
+        }
+
+        assert_eq!(covered, extent.width() * extent.height());
+        assert_eq!(progress.next_pixel, progress.total_pixels);
+        assert!(progress.in_flight.is_none());
+        assert!(
+            progress.next_batch().is_none(),
+            "complete traces are reused"
+        );
+    }
 
     #[test]
     fn resize_accepts_the_native_trace_budget_boundary() {

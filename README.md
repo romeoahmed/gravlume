@@ -12,7 +12,8 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 
 - Rust 2024 Cargo workspace 与锁定依赖；
 - winit 原生生命周期和 egui overlay；
-- wgpu compute 写入 scene-linear `rgba16float`，再经 SDR display pass 输出；
+- wgpu compute 写入 scene-linear `rgba16float`；完整候选帧原子发布，并经 typed HDR/scRGB 或 SDR display contract 输出；
+- AppKit EDR、Windows inbox WinRT 与 Wayland `color-management-v1` display-state 监听；可靠状态或精确 surface pair 缺失时保留原因并降级至 SDR；
 - resize、zero extent、suspend/resume 与 surface recovery；
 - 结构化 GPU 错误、提交后纹理释放和非阻塞 timestamp readback；
 - 覆盖能力选择、资源代际、显示变换和 GPU 合同的测试。
@@ -26,7 +27,7 @@ Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vul
 
 尚未实现：吸积盘与辐射传输、频率比成像、自适应重建和研究工作台。CPU reference 与 GPU interactive path 的当前证据范围分别见 [Reference 实现与证据](docs/reference-implementation.md)和 [Interactive Trace 实现与证据](docs/interactive-trace.md)，不能从当前样本矩阵外推到 near-critical 或未验证平台。
 
-macOS 使用 Metal；Windows 与 Linux 使用 Vulkan。Windows/Linux 发布支持仍需在具名系统、adapter 与 driver 上补齐验证证据。
+macOS 使用 Metal；Windows 与 Linux 使用 Vulkan。Windows/Linux 发布支持仍需在具名系统、adapter、driver 与 Wayland compositor 上补齐实机验证证据。
 
 ## 快速开始
 
@@ -60,7 +61,8 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 | `crates/gravlume-desktop` | winit/egui 生命周期、事件与重绘调度 |
 | `crates/gravlume-domain` | validated scene、observer/frame、viewport ray 与 Kerr–Schild `f64` 领域数学 |
 | `crates/gravlume-reference` | 独立 DP5(4) CPU oracle、dense events、fixture、并行 batch 与 comparison report |
-| `crates/gravlume-render` | wgpu interactive trace、能力协商、frame graph、资源、计时与错误语义 |
+| `crates/gravlume-native-display` | AppKit/WinRT display-state、notification 与平台队列的 safe ownership boundary |
+| `crates/gravlume-render` | wgpu interactive trace、HDR/SDR 能力协商、frame graph、资源、计时与错误语义 |
 | `crates/gravlume-render/src/shaders` | 运行时加载的已审查 WGSL |
 | `tests/fixtures/v1` | reference/interactive comparison 的版本化科学输入 |
 | `docs` | 产品、物理、验证、架构、平台和实施合同 |

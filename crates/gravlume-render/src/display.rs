@@ -1,78 +1,103 @@
-use crate::extent::RenderExtent;
+use wgpu::util::DeviceExt as _;
 
-// Keep egui textures independent of surface format by using its preferred gamma-space target.
-// Source: https://docs.rs/egui-wgpu/0.36.1/egui_wgpu/struct.Renderer.html#method.new
-pub const COMPOSITE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+use crate::{capabilities::SurfaceSelection, extent::RenderExtent};
 
-fn presentation_entry(format: wgpu::TextureFormat) -> &'static str {
-    if format.is_srgb() {
-        "present_to_linear_target"
-    } else {
-        "present_to_gamma_target"
-    }
+/// egui-wgpu's non-sRGB target path writes gamma-encoded, premultiplied colors.
+/// Keeping that target separate lets the final pass decode and composite it at SDR reference white.
+/// Source: <https://docs.rs/crate/egui-wgpu/0.36.1/source/src/renderer.rs>
+pub const UI_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+#[repr(C)]
+struct OutputUniforms {
+    mapping: [f32; 4],
 }
 
 pub struct DisplayPipeline {
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
-    composite_pipeline: wgpu::RenderPipeline,
     presentation_pipeline: wgpu::RenderPipeline,
+    publish_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
+    publish_bind_group_layout: wgpu::BindGroupLayout,
+    output_uniforms: wgpu::Buffer,
 }
 
 pub struct DisplayTarget {
-    view: wgpu::TextureView,
-    display_bind_group: wgpu::BindGroup,
-    presentation_bind_group: wgpu::BindGroup,
+    ui_view: wgpu::TextureView,
+}
+
+pub struct PublishedScene {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+}
+
+pub struct CandidatePublication {
+    bind_group: wgpu::BindGroup,
 }
 
 impl DisplayPipeline {
-    pub(crate) fn new(device: &wgpu::Device, surface_format: wgpu::TextureFormat) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, selection: SurfaceSelection) -> Self {
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("display input bind group layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            label: Some("output bind group layout"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(size_of::<OutputUniforms>()),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("display pipeline layout"),
+            label: Some("output pipeline layout"),
             bind_group_layouts: &[Some(&bind_group_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("display and presentation shader"),
+            label: Some("scene and UI output shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/display.wgsl").into()),
         });
-        let composite_pipeline = Self::create_render_pipeline(
+        let output_uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("output mapping uniforms"),
+            contents: bytemuck::bytes_of(&OutputUniforms::from(selection)),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let presentation_pipeline =
+            Self::create_render_pipeline(device, &pipeline_layout, &shader, selection);
+        let publish_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("candidate publication bind group layout"),
+                entries: &[texture_entry(0)],
+            });
+        let publish_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("candidate publication pipeline layout"),
+                bind_group_layouts: &[Some(&publish_bind_group_layout)],
+                immediate_size: 0,
+            });
+        let publish_pipeline = Self::create_pipeline(
             device,
-            &pipeline_layout,
+            &publish_pipeline_layout,
             &shader,
-            "neutral HDR display pipeline",
-            "display_to_gamma_target",
-            COMPOSITE_FORMAT,
-        );
-        let presentation_pipeline = Self::create_render_pipeline(
-            device,
-            &pipeline_layout,
-            &shader,
-            "surface presentation pipeline",
-            presentation_entry(surface_format),
-            surface_format,
+            "publish_complete_candidate",
+            wgpu::TextureFormat::Rgba16Float,
         );
 
         Self {
             shader,
             pipeline_layout,
-            composite_pipeline,
             presentation_pipeline,
+            publish_pipeline,
             bind_group_layout,
+            publish_bind_group_layout,
+            output_uniforms,
         }
     }
 
@@ -80,12 +105,26 @@ impl DisplayPipeline {
         device: &wgpu::Device,
         pipeline_layout: &wgpu::PipelineLayout,
         shader: &wgpu::ShaderModule,
-        label: &'static str,
+        selection: SurfaceSelection,
+    ) -> wgpu::RenderPipeline {
+        Self::create_pipeline(
+            device,
+            pipeline_layout,
+            shader,
+            selection.fragment_entry(),
+            selection.format(),
+        )
+    }
+
+    fn create_pipeline(
+        device: &wgpu::Device,
+        pipeline_layout: &wgpu::PipelineLayout,
+        shader: &wgpu::ShaderModule,
         fragment_entry: &'static str,
         format: wgpu::TextureFormat,
     ) -> wgpu::RenderPipeline {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
+            label: Some("surface output pipeline"),
             layout: Some(pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
@@ -114,77 +153,136 @@ impl DisplayPipeline {
     pub(crate) fn create_presentation_pipeline(
         &self,
         device: &wgpu::Device,
-        surface_format: wgpu::TextureFormat,
+        selection: SurfaceSelection,
     ) -> wgpu::RenderPipeline {
-        Self::create_render_pipeline(
-            device,
-            &self.pipeline_layout,
-            &self.shader,
-            "surface presentation pipeline",
-            presentation_entry(surface_format),
-            surface_format,
-        )
+        Self::create_render_pipeline(device, &self.pipeline_layout, &self.shader, selection)
     }
 
-    pub(crate) fn install_presentation_pipeline(&mut self, pipeline: wgpu::RenderPipeline) {
-        self.presentation_pipeline = pipeline;
-    }
-
-    pub(crate) fn create_target(
-        &self,
-        device: &wgpu::Device,
-        scene_view: &wgpu::TextureView,
-        extent: RenderExtent,
-    ) -> DisplayTarget {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("gamma-space display composite"),
-            size: wgpu::Extent3d {
-                width: extent.width(),
-                height: extent.height(),
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: COMPOSITE_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let display_bind_group = self.bind_input(device, "display scene HDR input", scene_view);
-        let presentation_bind_group =
-            self.bind_input(device, "presentation composite input", &view);
-        DisplayTarget {
-            view,
-            display_bind_group,
-            presentation_bind_group,
+    pub(crate) fn install_output(
+        &mut self,
+        queue: &wgpu::Queue,
+        selection: SurfaceSelection,
+        pipeline: Option<wgpu::RenderPipeline>,
+    ) {
+        queue.write_buffer(
+            &self.output_uniforms,
+            0,
+            bytemuck::bytes_of(&OutputUniforms::from(selection)),
+        );
+        if let Some(pipeline) = pipeline {
+            self.presentation_pipeline = pipeline;
         }
     }
 
-    fn bind_input(
-        &self,
-        device: &wgpu::Device,
-        label: &'static str,
-        view: &wgpu::TextureView,
-    ) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some(label),
-            layout: &self.bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
-            }],
-        })
+    pub(crate) fn create_target(device: &wgpu::Device, extent: RenderExtent) -> DisplayTarget {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("SDR gamma UI overlay"),
+            size: texture_extent(extent),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: UI_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        DisplayTarget {
+            ui_view: texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        }
     }
 
-    pub(crate) fn encode_display(
+    pub(crate) fn create_published_scene(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &DisplayTarget,
+        extent: RenderExtent,
+    ) -> PublishedScene {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("complete published scene HDR"),
+            size: texture_extent(extent),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let scene_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("initialize published scene"),
+        });
+        {
+            let attachment = Some(wgpu::RenderPassColorAttachment {
+                view: &scene_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            });
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("initialize published scene pass"),
+                color_attachments: &[attachment],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        }
+        queue.submit([encoder.finish()]);
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("published scene and UI output bind group"),
+            layout: &self.bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&scene_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&target.ui_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.output_uniforms.as_entire_binding(),
+                },
+            ],
+        });
+        PublishedScene {
+            texture,
+            bind_group,
+        }
+    }
+
+    pub(crate) fn bind_candidate(
+        &self,
+        device: &wgpu::Device,
+        candidate: &wgpu::TextureView,
+    ) -> CandidatePublication {
+        CandidatePublication {
+            bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("complete candidate publication bind group"),
+                layout: &self.publish_bind_group_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(candidate),
+                }],
+            }),
+        }
+    }
+
+    pub(crate) fn encode_publication(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &DisplayTarget,
-        timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
+        published: &PublishedScene,
+        candidate: &CandidatePublication,
     ) {
-        let color_attachment = Some(wgpu::RenderPassColorAttachment {
-            view: &target.view,
+        let view = published
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let attachment = Some(wgpu::RenderPassColorAttachment {
+            view: &view,
             depth_slice: None,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -193,15 +291,15 @@ impl DisplayPipeline {
             },
         });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("neutral HDR display pass"),
-            color_attachments: &[color_attachment],
+            label: Some("publish complete candidate pass"),
+            color_attachments: &[attachment],
             depth_stencil_attachment: None,
-            timestamp_writes,
+            timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.composite_pipeline);
-        pass.set_bind_group(0, &target.display_bind_group, &[]);
+        pass.set_pipeline(&self.publish_pipeline);
+        pass.set_bind_group(0, &candidate.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 
@@ -209,7 +307,7 @@ impl DisplayPipeline {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
-        target: &DisplayTarget,
+        scene: &PublishedScene,
         timestamp_writes: Option<wgpu::RenderPassTimestampWrites<'_>>,
     ) {
         let color_attachment = Some(wgpu::RenderPassColorAttachment {
@@ -222,7 +320,7 @@ impl DisplayPipeline {
             },
         });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("surface presentation pass"),
+            label: Some("surface output pass"),
             color_attachments: &[color_attachment],
             depth_stencil_attachment: None,
             timestamp_writes,
@@ -230,141 +328,51 @@ impl DisplayPipeline {
             multiview_mask: None,
         });
         pass.set_pipeline(&self.presentation_pipeline);
-        pass.set_bind_group(0, &target.presentation_bind_group, &[]);
+        pass.set_bind_group(0, &scene.bind_group, &[]);
         pass.draw(0..3, 0..1);
     }
 }
 
 impl DisplayTarget {
-    pub(crate) const fn view(&self) -> &wgpu::TextureView {
-        &self.view
+    pub(crate) const fn ui_view(&self) -> &wgpu::TextureView {
+        &self.ui_view
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::DisplayPipeline;
-    use crate::extent::RenderExtent;
-
-    const WIDTH: u32 = 3;
-    const PADDED_BYTES_PER_ROW: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-
-    #[test]
-    fn display_transfer_is_equivalent_for_srgb_and_linear_targets() {
-        let hardware_encoded = render_display(wgpu::TextureFormat::Rgba8UnormSrgb);
-        let shader_encoded = render_display(wgpu::TextureFormat::Rgba8Unorm);
-
-        for pixels in [&hardware_encoded, &shader_encoded] {
-            assert_eq!(&pixels[0..4], &[255, 0, 255, 255]);
-            assert_eq!(&pixels[4..8], &[255, 0, 255, 255]);
-            assert!(pixels[8] > pixels[9]);
-            assert!(pixels[9] > pixels[10]);
-            assert_eq!(pixels[11], 255);
+impl From<SurfaceSelection> for OutputUniforms {
+    fn from(selection: SurfaceSelection) -> Self {
+        Self {
+            mapping: [
+                selection.tone_map_headroom(),
+                selection.reference_white_scale(),
+                0.0,
+                0.0,
+            ],
         }
-
-        assert!(
-            hardware_encoded
-                .iter()
-                .zip(&shader_encoded)
-                .all(|(hardware, shader)| hardware.abs_diff(*shader) <= 1),
-            "hardware and shader sRGB encoding diverged: {hardware_encoded:?} != {shader_encoded:?}"
-        );
     }
+}
 
-    fn render_display(format: wgpu::TextureFormat) -> Vec<u8> {
-        let gpu = crate::test_gpu::native_gpu();
-        let scene = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("display diagnostic scene input"),
-            size: wgpu::Extent3d {
-                width: WIDTH,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        let half_words = [
-            0xbc00_u16, 0, 0, 0x3c00, 0x7e00, 0, 0, 0x3c00, 0x4400, 0x3c00, 0, 0x3c00,
-        ];
-        let scene_bytes: Vec<u8> = half_words.into_iter().flat_map(u16::to_le_bytes).collect();
-        gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &scene,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &scene_bytes,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(WIDTH * 8),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: WIDTH,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let output = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("display diagnostic output"),
-            size: wgpu::Extent3d {
-                width: WIDTH,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("display diagnostic readback"),
-            size: u64::from(PADDED_BYTES_PER_ROW),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let scene_view = scene.create_view(&wgpu::TextureViewDescriptor::default());
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
-        let display = DisplayPipeline::new(&gpu.device, format);
-        let extent = RenderExtent::new(WIDTH, 1).expect("display test extent is nonzero");
-        let display_target = display.create_target(&gpu.device, &scene_view, extent);
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("display diagnostic encoder"),
-            });
-        display.encode_display(&mut encoder, &display_target, None);
-        display.encode_presentation(&mut encoder, &output_view, &display_target, None);
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &output,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &readback,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(PADDED_BYTES_PER_ROW),
-                    rows_per_image: Some(1),
-                },
-            },
-            wgpu::Extent3d {
-                width: WIDTH,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let submission = gpu.queue.submit([encoder.finish()]);
-        let mapped = gpu.read_buffer(&readback, submission);
-        mapped[..WIDTH as usize * 4].to_vec()
+const fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
     }
+}
+
+const fn texture_extent(extent: RenderExtent) -> wgpu::Extent3d {
+    wgpu::Extent3d {
+        width: extent.width(),
+        height: extent.height(),
+        depth_or_array_layers: 1,
+    }
+}
+
+const fn size_of<T>() -> u64 {
+    std::mem::size_of::<T>() as u64
 }

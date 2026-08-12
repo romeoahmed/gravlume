@@ -31,12 +31,77 @@ pub enum CapabilityError {
     MissingRenderAttachment,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SurfaceSelection {
     format: wgpu::TextureFormat,
     color_space: wgpu::SurfaceColorSpace,
     present_mode: wgpu::PresentMode,
     alpha_mode: wgpu::CompositeAlphaMode,
+    output: OutputContract,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OutputContract {
+    mode: OutputMode,
+    tone_map_headroom: f32,
+    reference_white_scale: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputMode {
+    Hdr,
+    Sdr(SdrReason),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdrReason {
+    SystemSuppressed,
+    HdrSurfacePairMissing,
+    DisplayReportedSdr,
+    PlatformIntegrationUnavailable,
+    UnsupportedOsVersion,
+    DisplayStateQueryFailed,
+    WaylandColorManagementUnavailable,
+    WaylandProtocolTooOld,
+    WaylandEncodingUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UnknownDisplayState {
+    PlatformIntegrationUnavailable,
+    UnsupportedOsVersion,
+    StateQueryFailed,
+    WaylandColorManagementUnavailable,
+    WaylandProtocolTooOld,
+    WaylandEncodingUnavailable,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HdrParameters {
+    tone_map_headroom: f32,
+    reference_white_scale: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DisplayState {
+    Hdr(HdrParameters),
+    Sdr,
+    Suppressed,
+    Unknown(UnknownDisplayState),
+}
+
+impl HdrParameters {
+    #[must_use]
+    pub fn new(tone_map_headroom: f32, reference_white_scale: f32) -> Option<Self> {
+        (tone_map_headroom.is_finite()
+            && tone_map_headroom >= 1.0
+            && reference_white_scale.is_finite()
+            && reference_white_scale > 0.0)
+            .then_some(Self {
+                tone_map_headroom,
+                reference_white_scale,
+            })
+    }
 }
 
 impl SurfaceSelection {
@@ -59,6 +124,26 @@ impl SurfaceSelection {
     pub(crate) fn requires_manual_srgb_encoding(self) -> bool {
         !self.format.is_srgb()
     }
+
+    pub(crate) const fn output_mode(self) -> OutputMode {
+        self.output.mode
+    }
+
+    pub(crate) const fn tone_map_headroom(self) -> f32 {
+        self.output.tone_map_headroom
+    }
+
+    pub(crate) const fn reference_white_scale(self) -> f32 {
+        self.output.reference_white_scale
+    }
+
+    pub(crate) fn fragment_entry(self) -> &'static str {
+        match self.output.mode {
+            OutputMode::Hdr => "present_hdr_extended_linear",
+            OutputMode::Sdr(_) if self.format.is_srgb() => "present_sdr_to_linear_target",
+            OutputMode::Sdr(_) => "present_sdr_to_gamma_target",
+        }
+    }
 }
 
 pub fn check_baseline_adapter(
@@ -80,7 +165,8 @@ pub fn check_baseline_adapter(
 
     let required_hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
         | wgpu::TextureUsages::TEXTURE_BINDING
-        | wgpu::TextureUsages::COPY_SRC;
+        | wgpu::TextureUsages::COPY_SRC
+        | wgpu::TextureUsages::RENDER_ATTACHMENT;
     let missing_usages = required_hdr_usages.difference(hdr_allowed_usages);
     if !missing_usages.is_empty() {
         return Err(CapabilityError::MissingHdrTextureUsages(missing_usages));
@@ -90,6 +176,7 @@ pub fn check_baseline_adapter(
 
 pub fn select_surface(
     capabilities: &wgpu::SurfaceCapabilities,
+    display: DisplayState,
 ) -> Result<SurfaceSelection, CapabilityError> {
     if !capabilities
         .usages
@@ -97,6 +184,60 @@ pub fn select_surface(
     {
         return Err(CapabilityError::MissingRenderAttachment);
     }
+
+    let present_mode = capabilities
+        .present_modes
+        .iter()
+        .copied()
+        .find(|mode| *mode == wgpu::PresentMode::Fifo)
+        .or_else(|| capabilities.present_modes.first().copied())
+        .ok_or(CapabilityError::NoPresentMode)?;
+    let alpha_mode = capabilities
+        .alpha_modes
+        .iter()
+        .copied()
+        .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
+        .or_else(|| capabilities.alpha_modes.first().copied())
+        .ok_or(CapabilityError::NoAlphaMode)?;
+
+    let hdr_pair = capabilities.format_capabilities.iter().find(|candidate| {
+        candidate.format == wgpu::TextureFormat::Rgba16Float
+            && candidate
+                .color_spaces
+                .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+    });
+    if let (DisplayState::Hdr(parameters), Some(pair)) = (display, hdr_pair) {
+        return Ok(SurfaceSelection {
+            format: pair.format,
+            color_space: wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            present_mode,
+            alpha_mode,
+            output: OutputContract {
+                mode: OutputMode::Hdr,
+                tone_map_headroom: parameters.tone_map_headroom,
+                reference_white_scale: parameters.reference_white_scale,
+            },
+        });
+    }
+    let sdr_reason = match display {
+        DisplayState::Suppressed => SdrReason::SystemSuppressed,
+        DisplayState::Sdr => SdrReason::DisplayReportedSdr,
+        DisplayState::Hdr(_) => SdrReason::HdrSurfacePairMissing,
+        DisplayState::Unknown(reason) => match reason {
+            UnknownDisplayState::PlatformIntegrationUnavailable => {
+                SdrReason::PlatformIntegrationUnavailable
+            }
+            UnknownDisplayState::UnsupportedOsVersion => SdrReason::UnsupportedOsVersion,
+            UnknownDisplayState::StateQueryFailed => SdrReason::DisplayStateQueryFailed,
+            UnknownDisplayState::WaylandColorManagementUnavailable => {
+                SdrReason::WaylandColorManagementUnavailable
+            }
+            UnknownDisplayState::WaylandProtocolTooOld => SdrReason::WaylandProtocolTooOld,
+            UnknownDisplayState::WaylandEncodingUnavailable => {
+                SdrReason::WaylandEncodingUnavailable
+            }
+        },
+    };
 
     let supports_srgb = |candidate: &&wgpu::SurfaceFormatCapabilities| {
         candidate
@@ -122,34 +263,24 @@ pub fn select_surface(
         })
         .ok_or(CapabilityError::NoSdrSurfacePair)?
         .format;
-    let present_mode = capabilities
-        .present_modes
-        .iter()
-        .copied()
-        .find(|mode| *mode == wgpu::PresentMode::Fifo)
-        .or_else(|| capabilities.present_modes.first().copied())
-        .ok_or(CapabilityError::NoPresentMode)?;
-    let alpha_mode = capabilities
-        .alpha_modes
-        .iter()
-        .copied()
-        .find(|mode| *mode == wgpu::CompositeAlphaMode::Opaque)
-        .or_else(|| capabilities.alpha_modes.first().copied())
-        .ok_or(CapabilityError::NoAlphaMode)?;
-
     Ok(SurfaceSelection {
         format,
         color_space: wgpu::SurfaceColorSpace::Srgb,
         present_mode,
         alpha_mode,
+        output: OutputContract {
+            mode: OutputMode::Sdr(sdr_reason),
+            tone_map_headroom: 1.0,
+            reference_white_scale: 1.0,
+        },
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FEATURES, CapabilityError, check_baseline_adapter, required_device_limits,
-        select_surface,
+        BASELINE_FEATURES, CapabilityError, DisplayState, HdrParameters, OutputMode, SdrReason,
+        UnknownDisplayState, check_baseline_adapter, required_device_limits, select_surface,
     };
 
     #[test]
@@ -198,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_selection_prefers_srgb_format_and_opaque_alpha() {
+    fn output_resolver_selects_hdr_or_preserves_the_sdr_fallback_reason() {
         let caps = capabilities(&[
             (
                 wgpu::TextureFormat::Rgba16Float,
@@ -210,25 +341,48 @@ mod tests {
             ),
         ]);
 
-        let selected = select_surface(&caps).expect("an SDR pair is available");
+        let selected = select_surface(
+            &caps,
+            DisplayState::Hdr(HdrParameters::new(4.0, 2.5).expect("valid HDR parameters")),
+        )
+        .expect("an HDR pair is available");
 
-        assert_eq!(selected.format(), wgpu::TextureFormat::Bgra8UnormSrgb);
-        assert_eq!(selected.color_space(), wgpu::SurfaceColorSpace::Srgb);
+        assert_eq!(selected.format(), wgpu::TextureFormat::Rgba16Float);
+        assert_eq!(
+            selected.color_space(),
+            wgpu::SurfaceColorSpace::ExtendedSrgbLinear
+        );
+        assert_eq!(selected.output_mode(), OutputMode::Hdr);
         assert_eq!(selected.present_mode(), wgpu::PresentMode::Fifo);
         assert_eq!(selected.alpha_mode(), wgpu::CompositeAlphaMode::Opaque);
-    }
+        assert!((selected.tone_map_headroom() - 4.0).abs() <= f32::EPSILON);
+        assert!((selected.reference_white_scale() - 2.5).abs() <= f32::EPSILON);
+        assert!(HdrParameters::new(f32::NAN, 1.0).is_none());
+        assert!(HdrParameters::new(2.0, 0.0).is_none());
+        let fallback =
+            select_surface(&caps, DisplayState::Suppressed).expect("an SDR fallback is available");
+        assert_eq!(fallback.format(), wgpu::TextureFormat::Bgra8UnormSrgb);
+        assert_eq!(
+            fallback.output_mode(),
+            OutputMode::Sdr(SdrReason::SystemSuppressed)
+        );
+        let unknown = select_surface(
+            &caps,
+            DisplayState::Unknown(UnknownDisplayState::StateQueryFailed),
+        )
+        .expect("unknown display state has a color-correct SDR fallback");
+        assert_eq!(
+            unknown.output_mode(),
+            OutputMode::Sdr(SdrReason::DisplayStateQueryFailed)
+        );
 
-    #[test]
-    fn surface_selection_accepts_gamma_space_sdr_when_srgb_format_is_absent() {
-        let caps = capabilities(&[(
+        let manual_caps = capabilities(&[(
             wgpu::TextureFormat::Bgra8Unorm,
             wgpu::SurfaceColorSpaces::SRGB,
         )]);
-
-        let selected = select_surface(&caps).expect("an explicit SDR pair is available");
-
-        assert_eq!(selected.format(), wgpu::TextureFormat::Bgra8Unorm);
-        assert!(selected.requires_manual_srgb_encoding());
+        let manual = select_surface(&manual_caps, DisplayState::Sdr)
+            .expect("a plain eight-bit SDR pair can use shader encoding");
+        assert!(manual.requires_manual_srgb_encoding());
     }
 
     #[test]
@@ -239,7 +393,10 @@ mod tests {
         )]);
 
         assert_eq!(
-            select_surface(&caps),
+            select_surface(
+                &caps,
+                DisplayState::Hdr(HdrParameters::new(1.0, 1.0).expect("valid HDR parameters")),
+            ),
             Err(CapabilityError::NoSdrSurfacePair)
         );
     }
@@ -248,7 +405,8 @@ mod tests {
     fn adapter_gate_enforces_the_native_release_contract() {
         let required_hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC;
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::RENDER_ATTACHMENT;
         let cases = [
             (
                 "software adapter",
@@ -283,7 +441,9 @@ mod tests {
                 BASELINE_FEATURES,
                 wgpu::TextureUsages::TEXTURE_BINDING,
                 Err(CapabilityError::MissingHdrTextureUsages(
-                    wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                    wgpu::TextureUsages::STORAGE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 )),
             ),
             (

@@ -1,0 +1,37 @@
+[package]
+name = "gravlume-native-display"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+raw-window-handle.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2.workspace = true
+num-traits.workspace = true
+objc2 = { workspace = true, features = ["std"] }
+objc2-app-kit = { workspace = true, features = ["NSApplication", "NSResponder", "NSScreen", "NSView", "NSWindow", "objc2-core-foundation"] }
+objc2-foundation = { workspace = true, features = ["NSNotification", "NSOperation", "NSObject", "NSString", "block2", "std"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+num-traits.workspace = true
+wayland-client = { workspace = true, features = ["dlopen", "system"] }
+wayland-protocols = { workspace = true, features = ["client", "staging"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Foundation", "Graphics_Display", "System", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_WinRT"] }
+windows-core.workspace = true
+windows-future.workspace = true
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+unused_must_use = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
