@@ -5,7 +5,7 @@
 ## 已实现闭环
 
 - `GpuEngine::new` 接受 validated `Observation`。host 端先按质量 $M$ 无量纲化，再通过受检 `f64 → f32` 转换写入 144-byte `TraceUniforms`；projection/sample、event surfaces 与 step policy 各自占独立字段，无法表示的输入返回 `TraceInputError`，不会饱和或静默截断为无穷。
-- `TraceUniforms` 与测试 readback 使用的 48-byte `TraceRecord` 只包含显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；生产路径不保留只服务测试捕获的 record DTO 或 compute entry point。GPU 把同一语义记录拆成 direction/time、invariant drift、metadata 三个 16-byte-per-pixel storage plane；这使 3840×2160 的每个 binding 为 126.6 MiB，落在 WebGPU 保证的 128 MiB storage-binding limit 内。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
+- `TraceUniforms` 使用显式 `#[repr(C)]` 标量数组并派生 `Pod/Zeroable`；测试 readback DTO 只聚合已分别解码的三个 plane，不冒充 GPU 内存布局。生产路径不保留只服务测试捕获的 record DTO 或 compute entry point。GPU 把同一语义记录拆成 direction/time、invariant drift、metadata 三个 16-byte-per-pixel storage plane；这使 3840×2160 的每个 binding 为 126.6 MiB，落在 WebGPU 保证的 128 MiB storage-binding limit 内。termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain 六类。
 - WGSL 独立实现 `f32` ingoing Cartesian Kerr–Schild radius/geometry、轴线解析分支、closed-form Hamilton RHS、negative-affine geometric-step RK4、线性 event fraction、端点导数约束的三次 Hermite dense state 与 null/E/Lz/Carter drift。终止步的 travel time、invariant drift、direction 与 event residual 全部提交同一 localized state，不包含 event surface 之后的 RK endpoint。radicand、denominator 和 finite guard 都写入 machine-readable failure flags。
 - 每个像素以当前 HDR texture extent 构造 top-left viewport sample，因此 resize 后的 aspect ratio 与 record index 不依赖启动时尺寸。8×8 workgroup 越界 invocation 显式返回。
 - escape 使用方向编码的解析高动态范围天空，horizon 写物理黑色；singularity、exhaustion、uncertain 和 numerical failure 使用不同的非黑诊断颜色。interactive failure 不冒充物理 terminal，也不静默变黑。
@@ -22,14 +22,14 @@
 `cargo test -p gravlume-render --all-targets --locked` 当前覆盖：
 
 - termination discriminant 的双向 checked mapping；
-- host struct size、field offset、`Pod/Zeroable` 与 WGSL 五 binding/双 entry-point 合同；
-- Naga 对完整 WGSL 的 parse 与 validation；
+- host uniform size/field offset 与 WGSL 五 binding/生产 entry-point 合同；
+- Naga 对独立生产 WGSL 的 parse 与 validation；测试 capture entry point 由真实 GPU pipeline 执行覆盖；
+- 物理等价的质量尺度变换产生逐 bit 相同的无量纲 GPU trace record；
 - center、四角与 jitter 的 CPU/WGSL initial direction agreement，角误差不高于 `2e-6 rad`，初始 null residual 不高于 `8e-5`；
 - 默认 Kerr Observation 的 7×5 headless regular matrix 中五个具名样本：GPU termination 与 CPU reference 一致，escape direction 角误差不高于 `3.82e-4 rad`，event residual 不高于 `5e-3`；
 - 9×9 extent 跨 workgroup boundary 的每像素 record-plane/HDR 写入；
 - 4K UHD extent 在 WebGPU 默认 buffer limits 下通过容量验证，超过 texture/binding/buffer limit 的 resize 在分配前返回 typed error；
 - 默认 regular matrix 的 localized travel time 与 CPU reference 相差不高于 `1e-3 M`，每项记录的 invariant drift 均不高于 interactive `0.05` budget；
-- 同一 headless output 中 sky、horizon 和 failure 的可见且互异状态。
 
 这些测试需要可用的原生 Metal 或 Vulkan adapter。CPU/GPU 使用不同精度与不同积分器；agreement 只说明当前样本落在预算内，不构成独立物理证明。
 

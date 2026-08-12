@@ -752,18 +752,18 @@ mod tests {
         assert!(matches!(
             validate_render_extent(too_wide, &limits),
             Err(ResizeError::ExtentLimit {
-                width: 8_193,
+                width,
                 height: 1,
-                max_texture_dimension_2d: 8_192,
-            })
+                max_texture_dimension_2d,
+            }) if width == maximum + 1 && max_texture_dimension_2d == maximum
         ));
         assert!(matches!(
             validate_render_extent(too_tall, &limits),
             Err(ResizeError::ExtentLimit {
                 width: 1,
-                height: 8_193,
-                max_texture_dimension_2d: 8_192,
-            })
+                height,
+                max_texture_dimension_2d,
+            }) if height == maximum + 1 && max_texture_dimension_2d == maximum
         ));
     }
 }

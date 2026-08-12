@@ -8,18 +8,11 @@ use crate::{
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
 const RECORD_FIELD_COUNT: u64 = 3;
 
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct TraceRecord {
     pub direction_time: [f32; 4],
     pub invariant_drift: [f32; 4],
     pub metadata: [u32; 4],
-}
-
-#[derive(Clone, Copy)]
-pub enum TraceEntryPoint {
-    InitialRay { subpixel: [f32; 2] },
-    Trace,
 }
 
 pub struct TraceCapture {
@@ -36,23 +29,29 @@ impl TraceCapture {
     }
 }
 
-pub fn render_trace_for_test(
-    observation: &Observation,
-    entry_point: TraceEntryPoint,
-) -> TraceCapture {
+pub fn capture_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_gpu::native_gpu();
+    let compute = TraceCompute::new(&gpu.device, observation).expect("observation packs for GPU");
+    capture(gpu, observation, &compute)
+}
+
+pub fn capture_initial_rays(observation: &Observation, subpixel: [f32; 2]) -> TraceCapture {
+    let gpu = crate::test_gpu::native_gpu();
+    let compute = TraceCompute::for_initial_ray_capture(&gpu.device, observation, subpixel)
+        .expect("observation packs for GPU");
+    capture(gpu, observation, &compute)
+}
+
+fn capture(
+    gpu: &crate::test_gpu::TestGpu,
+    observation: &Observation,
+    compute: &TraceCompute,
+) -> TraceCapture {
     let extent = RenderExtent::new(
         observation.projection().width().get(),
         observation.projection().height().get(),
     )
     .expect("validated observation extent is nonzero");
-    let compute = match entry_point {
-        TraceEntryPoint::InitialRay { subpixel } => {
-            TraceCompute::for_initial_ray_capture(&gpu.device, observation, subpixel)
-        }
-        TraceEntryPoint::Trace => TraceCompute::new(&gpu.device, observation),
-    }
-    .expect("observation packs for GPU");
     let target = compute.create_target(&gpu.device, extent);
     let plane_size = trace_record_plane_size(extent);
     let record_bytes = plane_size * RECORD_FIELD_COUNT;
@@ -71,10 +70,7 @@ pub fn render_trace_for_test(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("headless trace encoder"),
         });
-    match entry_point {
-        TraceEntryPoint::InitialRay { .. } => compute.encode_initial_rays(&mut encoder, &target),
-        TraceEntryPoint::Trace => compute.encode(&mut encoder, &target, None),
-    }
+    compute.encode(&mut encoder, &target, None);
     for (plane_index, plane) in target.record_planes().into_iter().enumerate() {
         encoder.copy_buffer_to_buffer(
             plane,

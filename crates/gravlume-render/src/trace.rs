@@ -99,8 +99,6 @@ pub enum TraceInputError {
 
 pub struct TraceCompute {
     pipeline: wgpu::ComputePipeline,
-    #[cfg(test)]
-    initial_ray_pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
 }
@@ -111,7 +109,12 @@ impl TraceCompute {
         observation: &Observation,
     ) -> Result<Self, TraceInputError> {
         let uniforms = TraceUniforms::from_observation(observation)?;
-        Ok(Self::from_uniforms(device, uniforms))
+        Ok(Self::from_uniforms(
+            device,
+            uniforms,
+            TRACE_SHADER.into(),
+            "trace_scene",
+        ))
     }
 
     #[cfg(test)]
@@ -122,10 +125,20 @@ impl TraceCompute {
     ) -> Result<Self, TraceInputError> {
         let mut uniforms = TraceUniforms::from_observation(observation)?;
         uniforms.projection[2..].copy_from_slice(&subpixel);
-        Ok(Self::from_uniforms(device, uniforms))
+        Ok(Self::from_uniforms(
+            device,
+            uniforms,
+            Cow::Owned(format!("{TRACE_SHADER}\n{INITIAL_RAY_CAPTURE_SHADER}")),
+            "write_initial_rays",
+        ))
     }
 
-    fn from_uniforms(device: &wgpu::Device, uniforms: TraceUniforms) -> Self {
+    fn from_uniforms(
+        device: &wgpu::Device,
+        uniforms: TraceUniforms,
+        shader_source: Cow<'static, str>,
+        entry_point: &'static str,
+    ) -> Self {
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init
         let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("interactive trace uniforms"),
@@ -194,17 +207,19 @@ impl TraceCompute {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cartesian Kerr-Schild trace shader"),
-            source: wgpu::ShaderSource::Wgsl(trace_shader_source()),
+            source: wgpu::ShaderSource::Wgsl(shader_source),
         });
-        let pipeline = create_pipeline(device, &pipeline_layout, &shader, "trace_scene");
-        #[cfg(test)]
-        let initial_ray_pipeline =
-            create_pipeline(device, &pipeline_layout, &shader, "write_initial_rays");
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(entry_point),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some(entry_point),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
+        });
 
         Self {
             pipeline,
-            #[cfg(test)]
-            initial_ray_pipeline,
             bind_group_layout,
             uniforms,
         }
@@ -281,29 +296,11 @@ impl TraceCompute {
         target: &TraceTarget,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
-        Self::encode_with_pipeline(encoder, target, timestamp_writes, &self.pipeline);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn encode_initial_rays(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        target: &TraceTarget,
-    ) {
-        Self::encode_with_pipeline(encoder, target, None, &self.initial_ray_pipeline);
-    }
-
-    fn encode_with_pipeline(
-        encoder: &mut wgpu::CommandEncoder,
-        target: &TraceTarget,
-        timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
-        pipeline: &wgpu::ComputePipeline,
-    ) {
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("interactive trace pass"),
             timestamp_writes,
         });
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &target.bind_group, &[]);
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePass.html#method.dispatch_workgroups
         pass.dispatch_workgroups(
@@ -315,29 +312,8 @@ impl TraceCompute {
 }
 
 #[cfg(test)]
-pub fn trace_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!("{TRACE_SHADER}\n{INITIAL_RAY_CAPTURE_SHADER}"))
-}
-
-#[cfg(not(test))]
-const fn trace_shader_source() -> Cow<'static, str> {
-    Cow::Borrowed(TRACE_SHADER)
-}
-
-fn create_pipeline(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    shader: &wgpu::ShaderModule,
-    entry_point: &'static str,
-) -> wgpu::ComputePipeline {
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(entry_point),
-        layout: Some(layout),
-        module: shader,
-        entry_point: Some(entry_point),
-        compilation_options: wgpu::PipelineCompilationOptions::default(),
-        cache: None,
-    })
+pub const fn production_shader_source() -> &'static str {
+    TRACE_SHADER
 }
 
 pub struct TraceTarget {

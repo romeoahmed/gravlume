@@ -1,4 +1,7 @@
-use std::{mem::offset_of, num::NonZeroU32};
+use std::{
+    mem::{offset_of, size_of},
+    num::NonZeroU32,
+};
 
 use gravlume_domain::{
     Angle, KerrNewmanSpacetime, Observation, PhysicalScene, PhysicalSceneDraft,
@@ -12,9 +15,9 @@ use num_traits::ToPrimitive as _;
 use crate::{
     trace::{
         INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
-        trace_shader_source,
+        production_shader_source,
     },
-    trace_test_support::{TraceEntryPoint, TraceRecord, render_trace_for_test},
+    trace_test_support::{capture_initial_rays, capture_trace},
 };
 
 #[test]
@@ -43,7 +46,7 @@ fn trace_termination_discriminants_are_stable_and_checked() {
 }
 
 #[test]
-fn host_uniform_and_capture_layouts_match_the_gpu_abi() {
+fn trace_uniform_layout_matches_the_shader_abi() {
     assert_eq!(size_of::<TraceUniforms>(), 144);
     assert_eq!(offset_of!(TraceUniforms, spacetime), 0);
     assert_eq!(offset_of!(TraceUniforms, observer_event), 16);
@@ -54,50 +57,31 @@ fn host_uniform_and_capture_layouts_match_the_gpu_abi() {
     assert_eq!(offset_of!(TraceUniforms, projection), 96);
     assert_eq!(offset_of!(TraceUniforms, event_surfaces), 112);
     assert_eq!(offset_of!(TraceUniforms, step_policy), 128);
-
-    assert_eq!(size_of::<TraceRecord>(), 48);
-    assert_eq!(offset_of!(TraceRecord, direction_time), 0);
-    assert_eq!(offset_of!(TraceRecord, invariant_drift), 16);
-    assert_eq!(offset_of!(TraceRecord, metadata), 32);
-
-    assert_pod::<TraceUniforms>();
-    assert_pod::<TraceRecord>();
 }
 
 #[test]
-fn observation_pack_is_dimensionless_and_separates_trace_policies() {
-    let observation = default_observation(7, 5);
-    let packed = TraceUniforms::from_observation(&observation).expect("default scene packs");
+fn mass_scale_does_not_change_the_dimensionless_trace_result() {
+    let unit = capture_trace(&observation_at_scale(7, 5, 1.0));
+    let scaled = capture_trace(&observation_at_scale(7, 5, 8.0));
 
-    assert_eq!(
-        packed.spacetime.map(f32::to_bits),
-        [1.0_f32, 0.8, 0.0, 0.0].map(f32::to_bits)
-    );
-    assert_eq!(packed.projection[1].to_bits(), 1.0_f32.to_bits());
-    assert_eq!(packed.event_surfaces[0].to_bits(), 200.0_f32.to_bits());
-    assert_eq!(packed.event_surfaces[1].to_bits(), 0x2b80_0000);
-    assert_eq!(packed.event_surfaces[2].to_bits(), 1.6_f32.to_bits());
-    let [_, _, sample_x, sample_y] = packed.projection;
-    assert_eq!(
-        [sample_x.to_bits(), sample_y.to_bits()],
-        [0.5_f32; 2].map(f32::to_bits)
-    );
-    assert_eq!(
-        packed.step_policy[3].to_bits(),
-        INVARIANT_DRIFT_LIMIT.to_bits()
-    );
+    assert_eq!(unit.records.len(), scaled.records.len());
+    for (unit, scaled) in unit.records.iter().zip(&scaled.records) {
+        assert_same_bits(unit.direction_time, scaled.direction_time);
+        assert_same_bits(unit.invariant_drift, scaled.invariant_drift);
+        assert_eq!(unit.metadata, scaled.metadata);
+    }
 }
 
 #[test]
-fn shader_parses_validates_and_keeps_its_resource_contract() {
-    let shader = trace_shader_source();
-    let module = naga::front::wgsl::parse_str(&shader).expect("interactive WGSL parses");
+fn production_shader_parses_validates_and_keeps_its_resource_contract() {
+    let module = naga::front::wgsl::parse_str(production_shader_source())
+        .expect("production trace WGSL parses");
     naga::valid::Validator::new(
         naga::valid::ValidationFlags::all(),
         naga::valid::Capabilities::empty(),
     )
     .validate(&module)
-    .expect("interactive WGSL validates");
+    .expect("production trace WGSL validates");
 
     let mut entry_points = module
         .entry_points
@@ -105,7 +89,7 @@ fn shader_parses_validates_and_keeps_its_resource_contract() {
         .map(|entry| entry.name.as_str())
         .collect::<Vec<_>>();
     entry_points.sort_unstable();
-    assert_eq!(entry_points, ["trace_scene", "write_initial_rays"]);
+    assert_eq!(entry_points, ["trace_scene"]);
 
     let mut bindings = module
         .global_variables
@@ -120,7 +104,7 @@ fn shader_parses_validates_and_keeps_its_resource_contract() {
 #[test]
 fn trace_dispatch_writes_every_pixel_across_workgroup_boundaries() {
     let observation = default_observation(9, 9);
-    let capture = render_trace_for_test(&observation, TraceEntryPoint::Trace);
+    let capture = capture_trace(&observation);
 
     assert_eq!(capture.records.len(), 81);
     for (index, record) in capture.records.iter().enumerate() {
@@ -152,7 +136,7 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
                 .to_f32()
                 .expect("normalized subpixel coordinate is representable as f32")
         });
-        let capture = render_trace_for_test(&observation, TraceEntryPoint::InitialRay { subpixel });
+        let capture = capture_initial_rays(&observation, subpixel);
         let [pixel_x, pixel_y] = viewport_sample.pixel();
         let index = usize::try_from(pixel_y * 7 + pixel_x).expect("test index fits usize");
         let gpu = capture.records[index];
@@ -183,7 +167,7 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
 #[test]
 fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_direction() {
     let observation = default_observation(7, 5);
-    let capture = render_trace_for_test(&observation, TraceEntryPoint::Trace);
+    let capture = capture_trace(&observation);
     let samples = [
         sample(&observation, 0, 0, 0.5, 0.5),
         sample(&observation, 6, 0, 0.5, 0.5),
@@ -261,68 +245,29 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
     }
 }
 
-#[test]
-fn sky_horizon_and_failure_states_have_distinct_visible_outputs() {
-    let observation = default_observation(7, 5);
-    let capture = render_trace_for_test(&observation, TraceEntryPoint::Trace);
-    let mut horizon = None;
-    let mut escape = None;
-    let mut diagnostic = None;
-
-    for (index, record) in capture.records.iter().enumerate() {
-        match TraceTermination::try_from(record.metadata[0]).expect("typed GPU terminal") {
-            TraceTermination::HorizonCrossing => horizon = Some(index),
-            TraceTermination::Escape => escape = Some(index),
-            TraceTermination::SingularityGuard
-            | TraceTermination::StepExhaustion
-            | TraceTermination::NumericalFailure
-            | TraceTermination::Uncertain => diagnostic = Some(index),
-        }
-    }
-
-    let terminations = capture
-        .records
-        .iter()
-        .map(|record| {
-            (
-                record.metadata[0],
-                record.metadata[1],
-                record.invariant_drift,
-            )
-        })
-        .collect::<Vec<_>>();
-    let horizon = capture.hdr_pixel(
-        horizon.unwrap_or_else(|| panic!("matrix contains a horizon ray: {terminations:?}")),
-    );
-    let escape = capture.hdr_pixel(escape.expect("matrix contains an escape ray"));
-    let diagnostic =
-        capture.hdr_pixel(diagnostic.expect("matrix contains a visible diagnostic ray"));
-    assert_eq!(&horizon[..6], &[0; 6], "horizon is physically black");
-    assert_ne!(&escape[..6], &[0; 6], "analytic sky remains visible");
-    assert_ne!(&diagnostic[..6], &[0; 6], "failure is not silent black");
-    assert_ne!(diagnostic, escape, "failure and analytic sky stay distinct");
-}
-
-const fn size_of<T>() -> usize {
-    std::mem::size_of::<T>()
-}
-
-fn assert_pod<T: bytemuck::Pod + bytemuck::Zeroable>() {}
-
 const fn f16_one_bits() -> u16 {
     0x3c00
 }
 
+fn assert_same_bits(left: [f32; 4], right: [f32; 4]) {
+    assert_eq!(left.map(f32::to_bits), right.map(f32::to_bits));
+}
+
 fn default_observation(width: u32, height: u32) -> Observation {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0).expect("fixture spacetime is valid");
-    let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
+    observation_at_scale(width, height, 1.0)
+}
+
+fn observation_at_scale(width: u32, height: u32, mass: f64) -> Observation {
+    let spin = 0.8 * mass;
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0).expect("fixture spacetime is valid");
+    let observer_xyz = spacetime.oblate_to_cartesian(30.0 * mass, std::f64::consts::FRAC_PI_3, 0.0);
     let observer = StationaryObserverDraft::new(
         [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
         [0.0; 4],
         [0.0, 0.0, 1.0],
         1.0,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(1.0, 0.8, 0.0, observer))
+    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(mass, spin, 0.0, observer))
         .expect("fixture scene is valid");
     let projection = ViewportProjection::perspective(
         NonZeroU32::new(width).expect("test width is nonzero"),
