@@ -10,6 +10,8 @@ use crate::extent::RenderExtent;
 
 const TRACE_SHADER: &str = include_str!("shaders/trace.wgsl");
 #[cfg(test)]
+const DIAGNOSTIC_SHADER: &str = include_str!("shaders/trace_diagnostic.wgsl");
+#[cfg(test)]
 const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
 #[cfg(test)]
 const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate_capture.wgsl");
@@ -147,6 +149,24 @@ pub struct TraceCompute {
     bind_group_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     dispatch: wgpu::Buffer,
+    target_kind: TraceTargetKind,
+}
+
+#[derive(Clone, Copy)]
+enum TraceTargetKind {
+    Presentation,
+    #[cfg(test)]
+    Diagnostic,
+}
+
+impl TraceTargetKind {
+    const fn captures_records(self) -> bool {
+        match self {
+            Self::Presentation => false,
+            #[cfg(test)]
+            Self::Diagnostic => true,
+        }
+    }
 }
 
 impl TraceCompute {
@@ -160,6 +180,22 @@ impl TraceCompute {
             uniforms,
             TRACE_SHADER.into(),
             "trace_scene",
+            TraceTargetKind::Presentation,
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_trace_capture(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<Self, TraceInputError> {
+        let uniforms = TraceUniforms::from_observation(observation)?;
+        Ok(Self::from_uniforms(
+            device,
+            uniforms,
+            diagnostic_shader_source(),
+            "capture_trace_scene",
+            TraceTargetKind::Diagnostic,
         ))
     }
 
@@ -174,8 +210,12 @@ impl TraceCompute {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            Cow::Owned(format!("{TRACE_SHADER}\n{INITIAL_RAY_CAPTURE_SHADER}")),
+            Cow::Owned(format!(
+                "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
+                diagnostic_shader_source()
+            )),
             "write_initial_rays",
+            TraceTargetKind::Diagnostic,
         ))
     }
 
@@ -188,8 +228,12 @@ impl TraceCompute {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            Cow::Owned(format!("{TRACE_SHADER}\n{INVARIANT_GATE_CAPTURE_SHADER}")),
+            Cow::Owned(format!(
+                "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
+                diagnostic_shader_source()
+            )),
             "write_invariant_gate_cases",
+            TraceTargetKind::Diagnostic,
         ))
     }
 
@@ -198,6 +242,7 @@ impl TraceCompute {
         uniforms: TraceUniforms,
         shader_source: Cow<'static, str>,
         entry_point: &'static str,
+        target_kind: TraceTargetKind,
     ) -> Self {
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init
         let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -210,70 +255,60 @@ impl TraceCompute {
             contents: bytemuck::bytes_of(&TraceDispatch { pixels: [0; 4] }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let entries = [
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<TraceUniforms>()),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: wgpu::BufferSize::new(size_of::<TraceDispatch>()),
+                },
+                count: None,
+            },
+        ];
+        let capture_entries = target_kind.captures_records().then(|| {
+            (3..=5)
+                .map(|binding| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(TRACE_RECORD_PLANE_ELEMENT_SIZE),
+                    },
+                    count: None,
+                })
+                .collect::<Vec<_>>()
+        });
+        let entries = entries
+            .iter()
+            .chain(capture_entries.iter().flatten())
+            .copied()
+            .collect::<Vec<_>>();
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("interactive trace bind group layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(size_of::<TraceUniforms>()),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::Rgba16Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(TRACE_RECORD_PLANE_ELEMENT_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(TRACE_RECORD_PLANE_ELEMENT_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(TRACE_RECORD_PLANE_ELEMENT_SIZE),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(size_of::<TraceDispatch>()),
-                    },
-                    count: None,
-                },
-            ],
+            entries: &entries,
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("interactive trace pipeline layout"),
@@ -298,10 +333,16 @@ impl TraceCompute {
             bind_group_layout,
             uniforms,
             dispatch,
+            target_kind,
         }
     }
 
     pub(crate) fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceTarget {
+        let mut texture_usage =
+            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
+        if self.target_kind.captures_records() {
+            texture_usage |= wgpu::TextureUsages::COPY_SRC;
+        }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scene-linear HDR trace target"),
             size: wgpu::Extent3d {
@@ -313,56 +354,60 @@ impl TraceCompute {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
+            usage: texture_usage,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let record_plane_size = trace_record_plane_size(extent);
-        let direction_time =
-            create_record_plane(device, "trace direction and time", record_plane_size);
-        let invariant_drift =
-            create_record_plane(device, "trace invariant drift", record_plane_size);
-        let metadata = create_record_plane(device, "trace metadata", record_plane_size);
+        #[cfg(test)]
+        let record_planes = self.target_kind.captures_records().then(|| {
+            let size = trace_record_plane_size(extent);
+            DiagnosticPlanes {
+                direction_time: create_record_plane(device, "trace direction and time", size),
+                invariant_drift: create_record_plane(device, "trace invariant drift", size),
+                metadata: create_record_plane(device, "trace metadata", size),
+            }
+        });
+        let entries = [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: self.dispatch.as_entire_binding(),
+            },
+        ];
+        #[cfg(test)]
+        let capture_entries = record_planes.as_ref().map(|planes| {
+            planes
+                .buffers()
+                .into_iter()
+                .enumerate()
+                .map(|(index, buffer)| wgpu::BindGroupEntry {
+                    binding: u32::try_from(index).expect("diagnostic binding index fits u32") + 3,
+                    resource: buffer.as_entire_binding(),
+                })
+                .collect::<Vec<_>>()
+        });
+        #[cfg(not(test))]
+        let capture_entries: Option<Vec<wgpu::BindGroupEntry<'_>>> = None;
+        let entries = entries
+            .into_iter()
+            .chain(capture_entries.into_iter().flatten())
+            .collect::<Vec<_>>();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("interactive trace bind group"),
             layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: direction_time.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: invariant_drift.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: metadata.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: self.dispatch.as_entire_binding(),
-                },
-            ],
+            entries: &entries,
         });
         TraceTarget {
             view,
             #[cfg(test)]
-            direction_time,
-            #[cfg(test)]
-            invariant_drift,
-            #[cfg(test)]
-            metadata,
+            record_planes,
             bind_group,
         }
     }
@@ -435,14 +480,15 @@ pub const fn production_shader_source() -> &'static str {
     TRACE_SHADER
 }
 
+#[cfg(test)]
+fn diagnostic_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!("{TRACE_SHADER}\n{DIAGNOSTIC_SHADER}"))
+}
+
 pub struct TraceTarget {
     view: wgpu::TextureView,
     #[cfg(test)]
-    direction_time: wgpu::Buffer,
-    #[cfg(test)]
-    invariant_drift: wgpu::Buffer,
-    #[cfg(test)]
-    metadata: wgpu::Buffer,
+    record_planes: Option<DiagnosticPlanes>,
     bind_group: wgpu::BindGroup,
 }
 
@@ -458,10 +504,28 @@ impl TraceTarget {
 
     #[cfg(test)]
     pub(crate) const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
+        self.record_planes
+            .as_ref()
+            .expect("capture targets include diagnostic record planes")
+            .buffers()
+    }
+}
+
+#[cfg(test)]
+struct DiagnosticPlanes {
+    direction_time: wgpu::Buffer,
+    invariant_drift: wgpu::Buffer,
+    metadata: wgpu::Buffer,
+}
+
+#[cfg(test)]
+impl DiagnosticPlanes {
+    const fn buffers(&self) -> [&wgpu::Buffer; 3] {
         [&self.direction_time, &self.invariant_drift, &self.metadata]
     }
 }
 
+#[cfg(test)]
 fn create_record_plane(device: &wgpu::Device, label: &'static str, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
@@ -471,6 +535,7 @@ fn create_record_plane(device: &wgpu::Device, label: &'static str, size: u64) ->
     })
 }
 
+#[cfg(test)]
 pub fn trace_record_plane_size(extent: RenderExtent) -> u64 {
     u64::from(extent.width())
         .saturating_mul(u64::from(extent.height()))

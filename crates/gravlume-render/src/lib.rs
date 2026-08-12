@@ -20,7 +20,7 @@ mod trace_test_support;
 #[doc(hidden)]
 pub use capabilities::{CapabilityError, DisplayState, HdrParameters, UnknownDisplayState};
 #[doc(hidden)]
-pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics};
+pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics, TraceAdvance};
 #[doc(hidden)]
 pub use gpu_error::{
     DeviceEvent, DeviceEventKind, RenderInitError, RenderRuntimeError, ResizeError,

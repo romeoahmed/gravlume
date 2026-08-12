@@ -16,11 +16,9 @@ struct TraceDispatch {
 
 struct Geometry {
     radius: f32,
-    radius_gradient: vec3<f32>,
     scalar_f: f32,
     scalar_f_gradient: vec3<f32>,
-    null_covector: vec4<f32>,
-    null_vector: vec4<f32>,
+    null_spatial: vec3<f32>,
     null_dx: vec4<f32>,
     null_dy: vec4<f32>,
     null_dz: vec4<f32>,
@@ -46,16 +44,23 @@ struct StepResult {
 
 struct InitialState {
     state: TraceState,
-    sight: vec4<f32>,
     geometry: Geometry,
     rhs: RhsResult,
-    null_residual: f32,
-    flags: u32,
 }
 
 struct Invariants {
     values: vec4<f32>,
     flags: u32,
+}
+
+struct TraceResult {
+    termination: u32,
+    flags: u32,
+    steps: u32,
+    event_residual: f32,
+    direction: vec3<f32>,
+    travel_time: f32,
+    maximum_drift: vec4<f32>,
 }
 
 const TERMINATION_HORIZON: u32 = 1u;
@@ -77,15 +82,6 @@ var<uniform> trace_uniforms: TraceUniforms;
 var scene_hdr: texture_storage_2d<rgba16float, write>;
 
 @group(0) @binding(2)
-var<storage, read_write> trace_direction_time: array<vec4<f32>>;
-
-@group(0) @binding(3)
-var<storage, read_write> trace_invariant_drift: array<vec4<f32>>;
-
-@group(0) @binding(4)
-var<storage, read_write> trace_metadata: array<vec4<u32>>;
-
-@group(0) @binding(5)
 var<uniform> trace_dispatch: TraceDispatch;
 
 fn finite_scalar(value: f32) -> bool {
@@ -134,11 +130,9 @@ fn singularity_measure(radius: f32, spin: f32, z: f32) -> f32 {
 fn invalid_geometry(flags: u32) -> Geometry {
     return Geometry(
         0.0,
-        vec3<f32>(0.0),
         0.0,
         vec3<f32>(0.0),
-        vec4<f32>(0.0),
-        vec4<f32>(0.0),
+        vec3<f32>(0.0),
         vec4<f32>(0.0),
         vec4<f32>(0.0),
         vec4<f32>(0.0),
@@ -186,8 +180,7 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let numerator_gradient = 2.0 * mass * radius_gradient;
         let scalar_f_gradient =
             (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
-        let null_covector = vec4<f32>(1.0, 0.0, 0.0, principal_direction * axis_sign);
-        let null_vector = vec4<f32>(-1.0, 0.0, 0.0, principal_direction * axis_sign);
+        let null_spatial = vec3<f32>(0.0, 0.0, principal_direction * axis_sign);
         let inverse_denominator_scale = 1.0 / (sigma * scale);
         let null_dx = vec4<f32>(
             0.0,
@@ -212,11 +205,9 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         }
         return Geometry(
             physical_radius,
-            radius_gradient,
             scalar_f,
             scalar_f_gradient,
-            null_covector,
-            null_vector,
+            null_spatial,
             null_dx,
             null_dy,
             vec4<f32>(0.0),
@@ -278,8 +269,6 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         (radius * y - spin * x) / radial_denominator,
         z / radius,
     );
-    let null_covector = vec4<f32>(1.0, null_spatial);
-    let null_vector = vec4<f32>(-1.0, null_spatial);
     var null_gradients = array<vec4<f32>, 3>();
     for (var index = 0u; index < 3u; index += 1u) {
         let radius_i = radius_gradient[index];
@@ -310,7 +299,7 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
     if !finite_scalar(physical_radius)
         || !finite_scalar(scalar_f)
         || !finite_vec3(scalar_f_gradient)
-        || !finite_vec4(null_covector)
+        || !finite_vec3(null_spatial)
         || !finite_vec4(null_gradients[0])
         || !finite_vec4(null_gradients[1])
         || !finite_vec4(null_gradients[2])
@@ -320,11 +309,9 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
     }
     return Geometry(
         physical_radius,
-        radius_gradient,
         scalar_f,
         scalar_f_gradient,
-        null_covector,
-        null_vector,
+        null_spatial,
         null_gradients[0],
         null_gradients[1],
         null_gradients[2],
@@ -357,9 +344,10 @@ fn lower_momentum(momentum_contravariant: vec4<f32>, geometry: Geometry) -> vec4
         -momentum_contravariant.x,
         momentum_contravariant.yzw,
     );
-    let contraction = dot(geometry.null_covector, momentum_contravariant);
+    let null_covector = vec4<f32>(1.0, geometry.null_spatial);
+    let contraction = dot(null_covector, momentum_contravariant);
     return minkowski_lowered
-        + geometry.scalar_f * contraction * geometry.null_covector;
+        + geometry.scalar_f * contraction * null_covector;
 }
 
 fn normalized_null_residual(
@@ -379,13 +367,14 @@ fn hamilton_rhs_from_geometry(state: TraceState, geometry: Geometry) -> RhsResul
     if geometry.flags != 0u {
         return invalid_rhs(geometry.flags);
     }
-    let contraction = dot(state.momentum, geometry.null_vector);
+    let null_vector = vec4<f32>(-1.0, geometry.null_spatial);
+    let contraction = dot(state.momentum, null_vector);
     let minkowski_raised = vec4<f32>(
         -state.momentum.x,
         state.momentum.yzw,
     );
     let position_derivative = minkowski_raised
-        - geometry.scalar_f * contraction * geometry.null_vector;
+        - geometry.scalar_f * contraction * null_vector;
     let null_derivative_contraction = vec3<f32>(
         dot(state.momentum, geometry.null_dx),
         dot(state.momentum, geometry.null_dy),
@@ -419,23 +408,27 @@ fn rk4_step(state: TraceState, k1: RhsResult, step: f32) -> StepResult {
     if k1.flags != 0u {
         return invalid_step(state, k1.flags);
     }
-    let k2 = hamilton_rhs(state_add(state, k1, 0.5 * step));
-    if k2.flags != 0u {
-        return invalid_step(state, k2.flags);
+    var stage = hamilton_rhs(state_add(state, k1, 0.5 * step));
+    if stage.flags != 0u {
+        return invalid_step(state, stage.flags);
     }
-    let k3 = hamilton_rhs(state_add(state, k2, 0.5 * step));
-    if k3.flags != 0u {
-        return invalid_step(state, k3.flags);
+    var weighted_position = k1.position + 2.0 * stage.position;
+    var weighted_momentum = k1.momentum + 2.0 * stage.momentum;
+    stage = hamilton_rhs(state_add(state, stage, 0.5 * step));
+    if stage.flags != 0u {
+        return invalid_step(state, stage.flags);
     }
-    let k4 = hamilton_rhs(state_add(state, k3, step));
-    if k4.flags != 0u {
-        return invalid_step(state, k4.flags);
+    weighted_position += 2.0 * stage.position;
+    weighted_momentum += 2.0 * stage.momentum;
+    stage = hamilton_rhs(state_add(state, stage, step));
+    if stage.flags != 0u {
+        return invalid_step(state, stage.flags);
     }
+    weighted_position += stage.position;
+    weighted_momentum += stage.momentum;
     let next = TraceState(
-        state.position
-            + step / 6.0 * (k1.position + 2.0 * k2.position + 2.0 * k3.position + k4.position),
-        state.momentum
-            + step / 6.0 * (k1.momentum + 2.0 * k2.momentum + 2.0 * k3.momentum + k4.momentum),
+        state.position + step / 6.0 * weighted_position,
+        state.momentum + step / 6.0 * weighted_momentum,
     );
     if !finite_vec4(next.position) || !finite_vec4(next.momentum) {
         return invalid_step(state, FLAG_NON_FINITE);
@@ -478,11 +471,8 @@ fn initial_state_at(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) ->
     if geometry.flags != 0u || !finite_vec4(momentum_contravariant) {
         return InitialState(
             TraceState(trace_uniforms.observer_event, vec4<f32>(0.0)),
-            sight,
             geometry,
             invalid_rhs(geometry.flags | FLAG_NON_FINITE),
-            0.0,
-            geometry.flags | FLAG_NON_FINITE,
         );
     }
     let momentum_covariant = lower_momentum(momentum_contravariant, geometry);
@@ -490,23 +480,13 @@ fn initial_state_at(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) ->
     if !finite_vec4(momentum_covariant) || !finite_scalar(null_residual) {
         return InitialState(
             TraceState(trace_uniforms.observer_event, vec4<f32>(0.0)),
-            sight,
             geometry,
             invalid_rhs(FLAG_NON_FINITE),
-            0.0,
-            FLAG_NON_FINITE,
         );
     }
     let state = TraceState(trace_uniforms.observer_event, momentum_covariant);
     let rhs = hamilton_rhs_from_geometry(state, geometry);
-    return InitialState(
-        state,
-        sight,
-        geometry,
-        rhs,
-        null_residual,
-        rhs.flags,
-    );
+    return InitialState(state, geometry, rhs);
 }
 
 fn invariants_from_geometry_rhs(
@@ -553,15 +533,6 @@ fn invariants_from_geometry_rhs(
     return Invariants(values, 0u);
 }
 
-fn invariants(state: TraceState) -> Invariants {
-    let geometry = geometry_at(state.position.yzw);
-    return invariants_from_geometry_rhs(
-        state,
-        geometry,
-        hamilton_rhs_from_geometry(state, geometry),
-    );
-}
-
 fn invariant_drift(initial: vec4<f32>, current: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
         current.x,
@@ -590,33 +561,47 @@ fn visible_failure_color(termination: u32) -> vec4<f32> {
 
 fn analytic_sky(direction: vec3<f32>) -> vec3<f32> {
     let unit = normalize(direction);
-    let longitude = atan2(unit.y, unit.x);
-    let latitude = asin(clamp(unit.z, -1.0, 1.0));
-    let longitude_grid = 1.0 - smoothstep(0.46, 0.5, abs(fract(longitude * 4.0 / 3.14159265) - 0.5));
-    let latitude_grid = 1.0 - smoothstep(0.45, 0.5, abs(fract(latitude * 6.0 / 3.14159265) - 0.5));
-    let grid = max(longitude_grid, latitude_grid);
-    let axes = vec3<f32>(
-        select(0.15, 1.4, unit.x >= 0.0),
-        select(0.15, 1.2, unit.y >= 0.0),
-        select(0.15, 1.6, unit.z >= 0.0),
+    let encoded = 0.5 * (unit + vec3<f32>(1.0));
+    var sky = vec3<f32>(0.035, 0.045, 0.06)
+        + vec3<f32>(0.22, 0.20, 0.24) * encoded;
+
+    // Low-order spherical structure makes lensing visible without a seam or sub-pixel grid.
+    let longitude_three = unit.x * (unit.x * unit.x - 3.0 * unit.y * unit.y);
+    let z_squared = unit.z * unit.z;
+    let latitude_four = 8.0 * z_squared * z_squared - 8.0 * z_squared + 1.0;
+    let bands = clamp(0.5 + 0.25 * longitude_three + 0.25 * latitude_four, 0.0, 1.0);
+    sky *= 0.84 + 0.16 * bands;
+
+    // Six localized axis markers retain an interpretable direction key. Their weights vanish to
+    // twelfth order at each sign plane, so the color selection creates no hemisphere seam.
+    let squared = unit * unit;
+    let fourth = squared * squared;
+    let axis_weight = fourth * fourth * fourth;
+    let weight_sum = axis_weight.x + axis_weight.y + axis_weight.z;
+    let x_color = select(
+        vec3<f32>(0.08, 0.45, 0.55),
+        vec3<f32>(1.05, 0.16, 0.10),
+        unit.x >= 0.0,
     );
-    return axes * (0.35 + 0.65 * abs(unit)) + vec3<f32>(2.0 * grid);
+    let y_color = select(
+        vec3<f32>(0.60, 0.12, 0.52),
+        vec3<f32>(0.12, 0.65, 0.20),
+        unit.y >= 0.0,
+    );
+    let z_color = select(
+        vec3<f32>(0.78, 0.50, 0.08),
+        vec3<f32>(0.16, 0.28, 0.82),
+        unit.z >= 0.0,
+    );
+    let axis_color = (
+        axis_weight.x * x_color
+        + axis_weight.y * y_color
+        + axis_weight.z * z_color
+    ) / max(weight_sum, 1e-6);
+    return mix(sky, axis_color, clamp(weight_sum, 0.0, 1.0));
 }
 
-fn store_trace_result(
-    index: u32,
-    pixel: vec2<u32>,
-    termination: u32,
-    flags: u32,
-    steps: u32,
-    event_residual: f32,
-    direction: vec3<f32>,
-    travel_time: f32,
-    maximum_drift: vec4<f32>,
-) {
-    trace_direction_time[index] = vec4<f32>(direction, travel_time);
-    trace_invariant_drift[index] = maximum_drift;
-    trace_metadata[index] = vec4<u32>(termination, flags, steps, bitcast<u32>(event_residual));
+fn store_scene_result(pixel: vec2<u32>, termination: u32, direction: vec3<f32>) {
     var scene_linear = visible_failure_color(termination);
     if termination == TERMINATION_HORIZON {
         scene_linear = vec4<f32>(0.0, 0.0, 0.0, 1.0);
@@ -626,27 +611,22 @@ fn store_trace_result(
     textureStore(scene_hdr, vec2<i32>(pixel), scene_linear);
 }
 
-fn store_failure(index: u32, pixel: vec2<u32>, flags: u32) {
-    trace_direction_time[index] = vec4<f32>(0.0);
-    trace_invariant_drift[index] = vec4<f32>(0.0);
-    trace_metadata[index] = vec4<u32>(TERMINATION_NUMERICAL_FAILURE, flags, 0u, 0u);
-    textureStore(scene_hdr, vec2<i32>(pixel), vec4<f32>(1.0, 0.0, 1.0, 1.0));
+fn failure_result(flags: u32, steps: u32, travel_time: f32, maximum_drift: vec4<f32>) -> TraceResult {
+    return TraceResult(
+        TERMINATION_NUMERICAL_FAILURE,
+        flags,
+        steps,
+        0.0,
+        vec3<f32>(0.0),
+        travel_time,
+        maximum_drift,
+    );
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let extent = textureDimensions(scene_hdr);
-    let local_index = global_id.y * 8u + global_id.x;
-    let index = trace_dispatch.pixels.x + local_index;
-    if index >= extent.x * extent.y {
-        return;
-    }
-    let pixel = vec2<u32>(index % extent.x, index / extent.x);
-
+fn trace_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> TraceResult {
     let initial = initial_state_at(pixel, extent, trace_uniforms.projection.zw);
-    if initial.flags != 0u {
-        store_failure(index, pixel, initial.flags);
-        return;
+    if initial.rhs.flags != 0u {
+        return failure_result(initial.rhs.flags, 0u, 0.0, vec4<f32>(0.0));
     }
     let initial_invariants = invariants_from_geometry_rhs(
         initial.state,
@@ -654,8 +634,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         initial.rhs,
     );
     if initial_invariants.flags != 0u {
-        store_failure(index, pixel, initial_invariants.flags);
-        return;
+        return failure_result(initial_invariants.flags, 0u, 0.0, vec4<f32>(0.0));
     }
 
     var state = initial.state;
@@ -670,25 +649,17 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     for (var step_index = 0u; step_index < MAXIMUM_STEPS; step_index += 1u) {
         let start_geometry = state_geometry;
         if start_geometry.flags != 0u {
-            store_trace_result(
-                index,
-                pixel,
-                TERMINATION_NUMERICAL_FAILURE,
+            return failure_result(
                 start_geometry.flags,
                 step_index,
-                0.0,
-                vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
             );
-            return;
         }
         if start_geometry.singularity_measure <= singularity_guard {
             let residual = (start_geometry.singularity_measure - singularity_guard)
                 / max(1.0, singularity_guard);
-            store_trace_result(
-                index,
-                pixel,
+            return TraceResult(
                 TERMINATION_SINGULARITY,
                 0u,
                 step_index,
@@ -697,7 +668,6 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 travel_time,
                 maximum_drift,
             );
-            return;
         }
 
         let step_magnitude = clamp(
@@ -707,48 +677,25 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         );
         let stepped = rk4_step(state, state_rhs, -step_magnitude);
         if stepped.flags != 0u {
-            store_trace_result(
-                index,
-                pixel,
-                TERMINATION_NUMERICAL_FAILURE,
-                stepped.flags,
-                step_index,
-                0.0,
-                vec3<f32>(0.0),
-                travel_time,
-                maximum_drift,
-            );
-            return;
+            return failure_result(stepped.flags, step_index, travel_time, maximum_drift);
         }
         let next_geometry = geometry_at(stepped.state.position.yzw);
         if next_geometry.flags != 0u {
-            store_trace_result(
-                index,
-                pixel,
-                TERMINATION_NUMERICAL_FAILURE,
+            return failure_result(
                 next_geometry.flags,
                 step_index + 1u,
-                0.0,
-                vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
             );
-            return;
         }
         let next_rhs = hamilton_rhs_from_geometry(stepped.state, next_geometry);
         if next_rhs.flags != 0u {
-            store_trace_result(
-                index,
-                pixel,
-                TERMINATION_NUMERICAL_FAILURE,
+            return failure_result(
                 next_rhs.flags,
                 step_index + 1u,
-                0.0,
-                vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
             );
-            return;
         }
         var termination = 0u;
         var event_surface = 0.0;
@@ -779,18 +726,12 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if termination != 0u {
             let denominator = end_value - start_value;
             if denominator == 0.0 || !finite_scalar(denominator) {
-                store_trace_result(
-                    index,
-                    pixel,
-                    TERMINATION_NUMERICAL_FAILURE,
+                return failure_result(
                     FLAG_INVALID_DENOMINATOR,
                     step_index + 1u,
-                    0.0,
-                    vec3<f32>(0.0),
                     travel_time,
                     maximum_drift,
                 );
-                return;
             }
             let event_fraction = clamp((event_surface - start_value) / denominator, 0.0, 1.0);
             let localized = dense_state_at(
@@ -812,18 +753,12 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 | localized_rhs.flags
                 | localized_invariants.flags;
             if localized_flags != 0u {
-                store_trace_result(
-                    index,
-                    pixel,
-                    TERMINATION_NUMERICAL_FAILURE,
+                return failure_result(
                     localized_flags,
                     step_index + 1u,
-                    0.0,
-                    vec3<f32>(0.0),
                     travel_time,
                     maximum_drift,
                 );
-                return;
             }
             let committed_travel_time = travel_time
                 + abs(localized.position.x - state.position.x);
@@ -844,9 +779,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             if invariant_budget_exceeded(committed_maximum_drift) {
                 termination = TERMINATION_UNCERTAIN;
             }
-            store_trace_result(
-                index,
-                pixel,
+            return TraceResult(
                 termination,
                 0u,
                 step_index + 1u,
@@ -855,7 +788,6 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 committed_travel_time,
                 committed_maximum_drift,
             );
-            return;
         }
         let current_invariants = invariants_from_geometry_rhs(
             stepped.state,
@@ -863,18 +795,12 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
             next_rhs,
         );
         if current_invariants.flags != 0u {
-            store_trace_result(
-                index,
-                pixel,
-                TERMINATION_NUMERICAL_FAILURE,
+            return failure_result(
                 current_invariants.flags,
                 step_index + 1u,
-                0.0,
-                vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
             );
-            return;
         }
         travel_time += abs(stepped.state.position.x - state.position.x);
         maximum_drift = max(
@@ -886,9 +812,7 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         state_rhs = next_rhs;
     }
 
-    store_trace_result(
-        index,
-        pixel,
+    return TraceResult(
         TERMINATION_STEP_EXHAUSTION,
         0u,
         MAXIMUM_STEPS,
@@ -897,4 +821,17 @@ fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
         travel_time,
         maximum_drift,
     );
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let extent = textureDimensions(scene_hdr);
+    let local_index = global_id.y * 8u + global_id.x;
+    let index = trace_dispatch.pixels.x + local_index;
+    if index >= extent.x * extent.y {
+        return;
+    }
+    let pixel = vec2<u32>(index % extent.x, index / extent.x);
+    let result = trace_pixel(pixel, extent);
+    store_scene_result(pixel, result.termination, result.direction);
 }

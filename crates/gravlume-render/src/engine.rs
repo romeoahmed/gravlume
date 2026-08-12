@@ -8,7 +8,7 @@ use crate::{
         BASELINE_FEATURES, DisplayState, OutputMode, SurfaceSelection, check_baseline_adapter,
         required_device_limits, select_surface,
     },
-    display::{CandidatePublication, DisplayPipeline, DisplayTarget, PublishedScene, UI_FORMAT},
+    display::{DisplayPipeline, DisplayTarget, PublishedScene, ScenePresentation, UI_FORMAT},
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     gpu_error::{
         DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
@@ -17,14 +17,13 @@ use crate::{
     timing::GpuTimings,
     trace::{
         TRACE_WORKGROUP_HEIGHT, TRACE_WORKGROUP_WIDTH, TraceCompute, TracePixels, TraceTarget,
-        trace_record_plane_size,
     },
 };
 
-const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 2_560 * 1_440;
-const FRAME_RESOURCE_BYTES_PER_PIXEL: u64 = 3 * 16 + 8 + 8 + 4;
-const MAXIMUM_FRAME_RESOURCE_BYTES: u64 =
-    MAXIMUM_NATIVE_TRACE_PIXELS * FRAME_RESOURCE_BYTES_PER_PIXEL;
+const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 3_840 * 2_160;
+const HDR_BYTES_PER_PIXEL: u64 = 8;
+const UI_BYTES_PER_PIXEL: u64 = 4;
+const MAXIMUM_CORE_RESOURCE_BYTES: u64 = 256 * 1024 * 1024;
 const INITIAL_TRACE_PIXELS_PER_BATCH: u32 = 32_768;
 const TARGET_TRACE_BATCH_MS: f64 = 32.0;
 const MAXIMUM_TRACE_BATCH_MS: f64 = 50.0;
@@ -51,15 +50,26 @@ pub enum FrameStatus {
 
 #[derive(Debug, Default)]
 pub struct PollOutcome {
-    completed_readback: bool,
+    published_generation: Option<u64>,
+    completed_present_generation: Option<u64>,
     events: Vec<DeviceEvent>,
 }
 
 impl PollOutcome {
     #[must_use]
-    pub fn into_parts(self) -> (bool, Vec<DeviceEvent>) {
-        (self.completed_readback, self.events)
+    pub fn into_parts(self) -> (Option<u64>, Option<u64>, Vec<DeviceEvent>) {
+        (
+            self.published_generation,
+            self.completed_present_generation,
+            self.events,
+        )
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TraceAdvance {
+    Submitted,
+    Idle,
 }
 
 pub struct RenderDiagnostics<'a> {
@@ -139,8 +149,8 @@ impl RenderDiagnostics<'_> {
 
 struct FrameResources {
     candidate: Option<TraceCandidate>,
-    published: PublishedScene,
     display: DisplayTarget,
+    presentation: ScenePresentation,
     presentation_extent: RenderExtent,
     completed_batches: u32,
     total_compute_ms: f64,
@@ -149,8 +159,13 @@ struct FrameResources {
 
 struct TraceCandidate {
     trace: TraceTarget,
-    publication: CandidatePublication,
+    completed_presentation: ScenePresentation,
     progress: TraceProgress,
+}
+
+struct CompletedCandidate {
+    view: wgpu::TextureView,
+    presentation: ScenePresentation,
 }
 
 #[derive(Debug)]
@@ -158,6 +173,7 @@ struct TraceProgress {
     total_pixels: u32,
     next_pixel: u32,
     pixels_per_batch: u32,
+    maximum_batch_pixels: u32,
     in_flight: Option<TracePixels>,
     completed_batches: u32,
     total_compute_ms: f64,
@@ -182,21 +198,70 @@ struct TraceSubmission {
     extent_generation: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CoreResourcePlan {
+    published: u64,
+    installed_frame: u64,
+    replacement_frame: u64,
+}
+
+impl CoreResourcePlan {
+    const fn without_installed_frame(published: RenderExtent, replacement: RenderExtent) -> Self {
+        Self {
+            published: extent_pixels(published),
+            installed_frame: 0,
+            replacement_frame: extent_pixels(replacement),
+        }
+    }
+
+    const fn rebuild(
+        published: RenderExtent,
+        installed_frame: RenderExtent,
+        replacement: RenderExtent,
+    ) -> Self {
+        Self {
+            published: extent_pixels(published),
+            installed_frame: extent_pixels(installed_frame),
+            replacement_frame: extent_pixels(replacement),
+        }
+    }
+
+    const fn required_bytes(self) -> u64 {
+        self.published
+            .saturating_mul(HDR_BYTES_PER_PIXEL)
+            .saturating_add(
+                self.installed_frame
+                    .saturating_mul(HDR_BYTES_PER_PIXEL + UI_BYTES_PER_PIXEL),
+            )
+            .saturating_add(
+                self.replacement_frame
+                    .saturating_mul(HDR_BYTES_PER_PIXEL + UI_BYTES_PER_PIXEL),
+            )
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TraceCompletion {
+    Stale,
+    Pending,
+    Ready,
+}
+
 impl FrameResources {
     fn new(
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
         trace: &TraceCompute,
         display: &DisplayPipeline,
+        published: &PublishedScene,
         extent: RenderExtent,
     ) -> Self {
         let display_target = DisplayPipeline::create_target(device, extent);
-        let published = display.create_published_scene(device, queue, &display_target, extent);
-        let candidate = Self::create_candidate(device, trace, display, extent);
+        let presentation = display.bind_scene(device, published.view(), &display_target);
+        let candidate = Self::create_candidate(device, trace, display, &display_target, extent);
         Self {
             candidate: Some(candidate),
-            published,
             display: display_target,
+            presentation,
             presentation_extent: extent,
             completed_batches: 0,
             total_compute_ms: 0.0,
@@ -208,14 +273,18 @@ impl FrameResources {
         device: &wgpu::Device,
         trace: &TraceCompute,
         display: &DisplayPipeline,
+        display_target: &DisplayTarget,
         extent: RenderExtent,
     ) -> TraceCandidate {
         let trace = trace.create_target(device, extent);
-        let publication = display.bind_candidate(device, trace.view());
+        let completed_presentation = display.bind_scene(device, trace.view(), display_target);
         TraceCandidate {
             trace,
-            publication,
-            progress: TraceProgress::new(extent),
+            completed_presentation,
+            progress: TraceProgress::new(
+                extent,
+                device.limits().max_compute_workgroups_per_dimension,
+            ),
         }
     }
 
@@ -229,29 +298,36 @@ impl FrameResources {
         }
     }
 
-    fn publishes(&self, batch: TracePixels) -> bool {
-        self.candidate
-            .as_ref()
-            .is_some_and(|candidate| batch.start() + batch.len() == candidate.progress.total_pixels)
-    }
-
-    fn completed(&mut self, compute_ms: f64) -> bool {
-        let candidate_complete = self.candidate.as_mut().is_some_and(|candidate| {
-            candidate.progress.completed(compute_ms);
-            candidate.progress.is_complete()
-        });
+    fn complete_submission(
+        &mut self,
+        submission: TraceSubmission,
+        current_generation: u64,
+        compute_ms: f64,
+    ) -> Option<CompletedCandidate> {
+        let completion = self
+            .candidate
+            .as_mut()
+            .map_or(TraceCompletion::Stale, |candidate| {
+                candidate
+                    .progress
+                    .complete_submission(submission, current_generation, compute_ms)
+            });
+        if completion == TraceCompletion::Stale {
+            return None;
+        }
         self.completed_batches += 1;
         if compute_ms.is_finite() {
             self.total_compute_ms += compute_ms;
             self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
         }
-        candidate_complete
-    }
-
-    fn release_completed_candidate(&mut self) {
-        // Timestamp readback proves the publication submission is complete and the native-sized
-        // candidate may be released. Incomplete candidates are never displayable.
-        self.candidate = None;
+        if completion != TraceCompletion::Ready {
+            return None;
+        }
+        let candidate = self.candidate.take()?;
+        Some(CompletedCandidate {
+            view: candidate.trace.view().clone(),
+            presentation: candidate.completed_presentation,
+        })
     }
 
     fn diagnostics(&self) -> TraceProgressDiagnostics {
@@ -276,11 +352,17 @@ impl FrameResources {
 }
 
 impl TraceProgress {
-    const fn new(extent: RenderExtent) -> Self {
+    const fn new(extent: RenderExtent, maximum_workgroups: u32) -> Self {
+        let maximum_batch_pixels = maximum_workgroups.saturating_mul(TRACE_WORKGROUP_PIXELS);
         Self {
             total_pixels: extent.width() * extent.height(),
             next_pixel: 0,
-            pixels_per_batch: INITIAL_TRACE_PIXELS_PER_BATCH,
+            pixels_per_batch: if INITIAL_TRACE_PIXELS_PER_BATCH < maximum_batch_pixels {
+                INITIAL_TRACE_PIXELS_PER_BATCH
+            } else {
+                maximum_batch_pixels
+            },
+            maximum_batch_pixels,
             in_flight: None,
             completed_batches: 0,
             total_compute_ms: 0.0,
@@ -327,10 +409,27 @@ impl TraceProgress {
         };
         let scaled = (f64::from(batch.len()) * scale).round().clamp(
             f64::from(TRACE_WORKGROUP_PIXELS),
-            f64::from(self.total_pixels),
+            f64::from(self.total_pixels.min(self.maximum_batch_pixels)),
         );
         let scaled = scaled.to_u32().unwrap_or(self.total_pixels);
         self.pixels_per_batch = scaled.div_ceil(TRACE_WORKGROUP_PIXELS) * TRACE_WORKGROUP_PIXELS;
+    }
+
+    fn complete_submission(
+        &mut self,
+        submission: TraceSubmission,
+        current_generation: u64,
+        compute_ms: f64,
+    ) -> TraceCompletion {
+        if submission.extent_generation != current_generation {
+            return TraceCompletion::Stale;
+        }
+        self.completed(compute_ms);
+        if self.is_complete() {
+            TraceCompletion::Ready
+        } else {
+            TraceCompletion::Pending
+        }
     }
 
     const fn is_complete(&self) -> bool {
@@ -401,13 +500,14 @@ pub struct GpuEngine {
     display_state: DisplayState,
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
+    published_scene: PublishedScene,
     trace: TraceCompute,
     display: DisplayPipeline,
     egui_renderer: egui_wgpu::Renderer,
     timings: GpuTimings,
     trace_submission: Option<TraceSubmission>,
+    pending_present_generation: Option<u64>,
     diagnostic_labels: DiagnosticLabels,
-    device_event_sender: mpsc::Sender<DeviceEvent>,
     device_events: mpsc::Receiver<DeviceEvent>,
 }
 
@@ -459,10 +559,11 @@ impl GpuEngine {
             })
             .await?;
 
-        let (device_event_sender, device_events) = install_device_callbacks(&device);
+        let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = TraceCompute::new(&device, observation)?;
         let display = DisplayPipeline::new(&device, selection);
+        let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui_renderer =
             egui_wgpu::Renderer::new(&device, UI_FORMAT, egui_wgpu::RendererOptions::default());
         let timings = GpuTimings::new(&device);
@@ -479,13 +580,14 @@ impl GpuEngine {
             display_state,
             extent: ExtentTracker::default(),
             frame_resources: None,
+            published_scene,
             trace,
             display,
             egui_renderer,
             timings,
             trace_submission: None,
+            pending_present_generation: None,
             diagnostic_labels,
-            device_event_sender,
             device_events,
         };
         let resize_result = engine.resize(initial_size.width, initial_size.height);
@@ -507,15 +609,21 @@ impl GpuEngine {
     /// Returns a typed error without changing the installed extent generation or frame-resource
     /// bundle when the requested extent, surface configuration, or GPU allocation is invalid.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ResizeError> {
+        // Native resize events can continue while the application has no surface. The desktop
+        // reapplies the latest physical window size after resume; allocating here would let
+        // successive replacements overlap resources retained by an in-flight submission.
+        if self.surface_suspended {
+            return Ok(());
+        }
         let (candidate_extent, change) = self.extent.updated(width, height);
         match change {
             ExtentChange::Unchanged => return Ok(()),
             ExtentChange::Paused => {
                 self.extent = candidate_extent;
-                self.frame_resources = None;
             }
             ExtentChange::Rebuild { extent, .. } => {
-                validate_render_extent(extent, &self.device.limits())?;
+                let resource_plan = self.resource_plan_for_rebuild(extent);
+                validate_render_extent(extent, &self.device.limits(), resource_plan)?;
                 let selection = if let Some(surface) = &self.surface {
                     let capabilities = surface.get_capabilities(&self.adapter);
                     select_surface(&capabilities, self.display_state)?
@@ -529,9 +637,9 @@ impl GpuEngine {
                     scoped_gpu_operation(&self.device, || {
                         let replacement = FrameResources::new(
                             &self.device,
-                            &self.queue,
                             &self.trace,
                             &self.display,
+                            &self.published_scene,
                             extent,
                         );
                         let presentation_pipeline = pipeline_changed.then(|| {
@@ -556,12 +664,13 @@ impl GpuEngine {
                 self.install_surface_selection(selection, presentation_pipeline);
                 self.extent = candidate_extent;
                 self.frame_resources = Some(replacement);
+                self.pending_present_generation = None;
             }
         }
         Ok(())
     }
 
-    /// Encodes, submits, and presents one complete frame transaction.
+    /// Encodes and presents the latest complete scene with the current UI.
     ///
     /// # Errors
     ///
@@ -618,27 +727,6 @@ impl GpuEngine {
             .frame_resources
             .as_mut()
             .ok_or(RenderRuntimeError::MissingFrameResources)?;
-        let trace_batch = self
-            .timings
-            .capture_available()
-            .then(|| frame.next_batch())
-            .flatten();
-        if let Some(batch) = trace_batch
-            && let Some(candidate) = frame.candidate.as_ref()
-        {
-            self.trace.encode(
-                &self.queue,
-                &mut encoder,
-                &candidate.trace,
-                batch,
-                Some(self.timings.compute_writes()),
-            );
-        }
-        let publishes_candidate = trace_batch.is_some_and(|batch| frame.publishes(batch));
-        if publishes_candidate && let Some(candidate) = frame.candidate.as_ref() {
-            self.display
-                .encode_publication(&mut encoder, &frame.published, &candidate.publication);
-        }
         encode_egui(
             &self.egui_renderer,
             &mut encoder,
@@ -647,28 +735,63 @@ impl GpuEngine {
             &screen,
         );
         self.display
-            .encode_presentation(&mut encoder, &surface_view, &frame.published);
-        if trace_batch.is_some() {
-            self.timings.encode_resolve(&mut encoder);
-        }
+            .encode_presentation(&mut encoder, &surface_view, &frame.presentation);
         let main_buffer = encoder.finish();
         self.queue
             .submit(callback_buffers.into_iter().chain([main_buffer]));
         free_egui_textures_after_submit(&mut self.egui_renderer, textures_delta);
-        if let Some(batch) = trace_batch {
-            frame.submitted(batch);
-            self.timings.begin_readback();
-            self.trace_submission = Some(TraceSubmission {
-                extent_generation: self.extent.generation(),
-            });
-        }
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
+        self.pending_present_generation = self.published_scene.generation();
 
         if reconfigure_after_present {
-            self.reconfigure_surface(extent)?;
+            self.reconfigure_surface(extent, true)?;
         }
         Ok(FrameStatus::Presented)
+    }
+
+    /// Submits one hidden full-resolution trace batch without acquiring or presenting a surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when size-dependent resources are unavailable.
+    pub fn advance_trace(&mut self) -> Result<TraceAdvance, RenderRuntimeError> {
+        if self.surface_suspended
+            || self.extent.extent().is_none()
+            || !self.timings.capture_available()
+        {
+            return Ok(TraceAdvance::Idle);
+        }
+        let Some(frame) = self.frame_resources.as_mut() else {
+            return Ok(TraceAdvance::Idle);
+        };
+        let Some(batch) = frame.next_batch() else {
+            return Ok(TraceAdvance::Idle);
+        };
+        let candidate = frame
+            .candidate
+            .as_ref()
+            .ok_or(RenderRuntimeError::MissingFrameResources)?;
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Gravlume trace encoder"),
+            });
+        self.trace.encode(
+            &self.queue,
+            &mut encoder,
+            &candidate.trace,
+            batch,
+            Some(self.timings.compute_writes()),
+        );
+        self.timings.encode_resolve(&mut encoder);
+        self.queue.submit([encoder.finish()]);
+        frame.submitted(batch);
+        self.timings.begin_readback();
+        self.trace_submission = Some(TraceSubmission {
+            extent_generation: self.extent.generation(),
+        });
+        Ok(TraceAdvance::Submitted)
     }
 
     /// Advances pending GPU work without blocking the event loop.
@@ -677,42 +800,53 @@ impl GpuEngine {
     ///
     /// Returns an error when device polling or timestamp readback fails.
     pub fn poll(&mut self) -> Result<PollOutcome, RenderRuntimeError> {
+        let mut poll_status = None;
         let timing = if self.timings.has_pending_readback() {
             self.timings
                 .poll(&self.device, self.queue.get_timestamp_period())?
         } else {
-            self.device.poll(wgpu::PollType::Poll)?;
+            poll_status = Some(self.device.poll(wgpu::PollType::Poll)?);
             None
         };
+        let mut published_generation = None;
         if let Some(timing) = timing {
             let submission = self.trace_submission.take();
-            if submission
-                .is_some_and(|submission| submission.extent_generation == self.extent.generation())
+            let generation = self.extent.generation();
+            if let Some(submission) = submission
                 && let Some(frame) = self.frame_resources.as_mut()
-                && frame.completed(timing.compute_ms())
+                && let Some(completed) =
+                    frame.complete_submission(submission, generation, timing.compute_ms())
             {
-                frame.release_completed_candidate();
+                let extent = frame.presentation_extent;
+                self.published_scene =
+                    PublishedScene::from_candidate(completed.view, extent, generation);
+                frame.presentation = completed.presentation;
+                published_generation = Some(generation);
             }
         }
+        let completed_present_generation = poll_status
+            .is_some_and(|status| status.is_queue_empty())
+            .then(|| self.pending_present_generation.take())
+            .flatten();
         let events = self.device_events.try_iter().collect();
         Ok(PollOutcome {
-            completed_readback: timing.is_some(),
+            published_generation,
+            completed_present_generation,
             events,
         })
     }
 
     pub const fn has_pending_gpu_work(&self) -> bool {
-        self.timings.has_pending_readback()
+        self.timings.has_pending_readback() || self.pending_present_generation.is_some()
     }
 
-    pub fn trace_is_complete(&self) -> bool {
-        self.frame_resources
-            .as_ref()
-            .is_none_or(|frame| frame.candidate.is_none())
+    pub const fn extent_generation(&self) -> u64 {
+        self.extent.generation()
     }
 
-    pub fn trace_needs_redraw(&self) -> bool {
+    pub fn trace_can_advance(&self) -> bool {
         !self.surface_suspended
+            && self.extent.extent().is_some()
             && self.timings.capture_available()
             && self
                 .frame_resources
@@ -731,10 +865,10 @@ impl GpuEngine {
     ///
     /// Returns an error when the native surface cannot be recreated or its capabilities changed.
     pub fn resume_surface(&mut self) -> Result<(), RenderRuntimeError> {
-        self.surface_suspended = false;
         if self.surface.is_none() {
             self.recreate_surface()?;
         }
+        self.surface_suspended = false;
         Ok(())
     }
 
@@ -763,10 +897,13 @@ impl GpuEngine {
         display_state: DisplayState,
     ) -> Result<(), RenderRuntimeError> {
         self.display_state = display_state;
+        if self.surface_suspended {
+            return Ok(());
+        }
         let Some(extent) = self.extent.extent() else {
             return Ok(());
         };
-        let _ = self.reconfigure_surface(extent)?;
+        self.reconfigure_surface(extent, false)?;
         Ok(())
     }
 
@@ -780,11 +917,8 @@ impl GpuEngine {
                 return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Suspended));
             }
             None => {
-                return Ok(PreparedSurfaceFrame::Skip(if self.recreate_surface()? {
-                    FrameSkip::Lost
-                } else {
-                    FrameSkip::Validation
-                }));
+                self.recreate_surface()?;
+                return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Lost));
             }
         };
 
@@ -802,18 +936,12 @@ impl GpuEngine {
                 PreparedSurfaceFrame::Skip(FrameSkip::Occluded)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
-                PreparedSurfaceFrame::Skip(if self.reconfigure_surface(extent)? {
-                    FrameSkip::Outdated
-                } else {
-                    FrameSkip::Validation
-                })
+                self.reconfigure_surface(extent, true)?;
+                PreparedSurfaceFrame::Skip(FrameSkip::Outdated)
             }
             wgpu::CurrentSurfaceTexture::Lost => {
-                PreparedSurfaceFrame::Skip(if self.recreate_surface()? {
-                    FrameSkip::Lost
-                } else {
-                    FrameSkip::Validation
-                })
+                self.recreate_surface()?;
+                PreparedSurfaceFrame::Skip(FrameSkip::Lost)
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 PreparedSurfaceFrame::Skip(FrameSkip::Validation)
@@ -822,66 +950,76 @@ impl GpuEngine {
         Ok(frame)
     }
 
-    fn reconfigure_surface(&mut self, extent: RenderExtent) -> Result<bool, RenderRuntimeError> {
-        let Some(surface) = self.surface.as_ref() else {
-            return Ok(false);
-        };
+    fn reconfigure_surface(
+        &mut self,
+        extent: RenderExtent,
+        force: bool,
+    ) -> Result<(), RenderRuntimeError> {
+        let surface = self
+            .surface
+            .as_ref()
+            .ok_or(RenderRuntimeError::MissingPresentationSurface)?;
         let capabilities = surface.get_capabilities(&self.adapter);
-        let Some(update) = self.prepare_runtime_surface_update(&capabilities)? else {
-            return Ok(false);
-        };
-        if surface_configuration_changed(self.selection, update.selection)
-            && let Err(error) =
+        let update = self.prepare_runtime_surface_update(&capabilities)?;
+        if (force || surface_configuration_changed(self.selection, update.selection))
+            && let Err(source) =
                 configure_surface_scoped(surface, &self.device, update.selection, extent)
         {
-            self.enqueue_device_event(DeviceEvent::from_wgpu(
-                "failed to configure the presentation surface",
-                error,
-            ));
-            return Ok(false);
+            return Err(RenderRuntimeError::GpuResource {
+                stage: "configure the presentation surface",
+                source,
+            });
         }
         self.install_surface_selection(update.selection, update.presentation_pipeline);
-        Ok(true)
+        Ok(())
     }
 
-    fn recreate_surface(&mut self) -> Result<bool, RenderRuntimeError> {
+    fn resource_plan_for_rebuild(&self, replacement: RenderExtent) -> CoreResourcePlan {
+        let published = self.published_scene.extent();
+        self.frame_resources
+            .as_ref()
+            .map(|frame| frame.presentation_extent)
+            .map_or_else(
+                || CoreResourcePlan::without_installed_frame(published, replacement),
+                |installed_frame| {
+                    CoreResourcePlan::rebuild(published, installed_frame, replacement)
+                },
+            )
+    }
+
+    fn recreate_surface(&mut self) -> Result<(), RenderRuntimeError> {
         let replacement = self.instance.create_surface(Arc::clone(&self.window))?;
         let capabilities = replacement.get_capabilities(&self.adapter);
-        let Some(update) = self.prepare_runtime_surface_update(&capabilities)? else {
-            return Ok(false);
-        };
+        let update = self.prepare_runtime_surface_update(&capabilities)?;
         if let Some(extent) = self.extent.extent()
-            && let Err(error) =
+            && let Err(source) =
                 configure_surface_scoped(&replacement, &self.device, update.selection, extent)
         {
-            let event =
-                DeviceEvent::from_wgpu("failed to configure the presentation surface", error);
-            self.enqueue_device_event(event);
-            return Ok(false);
+            return Err(RenderRuntimeError::GpuResource {
+                stage: "configure the recreated presentation surface",
+                source,
+            });
         }
         self.install_surface_selection(update.selection, update.presentation_pipeline);
         self.surface = Some(replacement);
-        Ok(true)
+        Ok(())
     }
 
     fn prepare_runtime_surface_update(
         &self,
         capabilities: &wgpu::SurfaceCapabilities,
-    ) -> Result<Option<SurfaceUpdate>, RenderRuntimeError> {
+    ) -> Result<SurfaceUpdate, RenderRuntimeError> {
         let selection = select_surface(capabilities, self.display_state)?;
-        match self.create_presentation_pipeline_if_needed(selection) {
-            Ok(presentation_pipeline) => Ok(Some(SurfaceUpdate {
-                selection,
-                presentation_pipeline,
-            })),
-            Err(error) => {
-                self.enqueue_device_event(DeviceEvent::from_wgpu(
-                    "failed to rebuild surface presentation pipeline",
-                    error,
-                ));
-                Ok(None)
-            }
-        }
+        let presentation_pipeline = self
+            .create_presentation_pipeline_if_needed(selection)
+            .map_err(|source| RenderRuntimeError::GpuResource {
+                stage: "rebuild the surface presentation pipeline",
+                source,
+            })?;
+        Ok(SurfaceUpdate {
+            selection,
+            presentation_pipeline,
+        })
     }
 
     fn create_presentation_pipeline_if_needed(
@@ -910,15 +1048,13 @@ impl GpuEngine {
         self.selection = selection;
         self.diagnostic_labels.update_surface(selection);
     }
-
-    fn enqueue_device_event(&self, event: DeviceEvent) {
-        if self.device_event_sender.send(event).is_err() {
-            tracing::debug!("device event receiver dropped");
-        }
-    }
 }
 
-fn validate_render_extent(extent: RenderExtent, limits: &wgpu::Limits) -> Result<(), ResizeError> {
+const fn validate_render_extent(
+    extent: RenderExtent,
+    limits: &wgpu::Limits,
+    resource_plan: CoreResourcePlan,
+) -> Result<(), ResizeError> {
     if extent.width() > limits.max_texture_dimension_2d
         || extent.height() > limits.max_texture_dimension_2d
     {
@@ -928,29 +1064,27 @@ fn validate_render_extent(extent: RenderExtent, limits: &wgpu::Limits) -> Result
             max_texture_dimension_2d: limits.max_texture_dimension_2d,
         });
     }
-    let pixels = u64::from(extent.width()) * u64::from(extent.height());
-    let required_bytes = pixels.saturating_mul(FRAME_RESOURCE_BYTES_PER_PIXEL);
-    if required_bytes > MAXIMUM_FRAME_RESOURCE_BYTES {
+    if extent_pixels(extent) > MAXIMUM_NATIVE_TRACE_PIXELS {
+        return Err(ResizeError::NativePixelBudget {
+            width: extent.width(),
+            height: extent.height(),
+            maximum_pixels: MAXIMUM_NATIVE_TRACE_PIXELS,
+        });
+    }
+    let required_bytes = resource_plan.required_bytes();
+    if required_bytes > MAXIMUM_CORE_RESOURCE_BYTES {
         return Err(ResizeError::FrameResourceBudget {
             width: extent.width(),
             height: extent.height(),
             required_bytes,
-            maximum_bytes: MAXIMUM_FRAME_RESOURCE_BYTES,
-        });
-    }
-    let required_bytes = trace_record_plane_size(extent);
-    if required_bytes > limits.max_storage_buffer_binding_size
-        || required_bytes > limits.max_buffer_size
-    {
-        return Err(ResizeError::TraceRecordLimit {
-            width: extent.width(),
-            height: extent.height(),
-            required_bytes,
-            max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
-            max_buffer_size: limits.max_buffer_size,
+            maximum_bytes: MAXIMUM_CORE_RESOURCE_BYTES,
         });
     }
     Ok(())
+}
+
+const fn extent_pixels(extent: RenderExtent) -> u64 {
+    extent.width() as u64 * extent.height() as u64
 }
 
 fn surface_configuration_changed(current: SurfaceSelection, next: SurfaceSelection) -> bool {
@@ -1026,7 +1160,8 @@ fn free_egui_textures_after_submit(
 #[cfg(test)]
 mod tests {
     use super::{
-        INITIAL_TRACE_PIXELS_PER_BATCH, MAXIMUM_FRAME_RESOURCE_BYTES, ResizeError, TraceProgress,
+        CoreResourcePlan, INITIAL_TRACE_PIXELS_PER_BATCH, MAXIMUM_CORE_RESOURCE_BYTES,
+        MAXIMUM_NATIVE_TRACE_PIXELS, ResizeError, TraceCompletion, TraceProgress, TraceSubmission,
         validate_render_extent,
     };
     use crate::extent::RenderExtent;
@@ -1035,7 +1170,10 @@ mod tests {
     fn trace_progress_covers_a_generation_once_with_bounded_batches() {
         let extent =
             RenderExtent::new(INITIAL_TRACE_PIXELS_PER_BATCH + 13, 2).expect("extent is nonzero");
-        let mut progress = TraceProgress::new(extent);
+        let mut progress = TraceProgress::new(
+            extent,
+            wgpu::Limits::default().max_compute_workgroups_per_dimension,
+        );
         let mut covered = 0;
 
         while let Some(batch) = progress.next_batch() {
@@ -1057,27 +1195,106 @@ mod tests {
     }
 
     #[test]
-    fn resize_accepts_the_native_trace_budget_boundary() {
-        let limits = wgpu::Limits::default();
-        let extent = RenderExtent::new(2_560, 1_440).expect("extent is nonzero");
+    fn publication_gate_requires_the_complete_current_generation() {
+        let extent =
+            RenderExtent::new(INITIAL_TRACE_PIXELS_PER_BATCH + 13, 2).expect("extent is nonzero");
+        let mut progress = TraceProgress::new(
+            extent,
+            wgpu::Limits::default().max_compute_workgroups_per_dimension,
+        );
+        let submission = TraceSubmission {
+            extent_generation: 7,
+        };
+        let mut covered = 0;
 
-        assert!(validate_render_extent(extent, &limits).is_ok());
+        while let Some(batch) = progress.next_batch() {
+            progress.submitted(batch);
+            covered += batch.len();
+            let expected = if covered == extent.width() * extent.height() {
+                TraceCompletion::Ready
+            } else {
+                TraceCompletion::Pending
+            };
+            assert_eq!(
+                progress.complete_submission(submission, 7, super::TARGET_TRACE_BATCH_MS),
+                expected
+            );
+        }
+
+        let stale_extent = RenderExtent::new(1, 1).expect("extent is nonzero");
+        let mut stale = TraceProgress::new(
+            stale_extent,
+            wgpu::Limits::default().max_compute_workgroups_per_dimension,
+        );
+        let batch = stale
+            .next_batch()
+            .expect("one pixel requires one submission");
+        stale.submitted(batch);
+        assert_eq!(
+            stale.complete_submission(submission, 8, super::TARGET_TRACE_BATCH_MS),
+            TraceCompletion::Stale
+        );
     }
 
     #[test]
-    fn resize_rejects_4k_native_trace_before_allocation() {
+    fn core_resource_budget_accounts_for_transactional_4k_rebuild() {
         let limits = wgpu::Limits::default();
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
+        let initial = CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent);
+        let rebuild = CoreResourcePlan::rebuild(extent, extent, extent);
+        let cold_rebuild = CoreResourcePlan::rebuild(RenderExtent::ONE, extent, extent);
+
+        assert_eq!(super::extent_pixels(extent), MAXIMUM_NATIVE_TRACE_PIXELS);
+        assert!(initial.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
+        assert!(validate_render_extent(extent, &limits, initial).is_ok());
+        assert_eq!(
+            cold_rebuild.required_bytes(),
+            8 + 2 * MAXIMUM_NATIVE_TRACE_PIXELS * (8 + 4)
+        );
+        assert!(validate_render_extent(extent, &limits, cold_rebuild).is_ok());
+        assert_eq!(
+            rebuild.required_bytes(),
+            MAXIMUM_NATIVE_TRACE_PIXELS * (8 + 12 + 12)
+        );
+        assert!(rebuild.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
+        assert!(validate_render_extent(extent, &limits, rebuild).is_ok());
+    }
+
+    #[test]
+    fn resize_rejects_pixels_beyond_the_native_4k_policy() {
+        let limits = wgpu::Limits::default();
+        let extent = RenderExtent::new(3_840, 2_161).expect("extent is nonzero");
 
         assert!(matches!(
-            validate_render_extent(extent, &limits),
-            Err(ResizeError::FrameResourceBudget {
+            validate_render_extent(
+                extent,
+                &limits,
+                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent),
+            ),
+            Err(ResizeError::NativePixelBudget {
                 width: 3_840,
-                height: 2_160,
-                maximum_bytes: MAXIMUM_FRAME_RESOURCE_BYTES,
-                ..
+                height: 2_161,
+                maximum_pixels: MAXIMUM_NATIVE_TRACE_PIXELS,
             })
         ));
+    }
+
+    #[test]
+    fn trace_batches_respect_the_device_dispatch_dimension_at_4k() {
+        let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
+        let maximum_workgroups = 512;
+        let maximum_batch_pixels = maximum_workgroups * super::TRACE_WORKGROUP_PIXELS;
+        let mut progress = TraceProgress::new(extent, maximum_workgroups);
+        let mut covered = 0;
+
+        while let Some(batch) = progress.next_batch() {
+            assert!(batch.len() <= maximum_batch_pixels);
+            progress.submitted(batch);
+            covered += batch.len();
+            progress.completed(f64::MIN_POSITIVE);
+        }
+
+        assert_eq!(covered, extent.width() * extent.height());
     }
 
     #[test]
@@ -1088,7 +1305,11 @@ mod tests {
         let too_tall = RenderExtent::new(1, maximum + 1).expect("extent is nonzero");
 
         assert!(matches!(
-            validate_render_extent(too_wide, &limits),
+            validate_render_extent(
+                too_wide,
+                &limits,
+                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, too_wide),
+            ),
             Err(ResizeError::ExtentLimit {
                 width,
                 height: 1,
@@ -1096,7 +1317,11 @@ mod tests {
             }) if width == maximum + 1 && max_texture_dimension_2d == maximum
         ));
         assert!(matches!(
-            validate_render_extent(too_tall, &limits),
+            validate_render_extent(
+                too_tall,
+                &limits,
+                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, too_tall),
+            ),
             Err(ResizeError::ExtentLimit {
                 width: 1,
                 height,

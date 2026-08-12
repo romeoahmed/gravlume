@@ -2,8 +2,9 @@ pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
 /// Resolves the exact limits consumed by the native renderer.
 ///
-/// Buffer limits remain at the WebGPU baseline because every trace plane fits within that project
-/// contract. Requesting adapter maxima would turn hardware capability into an allocation policy.
+/// Buffer limits remain at the WebGPU baseline because production tracing does not require a
+/// viewport-sized storage buffer. Requesting adapter maxima would turn hardware capability into an
+/// allocation policy.
 /// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html#method.using_resolution>
 pub fn required_device_limits(adapter: wgpu::Limits) -> wgpu::Limits {
     wgpu::Limits::default()
@@ -166,7 +167,6 @@ pub fn check_baseline_adapter(
 
     let required_hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
         | wgpu::TextureUsages::TEXTURE_BINDING
-        | wgpu::TextureUsages::COPY_SRC
         | wgpu::TextureUsages::RENDER_ATTACHMENT;
     let missing_usages = required_hdr_usages.difference(hdr_allowed_usages);
     if !missing_usages.is_empty() {
@@ -406,7 +406,6 @@ mod tests {
     fn adapter_gate_enforces_the_native_release_contract() {
         let required_hdr_usages = wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::RENDER_ATTACHMENT;
         let cases = [
             (
@@ -442,9 +441,7 @@ mod tests {
                 BASELINE_FEATURES,
                 wgpu::TextureUsages::TEXTURE_BINDING,
                 Err(CapabilityError::MissingHdrTextureUsages(
-                    wgpu::TextureUsages::STORAGE_BINDING
-                        | wgpu::TextureUsages::COPY_SRC
-                        | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                    wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 )),
             ),
             (

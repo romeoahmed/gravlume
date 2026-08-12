@@ -342,7 +342,8 @@ renderer 内部资源分三层：
 
 - `DeviceResources`：device/queue、shader、layout、pipeline、sampler，直到 device lost；只有无状态的最终 presentation pipeline 随 surface format 换代；
 - `SceneResources`：sky/disk/LUT、scene buffer，随 geometry/transport/asset generation；
-- `FrameResources`：hidden candidate、complete published HDR、透明 gamma UI、coarse/history/bloom 与 readback ring，随 extent/quality generation。
+- `PublishedScene`：独立持有上一张完整 HDR 与 generation，跨 resize 保留；
+- `FrameResources`：hidden candidate、透明 gamma UI、presentation binding、coarse/history/bloom 与 readback ring，随 extent/quality generation。
 
 重建使用 two-phase install：先完整创建新 bundle、验证 binding，再原子 swap；失败时保留旧 bundle并报告事件。旧 wgpu handle 可由引用计数延寿到已提交 command 完成，但显存预算必须测新旧两套并存的峰值。
 
@@ -352,7 +353,7 @@ renderer 内部资源分三层：
 
 1. 安装 `textures_delta.set`；
 2. 调 `Renderer::update_buffers` 并收集 paint callback command buffers；
-3. 编码 scene compute；只有完整 candidate 才发布到 FP16 scene；
+3. scene compute 由无 surface 的有界 batch 独立提交；完整且 generation 匹配的 candidate 才提升为 FP16 published scene；
 4. clear 固定 `Rgba8Unorm` UI target，并调用 `Renderer::render`；
 5. final pass 解码 premultiplied gamma UI，按 reference white 在线性空间与 tone-mapped scene 合成并写当前 surface；surface contract 改变时只事务式替换 presentation pipeline/uniform；
 6. 按 `update_buffers` 返回顺序提交 callback buffers 和 main buffer；
@@ -421,6 +422,8 @@ CPU `tracing` 字段至少包含 frame、generation、adapter/backend、surface 
 - reference/capture 只服从 error budget，不声称实时。
 
 每份性能 artifact 固定 target、OS、adapter、driver、power mode、build profile、scene fingerprint、extent、shader/feature variant、warm-up、样本数、p50/p95 和 GPU memory peak。A/B 在运行前定义最小收益与字段误差预算；timestamp 只能报告查询点之间的 GPU 时间，register pressure 或 memory traffic 只有在记录具名 vendor profiler/offline compiler 与可复现采集方法时才作为附加证据。
+
+Phase 2 的 presentation tracer 不常驻科学 capture records：新 generation 只包含 candidate HDR `8 B/pixel` 与 UI `4 B/pixel`，即 `12 B/pixel`；上一张 published scene 由独立 generation 持有，candidate 完成后直接提升 texture view，不做整图 copy。三个 `16 B/pixel` observable plane 只由显式、small-extent diagnostic capture 分配。4K 单个新 generation 约 `94.9 MiB`；同尺寸 two-phase rebuild 的 conservative live core plan 是 published `8` + installed candidate/UI `12` + replacement candidate/UI `12` = `32 B/pixel`，即 `253.125 MiB`，受 256 MiB gate 约束。zero extent/suspend 不丢弃可能仍在途的 installed bundle；suspend 期间不分配 replacement，恢复 surface 后再把最新 physical extent 合并为一次事务式 rebuild。活动 surface 的 replacement 在配置并等待旧 surface work idle 后才安装，因此不会产生未纳入计划的第三份 retired generation。surface images、driver heap/alignment 仍不在此核心账本内，必须通过平台 profiler 另测；这不是后续 source/geometry/history layout 的长期预算替代。
 
 ## 12. 验证矩阵与完成定义
 

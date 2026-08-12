@@ -8,7 +8,7 @@
 
 1. display 始终采样一个只含完整画面的 `published HDR`；
 2. compute 分批写不可见的 `candidate trace target`；
-3. candidate 的全部像素完成且 generation 仍有效时，在同一 queue 上执行最后一批 compute、candidate HDR 到 published HDR 的整图 copy 或 nearest reconstruction、display/present；画面只发生一次完整帧切换；
+3. candidate 的全部像素完成且 generation 仍有效时，等待最后一批 timestamp readback 后直接提升 candidate texture view，重绑 display 并 present；画面只发生一次完整帧切换，不再执行整图 publication pass；
 4. 研究阶段曾考虑以**完整低分辨率帧**缩短反馈，但实测仍产生明显的分辨率跳变，现已淘汰；生产路径从空白/上一完整 generation 直接原子切换到原生分辨率完整帧；
 5. 调度只解决 watchdog 和观感。真正的性能工作应先去除每步重复的 geometry/RHS 求值，再以固定 RK4、少量有界 embedded tier、事件局部细化和 active-ray wavefront 做可归因 A/B；不应直接把 CPU 式无界 DP5(4) accept/reject loop 搬进每条 GPU ray。
 
@@ -48,8 +48,9 @@ wgpu-core 为 submission 分配严格递增 index、提交后登记 lifetime tra
 
 ```text
 compute final candidate batch
-  -> copy candidate HDR to published HDR
-  -> display published HDR
+  -> validate generation after GPU completion
+  -> promote candidate texture view
+  -> display the promoted complete scene
   -> present
 ```
 
@@ -57,21 +58,21 @@ compute final candidate batch
 
 隐藏 candidate 内部仍可按任意 tile 顺序计算。WGSL 的 `global_invocation_id` 给出当前 compute grid invocation 位置，`textureStore` 只写指定 texel；加入 checked tile/pixel offset 即可使用 Morton、棋盘或 cost-aware scheduling，而不会改变 publish 语义：[WGSL builtin values](https://www.w3.org/TR/WGSL/#builtin-values)、[WGSL `textureStore`](https://www.w3.org/TR/WGSL/#textureStore-builtin)。locked Naga 30 把该 builtin 解析为 `GlobalInvocationId`，并把 store lowering 为带坐标的 `ImageStore`：[Naga WGSL conversion](https://docs.rs/crate/naga/30.0.0/source/src/front/wgsl/parse/conv.rs)、[Naga image store lowering](https://docs.rs/crate/naga/30.0.0/source/src/front/wgsl/lower/mod.rs)。这里应称 `candidate/back texture`；wgpu 语境中的 staging 通常指 upload/readback buffer，容易误导资源用途。
 
-### 2.2 推荐 copy-to-published，不推荐双完整 TraceTarget swap
+### 2.2 实现采用 texture-view promotion，不复制完整画面
 
-候选 HDR 已声明 `STORAGE_BINDING | TEXTURE_BINDING | COPY_SRC`：[trace target](../../crates/gravlume-render/src/trace.rs#L298-L364)。为 published HDR 创建 `COPY_DST | TEXTURE_BINDING` texture，即可在完成点使用 `CommandEncoder::copy_texture_to_texture`；这些 usage 的定义是 WebGPU baseline：[locked `TextureUsages`](https://docs.rs/crate/wgpu-types/30.0.0/source/src/texture.rs)、[wgpu copy API](https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.copy_texture_to_texture)。display bind group 在一个 extent generation 内始终绑定 published view，不随 batch 变化。
+研究早期建议过 copy-to-published；实现复核后采用更省内存和带宽的 texture-view promotion。锁定 wgpu 30 的 `TextureView` 可克隆并拥有 parent texture；candidate 完成且 generation 匹配时，把其 view 提升为 published scene，再安装预创建的 scene/UI bind group。partial candidate 从未绑定到 presentation，提升也不复制 texel。[locked `TextureView`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture_view.rs) [locked `BindGroup`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/bind_group.rs)
 
-这比 front/back 两个完整 `TraceTarget` 更节省内存。当前 candidate 是 48 B/pixel record planes + 8 B/pixel HDR；published 只需再加 8 B/pixel HDR，display composite 是 4 B/pixel：
+这也使当前 generation 不再同时拥有 candidate 与同尺寸 published copy。研究基线与实现后的账本为：
 
 | 资源模型 | 字节/pixel | 2560×1440 核心资源 |
 |---|---:|---:|
-| 当前 candidate + composite | 60 | 约 211 MiB |
-| 推荐 candidate + published HDR + composite | 68 | 约 239 MiB |
-| 两个完整 TraceTarget + composite | 116 | 约 408 MiB |
+| 研究基线 candidate(records+HDR)+UI | 60 | 约 211 MiB |
+| 已实现 candidate HDR+UI | 12 | 约 42 MiB |
+| 新 candidate+UI 与同尺寸上一 complete scene 共存 | 20 | 约 70 MiB |
 
-推荐模型仍低于 architecture 的 1440p 核心资源 256 MiB 目标，但事务式 resize 若同时保留完整新旧 bundle，约为 478 MiB，几乎吃完 512 MiB 总峰值目标，尚未计 driver、pipeline 和 asset：[architecture memory budget](../architecture.md#11-内存与性能预算)。因此 resize/scene invalidation 必须有 generation-aware backpressure：旧 in-flight batch 完成前不再分配第二个 full candidate；可以暂时显示完整旧 front 或明确的 loading frame，但旧 candidate 绝不 publish 为新 generation。
+实现模型低于 architecture 的核心预算；resize 时保留上一 complete scene，并让新 generation 只分配 candidate+UI。若连续 resize 使旧 candidate 仍在 flight，wgpu lifetime tracker 仍会延迟释放底层资源，因此实际 peak 仍须测量，且旧 generation 绝不 publish 为新 generation。[architecture memory budget](../architecture.md#11-内存与性能预算)
 
-`BindGroup` 没有修改既有 entry 的 API，创建时绑定具体 view；每个 view 又持有其 parent texture clone：[wgpu `BindGroup`](https://docs.rs/wgpu/30.0.0/wgpu/struct.BindGroup.html)、[locked `Texture::create_view`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture.rs)、[locked `TextureView`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture_view.rs)。若选择真正的 texture swap，应预建每个 slot 的 trace/display bind group，再交换 slot index；不要尝试“改写 bind group”。copy-to-published 进一步避免了这一切换面。
+`BindGroup` 没有修改既有 entry 的 API，创建时绑定具体 view；每个 view 又持有其 parent texture clone：[wgpu `BindGroup`](https://docs.rs/wgpu/30.0.0/wgpu/struct.BindGroup.html)、[locked `Texture::create_view`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture.rs)、[locked `TextureView`](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture_view.rs)。因此 resize 时预建“旧 scene + 新 UI”和“candidate + 新 UI”两份 bind group；完成点只交换已验证 handle，不尝试改写 bind group。
 
 提交中的 command tracker 持有被引用资源，直到相应 submission 完成才释放：[locked lifetime tracker](https://docs.rs/crate/wgpu-core/30.0.0/source/src/device/life.rs)。generation 失效后可以 drop Rust handle，让 tracker 延迟回收；不要对仍可能 in-flight 的 texture 主动调用 `destroy`。wgpu 的 texture 文档也区分“handle 可 drop”和“底层资源在 GPU 使用时不可销毁”：[locked texture safety](https://docs.rs/crate/wgpu/30.0.0/source/src/api/texture.rs)。
 
@@ -89,7 +90,7 @@ GPU timestamp 只测查询点之间的 queue time，不能代替交互延迟。�
 
 ### A. 隐藏全分辨率 candidate，完成后原子 publish
 
-**语义**：所有 batch 只写 candidate；display 重复显示 last-complete published frame；最后一个 batch 后整图 copy 并显示新 published frame。
+**语义**：所有 batch 只写 candidate；display 重复显示 last-complete published frame；最后一个 batch 完成并通过 generation gate 后直接提升 candidate texture view，再显示新 published frame。
 
 **优点**：
 
@@ -102,8 +103,7 @@ GPU timestamp 只测查询点之间的 queue time，不能代替交互延迟。�
 
 - 第一次画面和大改场景仍要等完整 full-resolution trace；只修复扫描感，不降低总计算量；
 - 旧 front 与当前 UI 参数可能短暂不一致，必须显示明确的“正在计算 generation N”，不能把它当新 snapshot；
-- 1440p resize 的 in-flight 资源峰值接近项目总内存目标。
-- 每次 native publish 多一次 8 B/pixel 的整图 GPU copy；它大概率远小于 geodesic compute，但仍必须单独 timestamp，不能凭直觉忽略。
+- transactional rebuild 同时持有 published、installed candidate/UI 与 replacement candidate/UI；必须按 `32 B/pixel` worst live core plan admission，不能只报新 generation 的 `12 B/pixel`。
 
 **判断**：已采用。它保证视觉正确性；交互延迟必须靠追迹算法本身降低，不能以可见的分辨率退化掩盖。
 
@@ -189,7 +189,7 @@ Dormand–Prince 5(4) 每个首次 step 7 stages，FSAL 后每 accepted step 6 �
 ### Stage 0：恢复完整帧语义
 
 - candidate 与 published HDR 分离；任何 incomplete candidate 永不被 display bind group 引用；
-- 最后 batch 后在同一 queue 上 copy/publish；一个 surface frame 中所有可见像素来自同一完整 generation；
+- 最后 batch 完成且 generation 仍有效时提升 texture view；一个 surface frame 中所有可见像素来自同一完整 generation；
 - resize/scene invalidation 携带 generation token，旧 completion 只释放资源，不 publish；
 - 初始无 front 时显示确定的 loading/neutral frame；若保留旧 front，UI 明确标出它是 last-complete generation。
 

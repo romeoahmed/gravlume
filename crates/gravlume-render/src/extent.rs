@@ -7,6 +7,11 @@ pub struct RenderExtent {
 }
 
 impl RenderExtent {
+    pub(crate) const ONE: Self = Self {
+        width: NonZeroU32::MIN,
+        height: NonZeroU32::MIN,
+    };
+
     pub(crate) fn new(width: u32, height: u32) -> Option<Self> {
         Some(Self {
             width: NonZeroU32::new(width)?,

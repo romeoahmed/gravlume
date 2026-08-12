@@ -57,14 +57,27 @@ fn texel_at(texture: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     return textureLoad(texture, texel, 0);
 }
 
-fn scene_at(uv: vec2<f32>) -> vec3<f32> {
-    let scene_linear = texel_at(scene_texture, uv).rgb;
-    return select(scene_linear, vec3<f32>(1.0, 0.0, 1.0), invalid_scene_linear(scene_linear));
+fn aspect_fitted_scene_uv(uv: vec2<f32>) -> vec2<f32> {
+    let scene_dimensions = vec2<f32>(textureDimensions(scene_texture));
+    let output_dimensions = vec2<f32>(textureDimensions(ui_texture));
+    let scene_aspect = scene_dimensions.x / scene_dimensions.y;
+    let output_aspect = output_dimensions.x / output_dimensions.y;
+    var fitted = uv;
+    if output_aspect > scene_aspect {
+        fitted.x = 0.5 + (uv.x - 0.5) * output_aspect / scene_aspect;
+    } else {
+        fitted.y = 0.5 + (uv.y - 0.5) * scene_aspect / output_aspect;
+    }
+    return fitted;
 }
 
-@fragment
-fn publish_complete_candidate(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(scene_at(in.uv), 1.0);
+fn scene_at(uv: vec2<f32>) -> vec3<f32> {
+    let fitted = aspect_fitted_scene_uv(uv);
+    if any(fitted < vec2<f32>(0.0)) || any(fitted >= vec2<f32>(1.0)) {
+        return vec3<f32>(0.0);
+    }
+    let scene_linear = texel_at(scene_texture, fitted).rgb;
+    return select(scene_linear, vec3<f32>(1.0, 0.0, 1.0), invalid_scene_linear(scene_linear));
 }
 
 fn ui_at(uv: vec2<f32>) -> vec4<f32> {

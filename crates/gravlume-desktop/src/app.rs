@@ -15,7 +15,7 @@ use gravlume_domain::{
 use gravlume_native_display::DisplayMonitor;
 use gravlume_render::{
     DeviceEvent, DisplayState, FrameSkip, FrameStatus, GpuEngine, HdrParameters, RenderDiagnostics,
-    RenderInitError, RenderRuntimeError, ResizeError, UnknownDisplayState,
+    RenderInitError, RenderRuntimeError, ResizeError, TraceAdvance, UnknownDisplayState,
 };
 use winit::{
     application::ApplicationHandler,
@@ -91,8 +91,9 @@ struct DesktopApp {
     schedule: EventLoopSchedule,
     pending_textures: egui::TexturesDelta,
     last_device_event: Option<DeviceEvent>,
+    last_resize_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
-    presented_frames: u64,
+    completed_present_generation: Option<u64>,
     smoke_once: bool,
     exit_requested: bool,
 }
@@ -111,8 +112,9 @@ impl DesktopApp {
             schedule: EventLoopSchedule::default(),
             pending_textures: egui::TexturesDelta::default(),
             last_device_event: None,
+            last_resize_event: None,
             fatal_error: None,
-            presented_frames: 0,
+            completed_present_generation: None,
             smoke_once: std::env::var_os(SMOKE_ONCE_ENV)
                 .is_some_and(|value| value == OsStr::new("1")),
             exit_requested: false,
@@ -179,7 +181,8 @@ impl DesktopApp {
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resume_surface()?;
             renderer.refresh_output(display_state)?;
-            window.request_redraw();
+            let size = window.inner_size();
+            self.resize_renderer(event_loop, size.width, size.height);
             return Ok(());
         }
         let size = window.inner_size();
@@ -215,9 +218,10 @@ impl DesktopApp {
 
             let diagnostics = renderer.diagnostics();
             let device_event = self.last_device_event.as_ref();
+            let resize_event = self.last_resize_event.as_ref();
             let raw_input = window_state.egui.take_egui_input(window);
             let output = self.egui_context.run_ui(raw_input, |root_ui| {
-                show_overlay(root_ui.ctx(), &diagnostics, device_event);
+                show_overlay(root_ui.ctx(), &diagnostics, device_event, resize_event);
             });
             let egui::FullOutput {
                 platform_output,
@@ -239,7 +243,6 @@ impl DesktopApp {
         match render_result {
             Ok(FrameStatus::Presented) => {
                 self.pending_textures.clear();
-                self.presented_frames += 1;
             }
             Ok(FrameStatus::Skipped(FrameSkip::Timeout)) => {
                 self.schedule
@@ -284,6 +287,7 @@ impl DesktopApp {
         match renderer.resize(width, height) {
             Ok(()) => {
                 if width != 0 && height != 0 {
+                    self.last_resize_event = None;
                     self.request_redraw();
                 }
             }
@@ -291,9 +295,9 @@ impl DesktopApp {
                 let is_fatal = error.is_fatal();
                 let event = DeviceEvent::from(&error);
                 tracing::error!(kind = ?event.kind(), message = event.message(), width, height, "GPU resize rejected");
-                let report_changed = self.last_device_event.as_ref() != Some(&event);
+                let report_changed = self.last_resize_event.as_ref() != Some(&event);
                 if report_changed {
-                    self.last_device_event = Some(event);
+                    self.last_resize_event = Some(event);
                 }
                 if is_fatal {
                     self.fail(event_loop, error.into());
@@ -434,6 +438,8 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 let size = window.inner_size();
                 self.resize_renderer(event_loop, size.width, size.height);
             }
+            WindowEvent::Occluded(false) => window.request_redraw(),
+            WindowEvent::Occluded(true) => {}
             WindowEvent::RedrawRequested => self.draw_frame(event_loop),
             _ if response.consumed => {}
             _ => {}
@@ -448,16 +454,19 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         let poll_result = self.renderer.as_mut().map(GpuEngine::poll);
         match poll_result {
             Some(Ok(outcome)) => {
-                let (completed_readback, events) = outcome.into_parts();
+                let (published_generation, completed_present_generation, events) =
+                    outcome.into_parts();
                 self.process_device_events(event_loop, events);
-                let trace_complete = self
-                    .renderer
-                    .as_ref()
-                    .is_some_and(GpuEngine::trace_is_complete);
+                if published_generation.is_some() {
+                    self.request_redraw();
+                }
+                if let Some(generation) = completed_present_generation {
+                    self.completed_present_generation = Some(generation);
+                }
+                let current_generation = self.renderer.as_ref().map(GpuEngine::extent_generation);
                 if self.smoke_once
-                    && self.presented_frames > 0
-                    && completed_readback
-                    && trace_complete
+                    && current_generation.is_some()
+                    && self.completed_present_generation == current_generation
                 {
                     if let Some(diagnostics) = self.renderer.as_ref().map(GpuEngine::diagnostics) {
                         tracing::info!(
@@ -486,18 +495,24 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         }
 
         let now = Instant::now();
+        if self
+            .renderer
+            .as_ref()
+            .is_some_and(GpuEngine::trace_can_advance)
+        {
+            match self.renderer.as_mut().map(GpuEngine::advance_trace) {
+                Some(Ok(TraceAdvance::Submitted | TraceAdvance::Idle)) | None => {}
+                Some(Err(error)) => {
+                    self.fail(event_loop, error.into());
+                    return;
+                }
+            }
+        }
         let has_pending_gpu_work = self
             .renderer
             .as_ref()
             .is_some_and(GpuEngine::has_pending_gpu_work);
         self.schedule.after_gpu_poll(now, has_pending_gpu_work);
-        if self
-            .renderer
-            .as_ref()
-            .is_some_and(GpuEngine::trace_needs_redraw)
-        {
-            self.schedule.request_repaint(now, Duration::ZERO);
-        }
         if self.schedule.take_due_repaint(now) {
             self.request_redraw();
         }
@@ -574,41 +589,52 @@ fn show_overlay(
     context: &egui::Context,
     diagnostics: &RenderDiagnostics<'_>,
     device_event: Option<&DeviceEvent>,
+    resize_event: Option<&DeviceEvent>,
 ) {
+    let style = context.style_of(context.theme());
+    let panel_frame =
+        egui::Frame::window(&style).fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 228));
+    let title_frame =
+        egui::Frame::window(&style).fill(egui::Color32::from_rgba_unmultiplied(20, 22, 26, 236));
     egui::Window::new("Gravlume")
         .default_pos([16.0, 16.0])
+        .default_width(380.0)
         .resizable(false)
         .collapsible(false)
+        .frame(panel_frame)
+        .title_frame(title_frame)
         .show(context, |ui| {
-            ui.strong("Interactive Kerr black-hole lensing");
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.strong("Kerr black-hole lensing");
             match diagnostics.trace_completion() {
                 Some(completion) if completion < 1.0 => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(format!(
-                            "Tracing the native-resolution image: {:.0}%",
-                            completion * 100.0
-                        ));
-                    });
+                    ui.label("Tracing a complete full-resolution view.");
+                    ui.weak("Previous complete frame remains visible.");
                 }
                 _ => {
-                    ui.label("Ready — the complete native-resolution image is published.");
+                    ui.label("Full-resolution trace complete.");
                 }
             }
-            ui.label("Kerr spin 0.8 · observer radius 30 M · vertical field of view 45°.");
-            ui.label(
-                "Black is the event-horizon shadow; the colored grid is a lensed sky test pattern.",
-            );
-            ui.label("This preview validates geometry; it is not an accretion-disk simulation.");
+            ui.label("a/M 0.8 | r_obs/M 30 | vertical FOV 45 deg");
+            ui.label("Black: horizon shadow | Color: lensed sky");
             ui.label(format!(
-                "Display output: {}",
+                "GPU RK4 geometry preview | Output: {}",
                 diagnostics.display_transfer()
             ));
-            if let Some(event) = device_event {
+            ui.weak("No accretion disk or radiative transfer.");
+            if device_event.is_some() || resize_event.is_some() {
                 ui.separator();
+            }
+            if let Some(event) = device_event {
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 170, 80),
                     format!("GPU {:?}: {}", event.kind(), event.message()),
+                );
+            }
+            if let Some(event) = resize_event {
+                ui.colored_label(
+                    egui::Color32::from_rgb(255, 170, 80),
+                    format!("Resize {:?}: {}", event.kind(), event.message()),
                 );
             }
         });

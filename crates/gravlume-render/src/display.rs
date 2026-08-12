@@ -17,9 +17,7 @@ pub struct DisplayPipeline {
     shader: wgpu::ShaderModule,
     pipeline_layout: wgpu::PipelineLayout,
     presentation_pipeline: wgpu::RenderPipeline,
-    publish_pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
-    publish_bind_group_layout: wgpu::BindGroupLayout,
     output_uniforms: wgpu::Buffer,
 }
 
@@ -28,11 +26,12 @@ pub struct DisplayTarget {
 }
 
 pub struct PublishedScene {
-    texture: wgpu::Texture,
-    bind_group: wgpu::BindGroup,
+    view: wgpu::TextureView,
+    extent: RenderExtent,
+    generation: Option<u64>,
 }
 
-pub struct CandidatePublication {
+pub struct ScenePresentation {
     bind_group: wgpu::BindGroup,
 }
 
@@ -71,32 +70,12 @@ impl DisplayPipeline {
         });
         let presentation_pipeline =
             Self::create_render_pipeline(device, &pipeline_layout, &shader, selection);
-        let publish_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("candidate publication bind group layout"),
-                entries: &[texture_entry(0)],
-            });
-        let publish_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("candidate publication pipeline layout"),
-                bind_group_layouts: &[Some(&publish_bind_group_layout)],
-                immediate_size: 0,
-            });
-        let publish_pipeline = Self::create_pipeline(
-            device,
-            &publish_pipeline_layout,
-            &shader,
-            "publish_complete_candidate",
-            wgpu::TextureFormat::Rgba16Float,
-        );
 
         Self {
             shader,
             pipeline_layout,
             presentation_pipeline,
-            publish_pipeline,
             bind_group_layout,
-            publish_bind_group_layout,
             output_uniforms,
         }
     }
@@ -190,16 +169,17 @@ impl DisplayPipeline {
         }
     }
 
-    pub(crate) fn create_published_scene(
-        &self,
+    pub(crate) fn create_initial_scene(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        target: &DisplayTarget,
-        extent: RenderExtent,
     ) -> PublishedScene {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("complete published scene HDR"),
-            size: texture_extent(extent),
+            label: Some("initial published scene HDR"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -231,83 +211,46 @@ impl DisplayPipeline {
             });
         }
         queue.submit([encoder.finish()]);
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("published scene and UI output bind group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&scene_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&target.ui_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: self.output_uniforms.as_entire_binding(),
-                },
-            ],
-        });
         PublishedScene {
-            texture,
-            bind_group,
+            view: scene_view,
+            extent: RenderExtent::ONE,
+            generation: None,
         }
     }
 
-    pub(crate) fn bind_candidate(
+    pub(crate) fn bind_scene(
         &self,
         device: &wgpu::Device,
-        candidate: &wgpu::TextureView,
-    ) -> CandidatePublication {
-        CandidatePublication {
+        scene: &wgpu::TextureView,
+        target: &DisplayTarget,
+    ) -> ScenePresentation {
+        ScenePresentation {
             bind_group: device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("complete candidate publication bind group"),
-                layout: &self.publish_bind_group_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(candidate),
-                }],
+                label: Some("published scene and UI output bind group"),
+                layout: &self.bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(scene),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&target.ui_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.output_uniforms.as_entire_binding(),
+                    },
+                ],
             }),
         }
-    }
-
-    pub(crate) fn encode_publication(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        published: &PublishedScene,
-        candidate: &CandidatePublication,
-    ) {
-        let view = published
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let attachment = Some(wgpu::RenderPassColorAttachment {
-            view: &view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                store: wgpu::StoreOp::Store,
-            },
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("publish complete candidate pass"),
-            color_attachments: &[attachment],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(&self.publish_pipeline);
-        pass.set_bind_group(0, &candidate.bind_group, &[]);
-        pass.draw(0..3, 0..1);
     }
 
     pub(crate) fn encode_presentation(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         surface_view: &wgpu::TextureView,
-        scene: &PublishedScene,
+        scene: &ScenePresentation,
     ) {
         let color_attachment = Some(wgpu::RenderPassColorAttachment {
             view: surface_view,
@@ -329,6 +272,32 @@ impl DisplayPipeline {
         pass.set_pipeline(&self.presentation_pipeline);
         pass.set_bind_group(0, &scene.bind_group, &[]);
         pass.draw(0..3, 0..1);
+    }
+}
+
+impl PublishedScene {
+    pub(crate) const fn from_candidate(
+        view: wgpu::TextureView,
+        extent: RenderExtent,
+        generation: u64,
+    ) -> Self {
+        Self {
+            view,
+            extent,
+            generation: Some(generation),
+        }
+    }
+
+    pub(crate) const fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    pub(crate) const fn generation(&self) -> Option<u64> {
+        self.generation
+    }
+
+    pub(crate) const fn extent(&self) -> RenderExtent {
+        self.extent
     }
 }
 

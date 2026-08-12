@@ -39,6 +39,14 @@ pub enum RenderRuntimeError {
     RecreateSurface(#[from] wgpu::CreateSurfaceError),
     #[error("recovered surface does not satisfy the SDR presentation contract: {0}")]
     SurfaceCapabilities(#[from] CapabilityError),
+    #[error("failed to {stage}: {source}")]
+    GpuResource {
+        stage: &'static str,
+        #[source]
+        source: wgpu::Error,
+    },
+    #[error("an active renderer has no presentation surface")]
+    MissingPresentationSurface,
     #[error("nonzero extent has no matching frame-resource bundle")]
     MissingFrameResources,
 }
@@ -54,23 +62,21 @@ pub enum ResizeError {
         max_texture_dimension_2d: u32,
     },
     #[error(
-        "requested render extent {width}x{height} needs {required_bytes} bytes of frame resources, exceeding the project budget of {maximum_bytes} bytes"
+        "requested render extent {width}x{height} exceeds the native trace budget of {maximum_pixels} pixels"
+    )]
+    NativePixelBudget {
+        width: u32,
+        height: u32,
+        maximum_pixels: u64,
+    },
+    #[error(
+        "requested render extent {width}x{height} would need {required_bytes} bytes at the transactional core-resource peak, exceeding the project budget of {maximum_bytes} bytes"
     )]
     FrameResourceBudget {
         width: u32,
         height: u32,
         required_bytes: u64,
         maximum_bytes: u64,
-    },
-    #[error(
-        "requested render extent {width}x{height} needs {required_bytes} bytes per trace record plane, exceeding the device storage-binding limit of {max_storage_buffer_binding_size} bytes or buffer limit of {max_buffer_size} bytes"
-    )]
-    TraceRecordLimit {
-        width: u32,
-        height: u32,
-        required_bytes: u64,
-        max_storage_buffer_binding_size: u64,
-        max_buffer_size: u64,
     },
     #[error("surface does not satisfy the SDR presentation contract: {0}")]
     SurfaceCapabilities(#[from] CapabilityError),
@@ -87,8 +93,8 @@ impl ResizeError {
     pub const fn kind(&self) -> DeviceEventKind {
         match self {
             Self::ExtentLimit { .. }
+            | Self::NativePixelBudget { .. }
             | Self::FrameResourceBudget { .. }
-            | Self::TraceRecordLimit { .. }
             | Self::SurfaceCapabilities(_) => DeviceEventKind::Validation,
             Self::GpuResource { source, .. } => device_error_kind(source),
         }
@@ -96,11 +102,13 @@ impl ResizeError {
 
     #[must_use]
     pub const fn is_fatal(&self) -> bool {
-        matches!(self, Self::SurfaceCapabilities(_))
-            || matches!(
-                self.kind(),
-                DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
-            )
+        matches!(
+            self,
+            Self::SurfaceCapabilities(_) | Self::GpuResource { .. }
+        ) || matches!(
+            self.kind(),
+            DeviceEventKind::Internal | DeviceEventKind::OutOfMemory | DeviceEventKind::Lost
+        )
     }
 }
 
@@ -125,12 +133,6 @@ impl DeviceEvent {
             kind,
             message: message.into(),
         }
-    }
-
-    #[must_use]
-    pub(crate) fn from_wgpu(stage: &'static str, error: wgpu::Error) -> Self {
-        let (kind, message) = device_error_details(error);
-        Self::new(kind, format!("{stage}: {message}"))
     }
 
     #[must_use]
