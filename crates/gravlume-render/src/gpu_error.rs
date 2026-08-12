@@ -53,6 +53,16 @@ pub enum ResizeError {
         height: u32,
         max_texture_dimension_2d: u32,
     },
+    #[error(
+        "requested render extent {width}x{height} needs {required_bytes} bytes per trace record plane, exceeding the device storage-binding limit of {max_storage_buffer_binding_size} bytes or buffer limit of {max_buffer_size} bytes"
+    )]
+    TraceRecordLimit {
+        width: u32,
+        height: u32,
+        required_bytes: u64,
+        max_storage_buffer_binding_size: u64,
+        max_buffer_size: u64,
+    },
     #[error("surface does not satisfy the SDR presentation contract: {0}")]
     SurfaceCapabilities(#[from] CapabilityError),
     #[error("failed to {stage}: {source}")]
@@ -67,7 +77,9 @@ impl ResizeError {
     #[must_use]
     pub const fn kind(&self) -> DeviceEventKind {
         match self {
-            Self::ExtentLimit { .. } | Self::SurfaceCapabilities(_) => DeviceEventKind::Validation,
+            Self::ExtentLimit { .. }
+            | Self::TraceRecordLimit { .. }
+            | Self::SurfaceCapabilities(_) => DeviceEventKind::Validation,
             Self::GpuResource { source, .. } => device_error_kind(source),
         }
     }

@@ -63,10 +63,7 @@ async fn request_native_gpu() -> TestGpu {
         missing_features.is_empty(),
         "native adapter is missing contract features: {missing_features:?}"
     );
-    let adapter_limits = adapter.limits();
-    let required_limits = wgpu::Limits::default()
-        .using_resolution(adapter_limits.clone())
-        .using_alignment(adapter_limits);
+    let required_limits = crate::capabilities::required_device_limits(adapter.limits());
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             label: Some("native GPU contract test device"),

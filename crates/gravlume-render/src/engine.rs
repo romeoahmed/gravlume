@@ -3,7 +3,10 @@ use std::sync::{Arc, mpsc};
 use gravlume_domain::Observation;
 
 use crate::{
-    capabilities::{BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, select_surface},
+    capabilities::{
+        BASELINE_FEATURES, SurfaceSelection, check_baseline_adapter, required_device_limits,
+        select_surface,
+    },
     display::{COMPOSITE_FORMAT, DisplayPipeline, DisplayTarget},
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     gpu_error::{
@@ -11,7 +14,7 @@ use crate::{
         install_device_callbacks, scoped_gpu_operation,
     },
     timing::{GpuTimings, TimingSample},
-    trace::{TraceCompute, TraceTarget},
+    trace::{TraceCompute, TraceTarget, trace_record_plane_size},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,10 +229,7 @@ impl GpuEngine {
         })?;
         let selection = select_surface(&surface.get_capabilities(&adapter))?;
         let diagnostic_labels = DiagnosticLabels::new(&adapter_info, selection);
-        let adapter_limits = adapter.limits();
-        let required_limits = wgpu::Limits::default()
-            .using_resolution(adapter_limits.clone())
-            .using_alignment(adapter_limits);
+        let required_limits = required_device_limits(adapter.limits());
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("Gravlume renderer device"),
@@ -296,7 +296,7 @@ impl GpuEngine {
                 self.frame_resources = None;
             }
             ExtentChange::Rebuild { extent, .. } => {
-                validate_extent_limit(extent, self.device.limits().max_texture_dimension_2d)?;
+                validate_render_extent(extent, &self.device.limits())?;
                 let selection = if let Some(surface) = &self.surface {
                     let capabilities = surface.get_capabilities(&self.adapter);
                     select_surface(&capabilities)?
@@ -636,15 +636,26 @@ impl GpuEngine {
     }
 }
 
-const fn validate_extent_limit(
-    extent: RenderExtent,
-    max_texture_dimension_2d: u32,
-) -> Result<(), ResizeError> {
-    if extent.width() > max_texture_dimension_2d || extent.height() > max_texture_dimension_2d {
+fn validate_render_extent(extent: RenderExtent, limits: &wgpu::Limits) -> Result<(), ResizeError> {
+    if extent.width() > limits.max_texture_dimension_2d
+        || extent.height() > limits.max_texture_dimension_2d
+    {
         return Err(ResizeError::ExtentLimit {
             width: extent.width(),
             height: extent.height(),
-            max_texture_dimension_2d,
+            max_texture_dimension_2d: limits.max_texture_dimension_2d,
+        });
+    }
+    let required_bytes = trace_record_plane_size(extent);
+    if required_bytes > limits.max_storage_buffer_binding_size
+        || required_bytes > limits.max_buffer_size
+    {
+        return Err(ResizeError::TraceRecordLimit {
+            width: extent.width(),
+            height: extent.height(),
+            required_bytes,
+            max_storage_buffer_binding_size: limits.max_storage_buffer_binding_size,
+            max_buffer_size: limits.max_buffer_size,
         });
     }
     Ok(())
@@ -715,19 +726,31 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
-    use super::{ResizeError, validate_extent_limit};
+    use super::{ResizeError, validate_render_extent};
     use crate::extent::RenderExtent;
 
     #[test]
-    fn resize_accepts_the_device_limit_and_rejects_each_excess_dimension() {
-        let maximum = 8_192;
+    fn resize_accepts_4k_with_webgpu_default_limits() {
+        let limits = wgpu::Limits::default();
+        let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
+
+        assert!(validate_render_extent(extent, &limits).is_ok());
+    }
+
+    #[test]
+    fn resize_rejects_each_excess_texture_dimension() {
+        let limits = wgpu::Limits::default();
+        let maximum = limits.max_texture_dimension_2d;
         let boundary = RenderExtent::new(maximum, maximum).expect("extent is nonzero");
         let too_wide = RenderExtent::new(maximum + 1, 1).expect("extent is nonzero");
         let too_tall = RenderExtent::new(1, maximum + 1).expect("extent is nonzero");
 
-        assert!(validate_extent_limit(boundary, maximum).is_ok());
         assert!(matches!(
-            validate_extent_limit(too_wide, maximum),
+            validate_render_extent(boundary, &limits),
+            Err(ResizeError::TraceRecordLimit { .. })
+        ));
+        assert!(matches!(
+            validate_render_extent(too_wide, &limits),
             Err(ResizeError::ExtentLimit {
                 width: 8_193,
                 height: 1,
@@ -735,7 +758,7 @@ mod tests {
             })
         ));
         assert!(matches!(
-            validate_extent_limit(too_tall, maximum),
+            validate_render_extent(too_tall, &limits),
             Err(ResizeError::ExtentLimit {
                 width: 1,
                 height: 8_193,
