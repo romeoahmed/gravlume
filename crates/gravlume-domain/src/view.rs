@@ -26,20 +26,20 @@ impl Angle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewportProjection {
+pub struct PerspectiveView {
     width: NonZeroU32,
     height: NonZeroU32,
     vertical_fov: Angle,
     tangent_half_fov: f64,
 }
 
-impl ViewportProjection {
-    /// Creates a top-left-origin perspective projection.
+impl PerspectiveView {
+    /// Creates a top-left-origin perspective view.
     ///
     /// # Errors
     ///
     /// Returns a validation report unless the vertical field of view lies in `(0, pi)`.
-    pub fn perspective(
+    pub fn new(
         width: NonZeroU32,
         height: NonZeroU32,
         vertical_fov: Angle,
@@ -48,7 +48,7 @@ impl ViewportProjection {
         if vertical_fov.radians <= 0.0 || vertical_fov.radians >= PI {
             report.push(ValidationIssue::error(
                 ValidationIssueCode::OutOfRange,
-                "viewport.vertical_fov",
+                "view.vertical_fov",
                 "vertical field of view must lie in (0, pi)",
             ));
         }
@@ -56,8 +56,8 @@ impl ViewportProjection {
         if !tangent_half_fov.is_finite() {
             report.push(ValidationIssue::error(
                 ValidationIssueCode::NonFinite,
-                "viewport.vertical_fov",
-                "vertical field of view produced a non-finite projection scale",
+                "view.vertical_fov",
+                "vertical field of view produced a non-finite view scale",
             ));
         }
         report.into_result(Self {
@@ -83,7 +83,7 @@ impl ViewportProjection {
         self.vertical_fov
     }
 
-    /// Validates and stores projection-independent pixel/subpixel coordinates.
+    /// Validates and stores view-independent pixel/subpixel coordinates.
     ///
     /// # Errors
     ///
@@ -94,9 +94,9 @@ impl ViewportProjection {
         pixel_y: u32,
         subpixel_x: f64,
         subpixel_y: f64,
-    ) -> Result<ViewportSample, ValidationReport> {
+    ) -> Result<ImageSample, ValidationReport> {
         self.validate_sample(pixel_x, pixel_y, subpixel_x, subpixel_y)?;
-        Ok(ViewportSample {
+        Ok(ImageSample {
             pixel_x,
             pixel_y,
             subpixel_x,
@@ -104,7 +104,7 @@ impl ViewportProjection {
         })
     }
 
-    pub(super) fn sight_plane(self, sample: ViewportSample) -> Result<[f64; 2], ValidationReport> {
+    pub(super) fn sight_plane(self, sample: ImageSample) -> Result<[f64; 2], ValidationReport> {
         self.validate_sample(
             sample.pixel_x,
             sample.pixel_y,
@@ -133,32 +133,32 @@ impl ViewportProjection {
         if pixel_x >= self.width.get() {
             report.push(ValidationIssue::error(
                 ValidationIssueCode::OutOfRange,
-                "viewport_sample.pixel_x",
+                "image_sample.pixel_x",
                 "pixel x must be smaller than the physical width",
             ));
         }
         if pixel_y >= self.height.get() {
             report.push(ValidationIssue::error(
                 ValidationIssueCode::OutOfRange,
-                "viewport_sample.pixel_y",
+                "image_sample.pixel_y",
                 "pixel y must be smaller than the physical height",
             ));
         }
-        validate_subpixel(&mut report, subpixel_x, "viewport_sample.subpixel_x");
-        validate_subpixel(&mut report, subpixel_y, "viewport_sample.subpixel_y");
+        validate_subpixel(&mut report, subpixel_x, "image_sample.subpixel_x");
+        validate_subpixel(&mut report, subpixel_y, "image_sample.subpixel_y");
         report.into_result(())
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ViewportSample {
+pub struct ImageSample {
     pixel_x: u32,
     pixel_y: u32,
     subpixel_x: f64,
     subpixel_y: f64,
 }
 
-impl ViewportSample {
+impl ImageSample {
     #[must_use]
     pub const fn pixel(self) -> [u32; 2] {
         [self.pixel_x, self.pixel_y]

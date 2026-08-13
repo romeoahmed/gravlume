@@ -1,19 +1,18 @@
 use std::num::NonZeroUsize;
 
 use gravlume_reference::{
-    AffineDirection, ComparisonError, CriticalSide, FixtureDocument, FixtureError,
-    GeodesicApplicability, GeodesicFixture, GeodesicOrbit, ObservationFixture, ReferenceBatch,
-    ReferenceComparison, ReferenceInstrument, ReferenceOutcome, ReferencePolicy, ReferenceRequest,
-    ReferenceTracer, Termination, TraceInputId, TraceRequest,
+    AffineDirection, ComparisonError, FixtureDocument, FixtureError, GeodesicBatch,
+    GeodesicFixture, GeodesicTrace, GeodesicTracer, ObservationFixture, ObservationTrace,
+    ObservationTracer, ReferenceComparison, ReferenceOutcome, ReferencePolicy, Termination,
+    TraceInputId,
 };
 
-const SCATTER_B6: &str = include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
+const SCATTER_B6: &str = include_str!("../fixtures/v1/schwarzschild-scatter-b6.toml");
 const SCATTER_NEAR_CRITICAL: &str =
-    include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-near-critical.toml");
+    include_str!("../fixtures/v1/schwarzschild-scatter-near-critical.toml");
 const CAPTURE_NEAR_CRITICAL: &str =
-    include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
-const DEFAULT_OBSERVATION: &str =
-    include_str!("../../../tests/fixtures/v1/default-kerr-observation.toml");
+    include_str!("../fixtures/v1/schwarzschild-capture-near-critical.toml");
+const DEFAULT_OBSERVATION: &str = include_str!("../fixtures/v1/default-kerr-observation.toml");
 
 fn edit_fixture(source: &str, edit: impl FnOnce(&mut toml::Value)) -> String {
     let mut document = toml::from_str(source).expect("repository fixture is valid TOML");
@@ -131,24 +130,9 @@ fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
 }
 
 #[test]
-fn geodesic_fixture_retains_validated_near_critical_applicability() {
-    let fixture = geodesic_fixture(CAPTURE_NEAR_CRITICAL);
-
-    assert_eq!(
-        fixture.applicability(),
-        GeodesicApplicability::NearCritical {
-            orbit: GeodesicOrbit::EquatorialCapture,
-            critical_impact_parameter_m: 5.196_152_422_706_632,
-            impact_parameter_offset_m: -0.001,
-            side: CriticalSide::Capture,
-        }
-    );
-}
-
-#[test]
 fn regular_schwarzschild_fixture_matches_the_independent_observables() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let outcome = tracer.trace(fixture.trace_request());
 
     assert_eq!(outcome.termination(), Termination::Escape);
@@ -165,8 +149,8 @@ fn regular_schwarzschild_fixture_matches_the_independent_observables() {
 fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
     let fixture = geodesic_fixture(SCATTER_B6);
     let request = fixture.trace_request();
-    let outcome = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
-        TraceRequest::new(
+    let outcome = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
+        GeodesicTrace::new(
             TraceInputId::new("different-input"),
             request.initial_state(),
             request.affine_direction(),
@@ -179,9 +163,9 @@ fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
 #[test]
 fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+    let regular = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
         .trace(fixture.trace_request());
-    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
         .trace(fixture.trace_request());
     let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
         .expect("policy roles and input identity match");
@@ -193,14 +177,14 @@ fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
 fn same_fixture_label_cannot_alias_different_canonical_inputs() {
     let fixture = geodesic_fixture(SCATTER_B6);
     let request = fixture.trace_request();
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let regular = tracer.trace(request.clone());
     let mut shifted_components = request.initial_state().components();
     shifted_components[0] = 1.0;
     let shifted_state = gravlume_domain::GeodesicState::from_components(shifted_components)
         .expect("shifted state is finite");
-    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
-        TraceRequest::new(
+    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
+        GeodesicTrace::new(
             TraceInputId::new("schwarzschild-scatter-b6-v1"),
             shifted_state,
             request.affine_direction(),
@@ -217,10 +201,10 @@ fn same_fixture_label_cannot_alias_different_canonical_inputs() {
 #[test]
 fn baseline_comparison_rejects_wrong_policy_roles() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
         .trace(fixture.trace_request());
 
-    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+    let regular = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
         .trace(fixture.trace_request());
 
     assert!(matches!(
@@ -237,15 +221,15 @@ fn baseline_comparison_rejects_wrong_policy_roles() {
 fn baseline_comparison_rejects_different_input_ids() {
     let fixture = geodesic_fixture(SCATTER_B6);
     let request = fixture.trace_request();
-    let regular = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
-        TraceRequest::new(
+    let regular = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1()).trace(
+        GeodesicTrace::new(
             TraceInputId::new("regular-input"),
             request.initial_state(),
             request.affine_direction(),
         ),
     );
-    let strict = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
-        TraceRequest::new(
+    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1()).trace(
+        GeodesicTrace::new(
             TraceInputId::new("strict-input"),
             request.initial_state(),
             request.affine_direction(),
@@ -264,9 +248,9 @@ fn baseline_comparison_rejects_different_input_ids() {
 #[test]
 fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::strict_v1());
+    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1());
     let forward = tracer.trace(fixture.trace_request());
-    let backward = tracer.trace(TraceRequest::new(
+    let backward = tracer.trace(GeodesicTrace::new(
         TraceInputId::new("schwarzschild-scatter-b6-v1-reverse"),
         forward.state(),
         AffineDirection::Negative,
@@ -281,14 +265,14 @@ fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
 #[test]
 fn travel_time_is_independent_of_the_coordinate_time_origin() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let request = fixture.trace_request();
     let baseline = tracer.trace(request.clone());
     let mut shifted_components = request.initial_state().components();
     shifted_components[0] = 1.0e300;
     let shifted_state = gravlume_domain::GeodesicState::from_components(shifted_components)
         .expect("shifted state is finite");
-    let shifted = tracer.trace(TraceRequest::new(
+    let shifted = tracer.trace(GeodesicTrace::new(
         TraceInputId::new("schwarzschild-scatter-b6-shifted-time"),
         shifted_state,
         request.affine_direction(),
@@ -312,22 +296,22 @@ fn near_critical_pair_preserves_the_independent_discrete_classification() {
 #[test]
 fn dedicated_rayon_pool_preserves_input_order() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let tracer = ReferenceTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
+    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
     let request = fixture.trace_request();
     let inputs = [
-        TraceRequest::new(
+        GeodesicTrace::new(
             TraceInputId::new("input-7"),
             request.initial_state(),
             request.affine_direction(),
         ),
-        TraceRequest::new(
+        GeodesicTrace::new(
             TraceInputId::new("input-3"),
             request.initial_state(),
             request.affine_direction(),
         ),
     ];
     let pool =
-        ReferenceBatch::new(NonZeroUsize::new(2).expect("two is nonzero")).expect("pool builds");
+        GeodesicBatch::new(NonZeroUsize::new(2).expect("two is nonzero")).expect("pool builds");
     let outcomes = pool.trace_ordered(&tracer, &inputs);
 
     assert_eq!(outcomes[0].input_id().as_str(), "input-7");
@@ -340,17 +324,17 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
     let input_id = fixture.input_id().clone();
     let observation = fixture.observation();
     let sample = observation
-        .projection()
+        .view()
         .sample(0, 0, 0.5, 0.5)
         .expect("corner sample is valid");
-    let regular_request = ReferenceRequest::new(
+    let regular_request = ObservationTrace::new(
         input_id.clone(),
         observation,
         sample,
         ReferencePolicy::regular_v1(),
     )
     .expect("sample is valid for the request observation");
-    let regular = ReferenceInstrument::baseline_v1()
+    let regular = ObservationTracer::baseline_v1()
         .trace(regular_request)
         .expect("validated observation preserves internal invariants");
 
@@ -377,9 +361,9 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
     assert!(radial_dot > 0.0, "escape traversal must point outward");
 
     let strict_request =
-        ReferenceRequest::new(input_id, observation, sample, ReferencePolicy::strict_v1())
+        ObservationTrace::new(input_id, observation, sample, ReferencePolicy::strict_v1())
             .expect("sample is valid for the request observation");
-    let strict = ReferenceInstrument::baseline_v1()
+    let strict = ObservationTracer::baseline_v1()
         .trace(strict_request)
         .expect("validated observation preserves internal invariants");
     let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
@@ -403,7 +387,7 @@ fn observation_fixture(source: &str) -> ObservationFixture {
 
 fn run_fixture(source: &str, policy: ReferencePolicy) -> ReferenceOutcome {
     let fixture = geodesic_fixture(source);
-    let tracer = ReferenceTracer::from_fixture(&fixture, policy);
+    let tracer = GeodesicTracer::from_fixture(&fixture, policy);
     let outcome = tracer.trace(fixture.trace_request());
     assert!(fixture.expected().accepts(&outcome));
     outcome

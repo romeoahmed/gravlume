@@ -16,6 +16,9 @@ thiserror.workspace = true
 tracing.workspace = true
 winit.workspace = true
 
+[dev-dependencies]
+proptest.workspace = true
+
 [target.'cfg(target_os = "linux")'.dependencies]
 egui-winit = { workspace = true, features = ["wayland"] }
 winit = { workspace = true, features = ["wayland", "wayland-dlopen"] }

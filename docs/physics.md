@@ -77,15 +77,26 @@ u=
 
 定义域排除 ring singularity $r=0,z=0,x^2+y^2=a^2$。默认 non-negative-$r$ 单叶实现还把 $r=0,z=0,x^2+y^2<a^2$ 作为显式 `ChartBoundary`，不把 branch disk 误报成物理 ring singularity。Analytic-Extension View 若需要 signed $r$，必须使用另一显式 chart/state；默认 radius 函数不暗含符号分支。
 
-### 2.2 Kerr–Schild null covector
+### 2.2 Chart-handed oblate map 与 Kerr–Schild null covector
 
-令 $s=+1$ 表示默认 ingoing principal direction，$s=-1$ 表示 outgoing branch。定义
+令 $s=+1$ 表示默认 ingoing branch，$s=-1$ 表示 outgoing branch。$a=J/M$
+始终是相对固定右手 $(x,y,z)$ orientation 的物理自旋；chart 的 oblate spatial twist
+为 $a_s=s a$：
+
+\[
+x=(r\cos\phi_s-s a\sin\phi_s)\sin\theta,\quad
+y=(r\sin\phi_s+s a\cos\phi_s)\sin\theta,\quad
+z=r\cos\theta.
+\]
+
+半径、$\Sigma$、$\Delta$ 与参数分类只依赖物理 $a^2$，不把 $a_s$ 误存成另一份
+spacetime parameter。定义
 
 \[
 l_\mu=\left(
 1,
-\frac{s(r x+a y)}{r^2+a^2},
-\frac{s(r y-a x)}{r^2+a^2},
+\frac{s r x+a y}{r^2+a^2},
+\frac{s r y-a x}{r^2+a^2},
 \frac{s z}{r}
 \right),
 \]
@@ -93,13 +104,25 @@ l_\mu=\left(
 \[
 l^\mu=\eta^{\mu\nu}l_\nu=\left(
 -1,
-\frac{s(r x+a y)}{r^2+a^2},
-\frac{s(r y-a x)}{r^2+a^2},
+\frac{s r x+a y}{r^2+a^2},
+\frac{s r y-a x}{r^2+a^2},
 \frac{s z}{r}
 \right).
 \]
 
-椭球约束精确推出 $\eta^{\mu\nu}l_\mu l_\nu=0$。`s` 是 chart/principal-null convention，不是光子传播方向或正负频率。
+在 spheroidal chart 中等价地有
+
+\[
+l=dt_s+s\,dr-a\sin^2\theta\,d\phi_s.
+\]
+
+所以两个 branch 在固定 $r,\theta$ 上都给出同一个物理
+$g_{t\phi}=-(2Mr-q_e^2)a\sin^2\theta/\Sigma$。椭球约束精确推出
+$\eta^{\mu\nu}l_\mu l_\nu=0$。`s` 是 chart/principal-null convention，不是光子
+传播方向、正负频率或物理自旋的重定义。ingoing/outgoing 的相反 azimuth shift 可对照
+[Campanelli et al. Eq. (22)–(24)、(34)–(36)](https://arxiv.org/pdf/gr-qc/0010034)；
+Kerr–Newman 的 physical parameter 与 BL/KS 形式见
+[Adamo–Newman Sec. 3.1](https://arxiv.org/pdf/1410.6626)。
 
 ### 2.3 Metric 与 inverse
 
@@ -197,13 +220,13 @@ N_i=(6Mr^2-2q_e^2r)r_i,
 
 \[
 \partial_i\ell_x=
-\frac{s(r_i x+r\delta_{ix}+a\delta_{iy})}A
+\frac{s(r_i x+r\delta_{ix})+a\delta_{iy}}A
 -\ell_x\frac{2rr_i}A,
 \]
 
 \[
 \partial_i\ell_y=
-\frac{s(r_i y+r\delta_{iy}-a\delta_{ix})}A
+\frac{s(r_i y+r\delta_{iy})-a\delta_{ix}}A
 -\ell_y\frac{2rr_i}A,
 \]
 
@@ -212,17 +235,18 @@ N_i=(6Mr^2-2q_e^2r)r_i,
 \qquad \partial_i l^t=0.
 \]
 
-这些表达与第 2.1 节的 $r_i$ 一起构成 Phase 1/2 的 Kerr–Schild RHS 合同；任一 denominator guard 在求值前触发 typed numerical failure，不能以 clamp 改写方程。上述导数、$l^2=0$ 和 rank-one inverse 已用精确符号代数独立复算。[A]
+这些表达与第 2.1 节的 $r_i$ 一起构成 current 的 Kerr–Schild RHS 合同；任一 denominator guard 在求值前触发 typed numerical failure，不能以 clamp 改写方程。上述导数、$l^2=0$ 和 rank-one inverse 已用精确符号代数独立复算。[A]
 
-stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。ingoing/outgoing 分支共享同一组 Cartesian spatial coordinates；固定 $l_t=1$ 时，$s=-1$ 是论文中 outgoing covector 的整体负号表示。因此 oblate coordinates 均写为
+stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。第 2.2 节的
+chart-handed oblate coordinates 与同一个 physical-spin Kerr–Newman BL chart 局部满足
 
 \[
-x=(r\cos\phi-a\sin\phi)\sin\theta,\quad
-y=(r\sin\phi+a\cos\phi)\sin\theta,\quad
-z=r\cos\theta.
+dt_s=dt_{\rm BL}
++s\frac{2Mr-q_e^2}{\Delta}dr,\qquad
+d\phi_s=d\phi_{\rm BL}+s\frac a\Delta dr.
 \]
 
-Kerr–Schild 与 Boyer–Lindquist 的 $t,\phi$ 只相差 $r$ 的函数，因此固定 $r$ 时 $p_t,p_\phi,p_\theta$ 相同。Cartesian covector 给出
+因此固定 $r$ 时 $p_t,p_\phi,p_\theta$ 相同。Cartesian covector 给出
 
 \[
 p_\theta=\cot\theta(xp_x+yp_y)-r\sin\theta\,p_z,
@@ -317,7 +341,7 @@ d=\frac{s_xe_R+s_ye_U-e_A}{\sqrt{1+s_x^2+s_y^2}},
 u=\frac{\partial_t}{\sqrt{-g_{tt}}}.
 \]
 
-对任意 seed vector，rest-space projection 是 $\Pi_u(v)=v+(u\cdot v)u$。默认 frame 将 observer 指向 target 的 seed 投影、归一化为中心 Sight Direction $d_0$，取 $e_A=-d_0$；再投影 spin-$z$ up hint 并从 $d_0$ 中 Gram–Schmidt 得到 $e_U$，最后选择唯一满足 orientation 的 $e_R$。up hint 退化时必须显式选择备用轴并记录，而非产生不连续翻转。
+对任意 seed vector，rest-space view 是 $\Pi_u(v)=v+(u\cdot v)u$。默认 frame 将 observer 指向 target 的 seed 投影、归一化为中心 Sight Direction $d_0$，取 $e_A=-d_0$；再投影 spin-$z$ up hint 并从 $d_0$ 中 Gram–Schmidt 得到 $e_U$，最后选择唯一满足 orientation 的 $e_R$。up hint 退化时必须显式选择备用轴并记录，而非产生不连续翻转。
 
 Backward Trace 使用负 affine step 或等价反向状态演化，从 observer 走向 source；保存的 Photon Momentum 仍 future-directed。所有 emitter/observer frequency 使用该物理 momentum，不能把 traversal tangent 代入后取绝对值。
 
@@ -342,7 +366,7 @@ Backward Trace 使用负 affine step 或等价反向状态演化，从 observer 
 
 ## 6. Event 与 terminal semantics
 
-Phase 1 baseline 的 event function 固定如下；$R_{\rm esc}$、$D_{\rm guard}$ 和步数上限来自 Validation Profile，不属于 Physical Scene：
+numerical baseline 的 event function 固定如下；$R_{\rm esc}$、$D_{\rm guard}$ 和步数上限来自 Validation Profile，不属于 Physical Scene：
 
 | 候选 | 连续函数 | 额外条件 | crossing |
 |---|---|---|---|

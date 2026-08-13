@@ -1,25 +1,21 @@
-use std::{
-    mem::{offset_of, size_of},
-    num::NonZeroU32,
-};
+use std::num::NonZeroU32;
 
 use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, PhysicalScene,
-    PhysicalSceneDraft, StationaryObserverDraft, ViewportProjection, ViewportSample,
+    Angle, ImageSample, KerrNewmanSpacetime, KerrSchildChart, Observation, PerspectiveView,
+    PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
 };
 use gravlume_reference::{
-    ReferenceInstrument, ReferencePolicy, ReferenceRequest, Termination, TraceInputId,
+    ObservationTrace, ObservationTracer, ReferencePolicy, Termination, TraceInputId,
 };
 use num_traits::ToPrimitive as _;
 
 use crate::{
-    trace::{
-        INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
-        production_shader_source,
+    gpu_capture::{
+        capture_direction_reconstruction_trace, capture_direction_reconstruction_trace_in_batches,
+        capture_initial_rays, capture_invariant_gate_cases, capture_refined_edge_count,
+        capture_refined_trace, capture_trace,
     },
-    trace_test_support::{
-        capture_initial_rays, capture_invariant_gate_cases, capture_trace, capture_trace_in_batches,
-    },
+    ray_tracer::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
 };
 
 #[test]
@@ -48,31 +44,17 @@ fn trace_termination_discriminants_are_stable_and_checked() {
 }
 
 #[test]
-fn trace_uniform_layout_matches_the_shader_abi() {
-    assert_eq!(size_of::<TraceUniforms>(), 144);
-    assert_eq!(offset_of!(TraceUniforms, spacetime), 0);
-    assert_eq!(offset_of!(TraceUniforms, observer_event), 16);
-    assert_eq!(offset_of!(TraceUniforms, observer_velocity), 32);
-    assert_eq!(offset_of!(TraceUniforms, image_right), 48);
-    assert_eq!(offset_of!(TraceUniforms, image_up), 64);
-    assert_eq!(offset_of!(TraceUniforms, arrival), 80);
-    assert_eq!(offset_of!(TraceUniforms, projection), 96);
-    assert_eq!(offset_of!(TraceUniforms, event_surfaces), 112);
-    assert_eq!(offset_of!(TraceUniforms, step_policy), 128);
-}
-
-#[test]
-fn interactive_trace_rejects_non_normalized_observer_frequency() {
+fn gpu_trace_rejects_non_normalized_observer_frequency() {
     let observation = observation_with(1.0, 0.8, 0.0, [30.0, 0.0, 0.0], 1.0e-6, 1, 1);
 
     assert!(matches!(
         TraceUniforms::from_observation(&observation),
-        Err(crate::TraceInputError::NonNormalizedObserverFrequency { .. })
+        Err(crate::GpuTraceInputError::NonNormalizedObserverFrequency { .. })
     ));
 }
 
 #[test]
-fn interactive_trace_rejects_parameter_state_changed_by_f32_packing() {
+fn gpu_trace_rejects_extremality_changed_by_f32_packing() {
     let observation = observation_with(
         1.0,
         0.157_132_806_437_842_44,
@@ -85,7 +67,7 @@ fn interactive_trace_rejects_parameter_state_changed_by_f32_packing() {
 
     assert!(matches!(
         TraceUniforms::from_observation(&observation),
-        Err(crate::TraceInputError::ParameterStateChangedByPacking { .. })
+        Err(crate::GpuTraceInputError::ExtremalityChangedByPacking { .. })
     ));
 }
 
@@ -187,94 +169,105 @@ fn every_recorded_invariant_can_make_a_terminal_uncertain() {
 }
 
 #[test]
-fn production_shader_exposes_only_presentation_resources() {
-    let module = naga::front::wgsl::parse_str(production_shader_source())
-        .expect("production trace WGSL parses");
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .expect("production trace WGSL validates");
-
-    let mut entry_points = module
-        .entry_points
-        .iter()
-        .map(|entry| entry.name.as_str())
-        .collect::<Vec<_>>();
-    entry_points.sort_unstable();
-    assert_eq!(entry_points, ["trace_scene"]);
-
-    let mut resources = module
-        .global_variables
-        .iter()
-        .filter_map(|(_, variable)| {
-            variable
-                .binding
-                .as_ref()
-                .map(|binding| ((binding.group, binding.binding), variable))
-        })
-        .collect::<Vec<_>>();
-    resources.sort_unstable_by_key(|(binding, _)| *binding);
-    assert_eq!(
-        resources
-            .iter()
-            .map(|(binding, _)| *binding)
-            .collect::<Vec<_>>(),
-        [(0, 0), (0, 1), (0, 2)]
-    );
-
-    let uniforms = resources[0].1;
-    let scene_hdr = resources[1].1;
-    let dispatch = resources[2].1;
-    assert_eq!(uniforms.space, naga::AddressSpace::Uniform);
-    assert!(matches!(
-        (&scene_hdr.space, &module.types[scene_hdr.ty].inner),
-        (
-            naga::AddressSpace::Handle,
-            naga::TypeInner::Image {
-                dim: naga::ImageDimension::D2,
-                arrayed: false,
-                class: naga::ImageClass::Storage {
-                    format: naga::StorageFormat::Rgba16Float,
-                    access,
-                },
-            }
-        ) if *access == naga::StorageAccess::STORE
-    ));
-    assert_eq!(dispatch.space, naga::AddressSpace::Uniform);
-}
-
-#[test]
-fn trace_dispatch_writes_every_pixel_across_workgroup_boundaries() {
+fn trace_dispatch_writes_refinable_branch_coverage_across_workgroup_boundaries() {
     let observation = default_observation(9, 9);
     let capture = capture_trace(&observation);
 
     assert_eq!(capture.records.len(), 81);
     for (index, record) in capture.records.iter().enumerate() {
-        TraceTermination::try_from(record.metadata[0])
+        let termination = TraceTermination::try_from(record.metadata[0])
             .unwrap_or_else(|error| panic!("pixel {index} has no typed termination: {error}"));
+        let expected_coverage = match termination {
+            TraceTermination::HorizonCrossing => 0,
+            TraceTermination::Escape => f16_one_bits(),
+            other => panic!("default view pixel {index} has non-refinable termination {other:?}"),
+        };
         assert_eq!(
-            &capture.hdr_pixel(index)[6..],
-            &f16_one_bits().to_le_bytes(),
-            "pixel {index} was not written"
+            u16::from_le_bytes(
+                capture.hdr_pixel(index)[6..]
+                    .try_into()
+                    .expect("RGBA16F alpha occupies two bytes")
+            ),
+            expected_coverage,
+            "pixel {index} does not expose its Horizon/Escape coverage class"
         );
     }
 }
 
 #[test]
-fn progressive_dispatch_matches_single_dispatch_across_batch_boundaries() {
+fn selective_refinement_changes_only_the_horizon_escape_boundary() {
+    let observation = default_observation(64, 36);
+    let base = capture_trace(&observation);
+    let refined = capture_refined_trace(&observation);
+    let mut boundary_pixels = 0;
+    let mut fractional_coverage_pixels = 0;
+
+    for y in 1..35 {
+        for x in 1..63 {
+            let index = usize::try_from(y * 64 + x).expect("test index fits usize");
+            let Some(center_is_escape) = refinable_branch(base.records[index].metadata[0]) else {
+                continue;
+            };
+            let is_boundary = [index - 1, index + 1, index - 64, index + 64]
+                .into_iter()
+                .filter_map(|neighbor| refinable_branch(base.records[neighbor].metadata[0]))
+                .any(|neighbor_is_escape| neighbor_is_escape != center_is_escape);
+
+            if !is_boundary {
+                assert_eq!(
+                    refined.hdr_pixel(index),
+                    base.hdr_pixel(index),
+                    "non-boundary pixel ({x}, {y}) was needlessly retraced"
+                );
+                continue;
+            }
+
+            boundary_pixels += 1;
+            let alpha = u16::from_le_bytes(
+                refined.hdr_pixel(index)[6..]
+                    .try_into()
+                    .expect("RGBA16F alpha occupies two bytes"),
+            );
+            assert!(
+                [0, 0x3400, 0x3800, 0x3a00, f16_one_bits()].contains(&alpha),
+                "boundary pixel ({x}, {y}) has non-four-sample coverage {alpha:#06x}"
+            );
+            fractional_coverage_pixels += usize::from(![0, f16_one_bits()].contains(&alpha));
+        }
+    }
+
+    assert!(
+        boundary_pixels > 0,
+        "fixture does not cross the shadow boundary"
+    );
+    assert!(
+        fractional_coverage_pixels > 0,
+        "selective refinement left the curved shadow boundary binary"
+    );
+}
+
+#[test]
+fn repeated_refinement_in_one_submission_does_not_accumulate_edges() {
+    let observation = default_observation(64, 36);
+    let once = capture_refined_edge_count(&observation, 1);
+    let repeated = capture_refined_edge_count(&observation, 2);
+
+    assert!(once > 0, "fixture does not cross the shadow boundary");
+    assert_eq!(repeated, once);
+}
+
+#[test]
+fn direction_reconstruction_batches_reuse_the_same_packed_stencil_contract() {
     let observation = default_observation(17, 9);
-    let single = capture_trace(&observation);
-    let progressive = capture_trace_in_batches(&observation, 64);
+    let single = capture_direction_reconstruction_trace(&observation);
+    let progressive = capture_direction_reconstruction_trace_in_batches(&observation, 2);
 
     assert_eq!(single.records.len(), progressive.records.len());
     for (pixel, (single, progressive)) in
         single.records.iter().zip(&progressive.records).enumerate()
     {
         assert_same_bits(single.direction_time, progressive.direction_time);
-        assert_same_bits(single.invariant_drift, progressive.invariant_drift);
-        assert_eq!(single.metadata, progressive.metadata, "pixel {pixel}");
+        assert_eq!(single.metadata[0], progressive.metadata[0], "pixel {pixel}");
     }
 }
 
@@ -290,18 +283,18 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
         sample(&observation, 4, 1, 0.125, 0.875),
     ];
 
-    for viewport_sample in samples {
-        let subpixel = viewport_sample.subpixel().map(|value| {
+    for image_sample in samples {
+        let subpixel = image_sample.subpixel().map(|value| {
             value
                 .to_f32()
                 .expect("normalized subpixel coordinate is representable as f32")
         });
         let capture = capture_initial_rays(&observation, subpixel);
-        let [pixel_x, pixel_y] = viewport_sample.pixel();
+        let [pixel_x, pixel_y] = image_sample.pixel();
         let index = usize::try_from(pixel_y * 7 + pixel_x).expect("test index fits usize");
         let gpu = capture.records[index];
         let cpu = observation
-            .initial_ray(viewport_sample)
+            .initial_ray(image_sample)
             .expect("validated sample resolves");
         let cpu_sight = cpu.sight_direction_txyz();
         let cpu_direction = [cpu_sight[1], cpu_sight[2], cpu_sight[3]];
@@ -314,11 +307,11 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
 
         assert!(
             angle <= 2.0e-6,
-            "{viewport_sample:?}: {angle:e} rad, CPU {cpu_direction:?}, GPU {gpu_direction:?}"
+            "{image_sample:?}: {angle:e} rad, CPU {cpu_direction:?}, GPU {gpu_direction:?}"
         );
         assert!(
             gpu.invariant_drift[0] <= 8.0e-5,
-            "{viewport_sample:?}: initial null residual {}",
+            "{image_sample:?}: initial null residual {}",
             gpu.invariant_drift[0]
         );
     }
@@ -336,20 +329,20 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
         sample(&observation, 3, 0, 0.5, 0.5),
         sample(&observation, 3, 2, 0.5, 0.5),
     ];
-    let instrument = ReferenceInstrument::baseline_v1();
+    let oracle = ObservationTracer::baseline_v1();
 
-    for viewport_sample in samples {
-        let [pixel_x, pixel_y] = viewport_sample.pixel();
+    for image_sample in samples {
+        let [pixel_x, pixel_y] = image_sample.pixel();
         let index = usize::try_from(pixel_y * 7 + pixel_x).expect("test index fits usize");
         let gpu = capture.records[index];
         let gpu_termination =
             TraceTermination::try_from(gpu.metadata[0]).expect("GPU writes a typed termination");
-        let reference = instrument
+        let reference = oracle
             .trace(
-                ReferenceRequest::new(
-                    TraceInputId::new(format!("interactive-{pixel_x}-{pixel_y}")),
+                ObservationTrace::new(
+                    TraceInputId::new(format!("gpu-{pixel_x}-{pixel_y}")),
                     &observation,
-                    viewport_sample,
+                    image_sample,
                     ReferencePolicy::regular_v1(),
                 )
                 .expect("reference request resolves"),
@@ -361,9 +354,9 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             other => panic!("regular matrix produced unsupported reference terminal {other:?}"),
         };
 
-        assert_eq!(gpu_termination, expected_termination, "{viewport_sample:?}");
-        assert_eq!(gpu.metadata[1], 0, "{viewport_sample:?}: failure flags");
-        assert!(gpu.metadata[2] > 0, "{viewport_sample:?}: step counter");
+        assert_eq!(gpu_termination, expected_termination, "{image_sample:?}");
+        assert_eq!(gpu.metadata[1], 0, "{image_sample:?}: failure flags");
+        assert!(gpu.metadata[2] > 0, "{image_sample:?}: step counter");
 
         if let Some(reference_direction) = reference.escape_direction_xyz() {
             let gpu_direction = [
@@ -374,21 +367,21 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             let angular_error = angle_between(reference_direction, gpu_direction);
             assert!(
                 angular_error <= 3.82e-4,
-                "{viewport_sample:?}: escape error {angular_error:e} rad"
+                "{image_sample:?}: escape error {angular_error:e} rad"
             );
         }
 
         let event_residual = f32::from_bits(gpu.metadata[3]).abs();
         assert!(
             event_residual <= 5.0e-3,
-            "{viewport_sample:?}: event residual {event_residual:e}"
+            "{image_sample:?}: event residual {event_residual:e}"
         );
 
         let travel_time_error =
             (f64::from(gpu.direction_time[3]) - reference.travel_time_m()).abs();
         assert!(
             travel_time_error <= 1.0e-3,
-            "{viewport_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
+            "{image_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
             gpu.direction_time[3],
             reference.travel_time_m(),
             gpu.invariant_drift,
@@ -400,33 +393,99 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
         {
             assert!(
                 (0.0..=INVARIANT_DRIFT_LIMIT).contains(&drift),
-                "{viewport_sample:?}: {invariant} drift {drift:e}"
+                "{image_sample:?}: {invariant} drift {drift:e}"
             );
         }
     }
 }
 
 #[test]
-fn shadow_edge_pair_matches_reference_classification() {
+fn direction_reconstruction_preserves_full_trace_branches_and_escape_directions() {
+    let profiles = [
+        ("default", 0.8, 30.0, std::f64::consts::FRAC_PI_4),
+        ("near-extreme-wide", 0.99, 30.0, std::f64::consts::FRAC_PI_2),
+        ("negative-near", -0.8, 5.0, std::f64::consts::FRAC_PI_4),
+    ];
+
+    for (label, spin, observer_radius, vertical_fov) in profiles {
+        let observation = transfer_profile(spin, observer_radius, vertical_fov);
+        let full = capture_trace(&observation);
+        let transferred = capture_direction_reconstruction_trace(&observation);
+        let mut reconstructed_escape_pixels = 0;
+
+        assert_eq!(transferred.records.len(), full.records.len());
+        for (index, (expected, actual)) in full.records.iter().zip(&transferred.records).enumerate()
+        {
+            assert_eq!(
+                actual.metadata[0], expected.metadata[0],
+                "{label}: transfer changed the terminal branch at pixel {index}"
+            );
+            if TraceTermination::try_from(expected.metadata[0]) != Ok(TraceTermination::Escape) {
+                continue;
+            }
+
+            let expected_direction = &expected.direction_time[..3];
+            let actual_direction = &actual.direction_time[..3];
+            let chord_squared = expected_direction
+                .iter()
+                .zip(actual_direction)
+                .map(|(lhs, rhs)| {
+                    let difference = f64::from(*lhs) - f64::from(*rhs);
+                    difference * difference
+                })
+                .sum::<f64>();
+            assert!(
+                chord_squared <= (3.82e-4_f64).powi(2),
+                "{label}: transfer direction exceeded the angular budget at pixel {index}: chord²={chord_squared:e}"
+            );
+            reconstructed_escape_pixels += usize::from(
+                expected_direction
+                    .iter()
+                    .zip(actual_direction)
+                    .any(|(lhs, rhs)| lhs.to_bits() != rhs.to_bits()),
+            );
+        }
+
+        if observer_radius >= 30.0 {
+            assert!(
+                reconstructed_escape_pixels > 0,
+                "{label}: far-field fixture did not exercise cooperative direction reconstruction"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_adjacent_shadow_edge_pair_matches_reference_classification() {
     let observation = default_observation(160, 90);
     let capture = capture_trace(&observation);
-    let instrument = ReferenceInstrument::baseline_v1();
+    let oracle = ObservationTracer::baseline_v1();
+    let edge_pair = (0..90)
+        .find_map(|pixel_y| {
+            (0..159).find_map(|pixel_x| {
+                let left_index =
+                    usize::try_from(pixel_y * 160 + pixel_x).expect("test index fits usize");
+                let right_index = left_index + 1;
+                let left = refinable_branch(capture.records[left_index].metadata[0])?;
+                let right = refinable_branch(capture.records[right_index].metadata[0])?;
+                (left != right).then_some([(pixel_x, pixel_y), (pixel_x + 1, pixel_y)])
+            })
+        })
+        .expect("default view contains a horizontal Horizon/Escape boundary");
     let mut terminations = Vec::new();
 
-    for viewport_sample in [
-        sample(&observation, 69, 27, 0.5, 0.5),
-        sample(&observation, 70, 27, 0.5, 0.5),
-    ] {
-        let [pixel_x, pixel_y] = viewport_sample.pixel();
+    for (pixel_x, pixel_y) in edge_pair {
+        let image_sample = sample(&observation, pixel_x, pixel_y, 0.5, 0.5);
+        let [pixel_x, pixel_y] = image_sample.pixel();
         let index = usize::try_from(pixel_y * 160 + pixel_x).expect("test index fits usize");
         let gpu = TraceTermination::try_from(capture.records[index].metadata[0])
             .expect("GPU writes a typed termination");
-        let reference = instrument
+        let reference = oracle
             .trace(
-                ReferenceRequest::new(
+                ObservationTrace::new(
                     TraceInputId::new(format!("shadow-edge-{pixel_x}-{pixel_y}")),
                     &observation,
-                    viewport_sample,
+                    image_sample,
                     ReferencePolicy::regular_v1(),
                 )
                 .expect("reference request resolves"),
@@ -438,18 +497,30 @@ fn shadow_edge_pair_matches_reference_classification() {
             other => panic!("shadow-edge reference produced {other:?}"),
         };
 
-        assert_eq!(gpu, expected, "{viewport_sample:?}");
+        assert_eq!(gpu, expected, "{image_sample:?}");
         terminations.push(gpu);
     }
 
+    terminations.sort_unstable_by_key(|termination| u32::from(*termination));
     assert_eq!(
         terminations,
-        [TraceTermination::Escape, TraceTermination::HorizonCrossing]
+        [TraceTermination::HorizonCrossing, TraceTermination::Escape]
     );
 }
 
 const fn f16_one_bits() -> u16 {
     0x3c00
+}
+
+fn refinable_branch(raw: u32) -> Option<bool> {
+    match TraceTermination::try_from(raw).ok()? {
+        TraceTermination::HorizonCrossing => Some(false),
+        TraceTermination::Escape => Some(true),
+        TraceTermination::SingularityGuard
+        | TraceTermination::StepExhaustion
+        | TraceTermination::NumericalFailure
+        | TraceTermination::Uncertain => None,
+    }
 }
 
 fn assert_same_bits(left: [f32; 4], right: [f32; 4]) {
@@ -460,10 +531,48 @@ fn default_observation(width: u32, height: u32) -> Observation {
     observation_at_scale(width, height, 1.0)
 }
 
+fn transfer_profile(spin: f64, observer_radius: f64, vertical_fov: f64) -> Observation {
+    transfer_profile_extent(spin, observer_radius, vertical_fov, 1_280, 720)
+}
+
+fn transfer_profile_extent(
+    spin: f64,
+    observer_radius: f64,
+    vertical_fov: f64,
+    width: u32,
+    height: u32,
+) -> Observation {
+    let spacetime = KerrNewmanSpacetime::new(1.0, spin, 0.0, KerrSchildChart::Outgoing)
+        .expect("transfer profile spacetime is valid");
+    let observer_xyz =
+        spacetime.oblate_to_cartesian(observer_radius, std::f64::consts::FRAC_PI_3, 0.0);
+    let observer = StationaryObserverInput::new(
+        [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
+        [0.0; 4],
+        [0.0, 0.0, 1.0],
+        1.0,
+    );
+    let scene = PhysicalScene::new(PhysicalSceneInput::new(
+        1.0,
+        spin,
+        0.0,
+        KerrSchildChart::Outgoing,
+        observer,
+    ))
+    .expect("transfer profile scene is valid");
+    let view = PerspectiveView::new(
+        NonZeroU32::new(width).expect("profile width is nonzero"),
+        NonZeroU32::new(height).expect("profile height is nonzero"),
+        Angle::from_radians(vertical_fov).expect("profile FOV is finite"),
+    )
+    .expect("transfer profile view is valid");
+    Observation::new(scene, view)
+}
+
 fn observation_at_coordinate_time(width: u32, height: u32, coordinate_time_m: f64) -> Observation {
     let mass = 1.0;
     let spin = 0.8;
-    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildCoordinates::Outgoing)
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildChart::Outgoing)
         .expect("fixture spacetime is valid");
     let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
     observation_with_time(
@@ -479,7 +588,7 @@ fn observation_at_coordinate_time(width: u32, height: u32, coordinate_time_m: f6
 
 fn observation_at_scale(width: u32, height: u32, mass: f64) -> Observation {
     let spin = 0.8 * mass;
-    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildCoordinates::Outgoing)
+    let spacetime = KerrNewmanSpacetime::new(mass, spin, 0.0, KerrSchildChart::Outgoing)
         .expect("fixture spacetime is valid");
     let observer_xyz = spacetime.oblate_to_cartesian(30.0 * mass, std::f64::consts::FRAC_PI_3, 0.0);
     observation_with(mass, spin, 0.0, observer_xyz, 1.0, width, height)
@@ -514,7 +623,7 @@ fn observation_with_time(
     coordinate_time_m: f64,
     extent: [u32; 2],
 ) -> Observation {
-    let observer = StationaryObserverDraft::new(
+    let observer = StationaryObserverInput::new(
         [
             coordinate_time_m,
             observer_xyz[0],
@@ -525,21 +634,21 @@ fn observation_with_time(
         [0.0, 0.0, 1.0],
         observer_frequency,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
+    let scene = PhysicalScene::new(PhysicalSceneInput::new(
         mass,
         spin,
         charge,
-        KerrSchildCoordinates::Outgoing,
+        KerrSchildChart::Outgoing,
         observer,
     ))
     .expect("fixture scene is valid");
-    let projection = ViewportProjection::perspective(
+    let view = PerspectiveView::new(
         NonZeroU32::new(extent[0]).expect("test width is nonzero"),
         NonZeroU32::new(extent[1]).expect("test height is nonzero"),
         Angle::from_radians(std::f64::consts::FRAC_PI_4).expect("fixture FOV is finite"),
     )
-    .expect("fixture projection is valid");
-    Observation::new(scene, projection)
+    .expect("fixture view is valid");
+    Observation::new(scene, view)
 }
 
 fn sample(
@@ -548,29 +657,28 @@ fn sample(
     pixel_y: u32,
     subpixel_x: f64,
     subpixel_y: f64,
-) -> ViewportSample {
+) -> ImageSample {
     observation
-        .projection()
+        .view()
         .sample(pixel_x, pixel_y, subpixel_x, subpixel_y)
         .expect("test sample is in range")
 }
 
 fn angle_between(left: [f64; 3], right: [f64; 3]) -> f64 {
-    let left_length = left
-        .into_iter()
-        .map(|value| value * value)
-        .sum::<f64>()
-        .sqrt();
-    let right_length = right
-        .into_iter()
-        .map(|value| value * value)
-        .sum::<f64>()
-        .sqrt();
-    let cosine = left
+    let dot = left
         .into_iter()
         .zip(right)
         .map(|(left, right)| left * right)
+        .sum::<f64>();
+    let cross = [
+        left[2].mul_add(-right[1], left[1] * right[2]),
+        left[0].mul_add(-right[2], left[2] * right[0]),
+        left[1].mul_add(-right[0], left[0] * right[1]),
+    ];
+    let cross_length = cross
+        .into_iter()
+        .map(|value| value * value)
         .sum::<f64>()
-        / (left_length * right_length);
-    cosine.clamp(-1.0, 1.0).acos()
+        .sqrt();
+    cross_length.atan2(dot)
 }

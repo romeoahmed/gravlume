@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, TryRecvError};
 
 use num_traits::ToPrimitive as _;
 
-const QUERY_COUNT: u32 = 2;
+const QUERY_COUNT: u32 = 4;
 const QUERY_BYTES: u64 = QUERY_COUNT as u64 * wgpu::QUERY_SIZE as u64;
 const QUERY_BYTE_COUNT: usize = QUERY_COUNT as usize * size_of::<u64>();
 
@@ -12,11 +12,13 @@ pub struct TimingSample {
 }
 
 impl TimingSample {
-    pub(crate) fn from_ticks(ticks: [u64; 2], timestamp_period_ns: f32) -> Self {
+    pub(crate) fn from_ticks(ticks: [u64; 4], timestamp_period_ns: f32) -> Self {
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
+        let node_ticks = ticks[1].saturating_sub(ticks[0]);
+        let resolve_ticks = ticks[3].saturating_sub(ticks[2]);
         Self {
-            compute_ms: ticks[1]
-                .saturating_sub(ticks[0])
+            compute_ms: node_ticks
+                .saturating_add(resolve_ticks)
                 .to_f64()
                 .unwrap_or(f64::INFINITY)
                 * milliseconds_per_tick,
@@ -92,11 +94,19 @@ impl GpuTimings {
         self.callback_receiver.is_none()
     }
 
-    pub(crate) const fn compute_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
+    pub(crate) const fn node_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(0),
             end_of_pass_write_index: Some(1),
+        }
+    }
+
+    pub(crate) const fn resolve_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
+        wgpu::ComputePassTimestampWrites {
+            query_set: &self.query_set,
+            beginning_of_pass_write_index: Some(2),
+            end_of_pass_write_index: Some(3),
         }
     }
 
@@ -175,29 +185,40 @@ impl GpuTimings {
 
 #[cfg(test)]
 mod tests {
+    use num_traits::ToPrimitive as _;
+    use proptest::prelude::*;
+
     use super::{GpuTimings, TimingSample};
 
-    #[test]
-    fn timestamp_ticks_are_converted_with_queue_period() {
-        let sample = TimingSample::from_ticks([100, 250], 2.0);
+    proptest! {
+        #[test]
+        fn timestamp_encoding_roundtrips_and_duration_saturates(
+            ticks in any::<[u64; 4]>(),
+            period_ns in 0.001_f32..1_000.0,
+        ) {
+            let bytes: Vec<u8> = ticks.into_iter().flat_map(u64::to_le_bytes).collect();
+            prop_assert_eq!(super::decode_query_ticks(&bytes), Some(ticks));
 
-        assert!((sample.compute_ms() - 0.000_3).abs() < f64::EPSILON);
-    }
+            let expected_ticks = ticks[1]
+                .saturating_sub(ticks[0])
+                .saturating_add(ticks[3].saturating_sub(ticks[2]));
+            let expected_ms = expected_ticks.to_f64().expect("u64 converts to finite f64")
+                * f64::from(period_ns)
+                / 1_000_000.0;
+            let actual_ms = TimingSample::from_ticks(ticks, period_ns).compute_ms();
+            prop_assert!((actual_ms - expected_ms).abs() <= expected_ms.abs() * f64::EPSILON);
+        }
 
-    #[test]
-    fn mapped_query_bytes_are_decoded_without_alignment_assumptions() {
-        let bytes: Vec<u8> = [10_u64, 30]
-            .into_iter()
-            .flat_map(u64::to_le_bytes)
-            .collect();
-
-        assert_eq!(super::decode_query_ticks(&bytes), Some([10, 30]));
-        assert_eq!(super::decode_query_ticks(&bytes[..15]), None);
+        #[test]
+        fn timestamp_decoder_rejects_every_wrong_byte_count(length in 0_usize..64) {
+            prop_assume!(length != 32);
+            prop_assert_eq!(super::decode_query_ticks(&vec![0; length]), None);
+        }
     }
 
     #[test]
     fn one_shot_readback_completes_after_submission_goes_idle() {
-        let gpu = crate::test_gpu::native_gpu();
+        let gpu = crate::test_device::native_gpu();
         let mut timings = GpuTimings::new(&gpu.device);
         let mut encoder = gpu
             .device
@@ -207,7 +228,13 @@ mod tests {
         {
             let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("one-shot timestamp compute pass"),
-                timestamp_writes: Some(timings.compute_writes()),
+                timestamp_writes: Some(timings.node_writes()),
+            });
+        }
+        {
+            let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("one-shot timestamp resolve pass"),
+                timestamp_writes: Some(timings.resolve_writes()),
             });
         }
         timings.encode_resolve(&mut encoder);

@@ -2,6 +2,9 @@
 
 //! Narrow, safe ownership boundary for native display-state notifications.
 
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+compile_error!("gravlume-native-display supports only native macOS, Windows, and Linux targets");
+
 use std::time::Instant;
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -101,55 +104,25 @@ impl DisplayMonitor {
 }
 
 #[cfg(target_os = "macos")]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "AppKit display notifications require a narrow audited Objective-C FFI boundary"
+)]
 #[path = "platform/macos.rs"]
 mod platform;
 
 #[cfg(target_os = "windows")]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "desktop WinRT display interop requires a narrow audited HWND/COM FFI boundary"
+)]
 #[path = "platform/windows.rs"]
 mod platform;
 
 #[cfg(target_os = "linux")]
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "Wayland guest queue integration requires a narrow audited native proxy boundary"
+)]
 #[path = "platform/wayland.rs"]
 mod platform;
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-mod platform {
-    use std::time::Instant;
-
-    use raw_window_handle::HasWindowHandle;
-
-    use crate::{DynamicRange, MonitorError, UnknownDisplayState};
-
-    pub struct Monitor;
-
-    impl Monitor {
-        pub(super) fn new(
-            window: &impl HasWindowHandle,
-            _notify: impl Fn() + Send + Sync + 'static,
-        ) -> Result<Self, MonitorError> {
-            let _ = window.window_handle()?;
-            Ok(Self)
-        }
-    }
-
-    impl crate::PlatformMonitor for Monitor {
-        fn dynamic_range(&self) -> DynamicRange {
-            DynamicRange::Unknown(UnknownDisplayState::PlatformIntegrationUnavailable)
-        }
-
-        fn refresh(&mut self) {}
-
-        fn next_dispatch_deadline(&self) -> Option<Instant> {
-            None
-        }
-
-        fn shutdown(&mut self) {}
-
-        fn shutdown_complete(&self) -> bool {
-            true
-        }
-    }
-}

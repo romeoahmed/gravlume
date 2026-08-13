@@ -1,3 +1,5 @@
+use gravlume_native_display::{DynamicRange, UnknownDisplayState};
+
 pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 
 /// Resolves the exact limits consumed by the native renderer.
@@ -67,44 +69,6 @@ pub enum SdrReason {
     WaylandEncodingUnavailable,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UnknownDisplayState {
-    PlatformIntegrationUnavailable,
-    UnsupportedOsVersion,
-    StateQueryFailed,
-    WaylandColorManagementUnavailable,
-    WaylandProtocolTooOld,
-    WaylandEncodingUnavailable,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct HdrParameters {
-    tone_map_headroom: f32,
-    reference_white_scale: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum DisplayState {
-    Hdr(HdrParameters),
-    Sdr,
-    Suppressed,
-    Unknown(UnknownDisplayState),
-}
-
-impl HdrParameters {
-    #[must_use]
-    pub fn new(tone_map_headroom: f32, reference_white_scale: f32) -> Option<Self> {
-        (tone_map_headroom.is_finite()
-            && tone_map_headroom >= 1.0
-            && reference_white_scale.is_finite()
-            && reference_white_scale > 0.0)
-            .then_some(Self {
-                tone_map_headroom,
-                reference_white_scale,
-            })
-    }
-}
-
 impl SurfaceSelection {
     pub(crate) const fn format(self) -> wgpu::TextureFormat {
         self.format
@@ -120,11 +84,6 @@ impl SurfaceSelection {
 
     pub(crate) const fn alpha_mode(self) -> wgpu::CompositeAlphaMode {
         self.alpha_mode
-    }
-
-    #[cfg(test)]
-    pub(crate) fn requires_manual_srgb_encoding(self) -> bool {
-        !self.format.is_srgb()
     }
 
     pub(crate) const fn output_mode(self) -> OutputMode {
@@ -177,7 +136,7 @@ pub fn check_baseline_adapter(
 
 pub fn select_surface(
     capabilities: &wgpu::SurfaceCapabilities,
-    display: DisplayState,
+    display: DynamicRange,
 ) -> Result<SurfaceSelection, CapabilityError> {
     if !capabilities
         .usages
@@ -201,30 +160,32 @@ pub fn select_surface(
         .or_else(|| capabilities.alpha_modes.first().copied())
         .ok_or(CapabilityError::NoAlphaMode)?;
 
-    let hdr_pair = capabilities.format_capabilities.iter().find(|candidate| {
-        candidate.format == wgpu::TextureFormat::Rgba16Float
-            && candidate
-                .color_spaces
-                .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
-    });
-    if let (DisplayState::Hdr(parameters), Some(pair)) = (display, hdr_pair) {
-        return Ok(SurfaceSelection {
-            format: pair.format,
-            color_space: wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+    if let Some((pair, tone_map_headroom, reference_white_scale)) =
+        resolve_hdr(capabilities, display)
+    {
+        return Ok(surface_selection(
+            pair.format,
+            wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
             present_mode,
             alpha_mode,
-            output: OutputContract {
+            OutputContract {
                 mode: OutputMode::Hdr,
-                tone_map_headroom: parameters.tone_map_headroom,
-                reference_white_scale: parameters.reference_white_scale,
+                tone_map_headroom,
+                reference_white_scale,
             },
-        });
+        ));
     }
     let sdr_reason = match display {
-        DisplayState::Suppressed => SdrReason::SystemSuppressed,
-        DisplayState::Sdr => SdrReason::DisplayReportedSdr,
-        DisplayState::Hdr(_) => SdrReason::HdrSurfacePairMissing,
-        DisplayState::Unknown(reason) => match reason {
+        DynamicRange::Suppressed => SdrReason::SystemSuppressed,
+        DynamicRange::Sdr => SdrReason::DisplayReportedSdr,
+        DynamicRange::Hdr {
+            tone_map_headroom,
+            reference_white_scale,
+        } if !valid_hdr_parameters(tone_map_headroom, reference_white_scale) => {
+            SdrReason::DisplayStateQueryFailed
+        }
+        DynamicRange::Hdr { .. } => SdrReason::HdrSurfacePairMissing,
+        DynamicRange::Unknown(reason) => match reason {
             UnknownDisplayState::PlatformIntegrationUnavailable => {
                 SdrReason::PlatformIntegrationUnavailable
             }
@@ -264,25 +225,75 @@ pub fn select_surface(
         })
         .ok_or(CapabilityError::NoSdrSurfacePair)?
         .format;
-    Ok(SurfaceSelection {
+    Ok(surface_selection(
         format,
-        color_space: wgpu::SurfaceColorSpace::Srgb,
+        wgpu::SurfaceColorSpace::Srgb,
         present_mode,
         alpha_mode,
-        output: OutputContract {
+        OutputContract {
             mode: OutputMode::Sdr(sdr_reason),
             tone_map_headroom: 1.0,
             reference_white_scale: 1.0,
         },
-    })
+    ))
+}
+
+fn resolve_hdr(
+    capabilities: &wgpu::SurfaceCapabilities,
+    display: DynamicRange,
+) -> Option<(&wgpu::SurfaceFormatCapabilities, f32, f32)> {
+    let DynamicRange::Hdr {
+        tone_map_headroom,
+        reference_white_scale,
+    } = display
+    else {
+        return None;
+    };
+    if !valid_hdr_parameters(tone_map_headroom, reference_white_scale) {
+        return None;
+    }
+    capabilities
+        .format_capabilities
+        .iter()
+        .find(|candidate| {
+            candidate.format == wgpu::TextureFormat::Rgba16Float
+                && candidate
+                    .color_spaces
+                    .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR)
+        })
+        .map(|pair| (pair, tone_map_headroom, reference_white_scale))
+}
+
+const fn surface_selection(
+    format: wgpu::TextureFormat,
+    color_space: wgpu::SurfaceColorSpace,
+    present_mode: wgpu::PresentMode,
+    alpha_mode: wgpu::CompositeAlphaMode,
+    output: OutputContract,
+) -> SurfaceSelection {
+    SurfaceSelection {
+        format,
+        color_space,
+        present_mode,
+        alpha_mode,
+        output,
+    }
+}
+
+fn valid_hdr_parameters(tone_map_headroom: f32, reference_white_scale: f32) -> bool {
+    tone_map_headroom.is_finite()
+        && tone_map_headroom >= 1.0
+        && reference_white_scale.is_finite()
+        && reference_white_scale > 0.0
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        BASELINE_FEATURES, CapabilityError, DisplayState, HdrParameters, OutputMode, SdrReason,
-        UnknownDisplayState, check_baseline_adapter, required_device_limits, select_surface,
+        BASELINE_FEATURES, CapabilityError, OutputMode, SdrReason, check_baseline_adapter,
+        required_device_limits, select_surface,
     };
+    use gravlume_native_display::{DynamicRange, UnknownDisplayState};
 
     #[test]
     fn device_limits_do_not_copy_adapter_buffer_capacity() {
@@ -344,7 +355,10 @@ mod tests {
 
         let selected = select_surface(
             &caps,
-            DisplayState::Hdr(HdrParameters::new(4.0, 2.5).expect("valid HDR parameters")),
+            DynamicRange::Hdr {
+                tone_map_headroom: 4.0,
+                reference_white_scale: 2.5,
+            },
         )
         .expect("an HDR pair is available");
 
@@ -358,10 +372,20 @@ mod tests {
         assert_eq!(selected.alpha_mode(), wgpu::CompositeAlphaMode::Opaque);
         assert!((selected.tone_map_headroom() - 4.0).abs() <= f32::EPSILON);
         assert!((selected.reference_white_scale() - 2.5).abs() <= f32::EPSILON);
-        assert!(HdrParameters::new(f32::NAN, 1.0).is_none());
-        assert!(HdrParameters::new(2.0, 0.0).is_none());
+        let invalid = select_surface(
+            &caps,
+            DynamicRange::Hdr {
+                tone_map_headroom: f32::NAN,
+                reference_white_scale: 1.0,
+            },
+        )
+        .expect("invalid HDR metadata has a color-correct SDR fallback");
+        assert_eq!(
+            invalid.output_mode(),
+            OutputMode::Sdr(SdrReason::DisplayStateQueryFailed)
+        );
         let fallback =
-            select_surface(&caps, DisplayState::Suppressed).expect("an SDR fallback is available");
+            select_surface(&caps, DynamicRange::Suppressed).expect("an SDR fallback is available");
         assert_eq!(fallback.format(), wgpu::TextureFormat::Bgra8UnormSrgb);
         assert_eq!(
             fallback.output_mode(),
@@ -369,7 +393,7 @@ mod tests {
         );
         let unknown = select_surface(
             &caps,
-            DisplayState::Unknown(UnknownDisplayState::StateQueryFailed),
+            DynamicRange::Unknown(UnknownDisplayState::StateQueryFailed),
         )
         .expect("unknown display state has a color-correct SDR fallback");
         assert_eq!(
@@ -381,9 +405,9 @@ mod tests {
             wgpu::TextureFormat::Bgra8Unorm,
             wgpu::SurfaceColorSpaces::SRGB,
         )]);
-        let manual = select_surface(&manual_caps, DisplayState::Sdr)
+        let manual = select_surface(&manual_caps, DynamicRange::Sdr)
             .expect("a plain eight-bit SDR pair can use shader encoding");
-        assert!(manual.requires_manual_srgb_encoding());
+        assert_eq!(manual.fragment_entry(), "present_sdr_to_gamma_target");
     }
 
     #[test]
@@ -396,7 +420,10 @@ mod tests {
         assert_eq!(
             select_surface(
                 &caps,
-                DisplayState::Hdr(HdrParameters::new(1.0, 1.0).expect("valid HDR parameters")),
+                DynamicRange::Hdr {
+                    tone_map_headroom: 1.0,
+                    reference_white_scale: 1.0,
+                },
             ),
             Err(CapabilityError::NoSdrSurfacePair)
         );

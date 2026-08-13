@@ -8,12 +8,12 @@ publish = false
 
 [workspace]
 members = [
-    ".",
-    "crates/gravlume-desktop",
-    "crates/gravlume-domain",
-    "crates/gravlume-native-display",
-    "crates/gravlume-reference",
-    "crates/gravlume-render",
+  ".",
+  "crates/gravlume-desktop",
+  "crates/gravlume-domain",
+  "crates/gravlume-native-display",
+  "crates/gravlume-reference",
+  "crates/gravlume-render",
 ]
 resolver = "3"
 
@@ -25,6 +25,9 @@ publish = false
 [workspace.dependencies]
 bytemuck = { version = "1.25", features = ["derive"] }
 block2 = { version = "0.6", default-features = false, features = ["alloc"] }
+criterion = { version = "0.8.2", default-features = false, features = [
+  "cargo_bench_support",
+] }
 egui = "0.36"
 egui-wgpu = { version = "0.36", default-features = false }
 egui-winit = { version = "0.36", default-features = false }
@@ -34,14 +37,29 @@ objc2 = { version = "0.6", default-features = false }
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-foundation = { version = "0.3", default-features = false }
 pollster = "1.0"
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 raw-window-handle = { version = "0.6", features = ["std"] }
 rayon = "1.12"
-serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+serde = { version = "1.0", default-features = false, features = [
+  "derive",
+  "std",
+] }
 thiserror = "2.0"
-toml = { version = "1.1", default-features = false, features = ["parse", "serde", "std"] }
+toml = { version = "1.1", default-features = false, features = [
+  "parse",
+  "serde",
+  "std",
+] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
-wgpu = { version = "30.0", default-features = false, features = ["parking_lot", "std", "wgsl"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+  "env-filter",
+  "fmt",
+] }
+wgpu = { version = "30.0", default-features = false, features = [
+  "parking_lot",
+  "std",
+  "wgsl",
+] }
 wayland-client = { version = "0.31", default-features = false }
 wayland-protocols = { version = "0.32", default-features = false }
 windows = "0.62"

@@ -12,20 +12,20 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParameterState {
+pub enum Extremality {
     Subextremal,
     Extremal,
     Superextremal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum KerrSchildCoordinates {
+pub enum KerrSchildChart {
     Ingoing,
     Outgoing,
 }
 
-impl KerrSchildCoordinates {
-    const fn principal_direction(self) -> f64 {
+impl KerrSchildChart {
+    const fn branch_sign(self) -> f64 {
         match self {
             Self::Ingoing => 1.0,
             Self::Outgoing => -1.0,
@@ -80,8 +80,8 @@ pub struct KerrNewmanSpacetime {
     mass_m: f64,
     spin_m: f64,
     charge_m: f64,
-    coordinates: KerrSchildCoordinates,
-    parameter_state: ParameterState,
+    chart: KerrSchildChart,
+    extremality: Extremality,
 }
 
 #[derive(Clone, Copy)]
@@ -131,16 +131,16 @@ impl KerrNewmanSpacetime {
         mass_m: f64,
         spin_m: f64,
         charge_m: f64,
-        coordinates: KerrSchildCoordinates,
+        chart: KerrSchildChart,
     ) -> Result<Self, ValidationReport> {
-        Self::validated_with_prefix(mass_m, spin_m, charge_m, coordinates, "spacetime")
+        Self::validated_with_prefix(mass_m, spin_m, charge_m, chart, "spacetime")
     }
 
     pub(super) fn validated_with_prefix(
         mass_m: f64,
         spin_m: f64,
         charge_m: f64,
-        coordinates: KerrSchildCoordinates,
+        chart: KerrSchildChart,
         prefix: &str,
     ) -> Result<Self, ValidationReport> {
         let mut report = ValidationReport::default();
@@ -169,17 +169,17 @@ impl KerrNewmanSpacetime {
 
         let mass_squared = ExactBinary::square(mass_m);
         let angular_squared = ExactBinary::sum_of_squares(spin_m, charge_m);
-        let parameter_state = match mass_squared.cmp(&angular_squared) {
-            Ordering::Greater => ParameterState::Subextremal,
-            Ordering::Equal => ParameterState::Extremal,
-            Ordering::Less => ParameterState::Superextremal,
+        let extremality = match mass_squared.cmp(&angular_squared) {
+            Ordering::Greater => Extremality::Subextremal,
+            Ordering::Equal => Extremality::Extremal,
+            Ordering::Less => Extremality::Superextremal,
         };
         let spacetime = Self {
             mass_m,
             spin_m,
             charge_m,
-            coordinates,
-            parameter_state,
+            chart,
+            extremality,
         };
         if spacetime
             .outer_horizon_radius()
@@ -210,21 +210,21 @@ impl KerrNewmanSpacetime {
     }
 
     #[must_use]
-    pub const fn coordinates(self) -> KerrSchildCoordinates {
-        self.coordinates
+    pub const fn chart(self) -> KerrSchildChart {
+        self.chart
     }
 
     #[must_use]
-    pub const fn parameter_state(self) -> ParameterState {
-        self.parameter_state
+    pub const fn extremality(self) -> Extremality {
+        self.extremality
     }
 
     #[must_use]
     pub fn outer_horizon_radius(self) -> Option<f64> {
-        match self.parameter_state {
-            ParameterState::Superextremal => None,
-            ParameterState::Extremal => Some(self.mass_m),
-            ParameterState::Subextremal => {
+        match self.extremality {
+            Extremality::Superextremal => None,
+            Extremality::Extremal => Some(self.mass_m),
+            Extremality::Subextremal => {
                 let mass_squared = ExactBinary::square(self.mass_m);
                 let angular_squared = ExactBinary::sum_of_squares(self.spin_m, self.charge_m);
                 let discriminant_root = mass_squared.subtract(&angular_squared).square_root();
@@ -233,14 +233,18 @@ impl KerrNewmanSpacetime {
         }
     }
 
-    /// Converts oblate coordinates to this spacetime's Cartesian Kerr-Schild coordinates.
+    /// Converts this chart's oblate coordinates to Cartesian Kerr-Schild coordinates.
+    ///
+    /// `azimuth` is the selected chart's azimuth. `spin_m` remains the physical
+    /// `J / M`; the outgoing chart applies the opposite oblate spatial twist.
     #[must_use]
     pub fn oblate_to_cartesian(self, radius: f64, polar: f64, azimuth: f64) -> [f64; 3] {
         let (sin_theta, cos_theta) = polar.sin_cos();
         let (sin_phi, cos_phi) = azimuth.sin_cos();
+        let chart_spin = self.chart.branch_sign() * self.spin_m;
         [
-            self.spin_m.mul_add(-sin_phi, radius * cos_phi) * sin_theta,
-            self.spin_m.mul_add(cos_phi, radius * sin_phi) * sin_theta,
+            chart_spin.mul_add(-sin_phi, radius * cos_phi) * sin_theta,
+            chart_spin.mul_add(cos_phi, radius * sin_phi) * sin_theta,
             radius * cos_theta,
         ]
     }
@@ -524,38 +528,41 @@ impl KerrNewmanSpacetime {
         if radial_denominator <= 0.0 || !radial_denominator.is_finite() {
             return Err(GeometryError::InvalidDenominator);
         }
-        let null_spatial = self.coordinates.principal_direction()
+        let branch_sign = self.chart.branch_sign();
+        let chart_spin = branch_sign * spin;
+        let null_spatial = branch_sign
             * DVec3::new(
-                spin.mul_add(y, scaled_radius * x) / radial_denominator,
-                spin.mul_add(-x, scaled_radius * y) / radial_denominator,
+                chart_spin.mul_add(y, scaled_radius * x) / radial_denominator,
+                chart_spin.mul_add(-x, scaled_radius * y) / radial_denominator,
                 z / scaled_radius,
             );
         let null_covector = [1.0, null_spatial.x, null_spatial.y, null_spatial.z];
         let null_vector = [-1.0, null_spatial.x, null_spatial.y, null_spatial.z];
         let coordinates = [x, y, z];
         let radius_gradients = radius_gradient.to_array();
-        let direction = self.coordinates.principal_direction();
         let null_vector_gradient = std::array::from_fn(|index| {
             let radius_i = radius_gradients[index];
             let delta_x = f64::from(index == 0);
             let delta_y = f64::from(index == 1);
             let delta_z = f64::from(index == 2);
-            let numerator_x = spin.mul_add(delta_y, radius_i.mul_add(x, scaled_radius * delta_x));
-            let numerator_y = spin.mul_add(-delta_x, radius_i.mul_add(y, scaled_radius * delta_y));
+            let numerator_x =
+                chart_spin.mul_add(delta_y, radius_i.mul_add(x, scaled_radius * delta_x));
+            let numerator_y =
+                chart_spin.mul_add(-delta_x, radius_i.mul_add(y, scaled_radius * delta_y));
             let radial_derivative = 2.0 * scaled_radius * radius_i;
-            let derivative_x = ((-direction * null_spatial.x * radial_derivative)
+            let derivative_x = ((-branch_sign * null_spatial.x * radial_derivative)
                 .mul_add(radial_denominator.recip(), numerator_x / radial_denominator))
                 / scale;
-            let derivative_y = ((-direction * null_spatial.y * radial_derivative)
+            let derivative_y = ((-branch_sign * null_spatial.y * radial_derivative)
                 .mul_add(radial_denominator.recip(), numerator_y / radial_denominator))
                 / scale;
             let derivative_z =
                 (delta_z / scaled_radius - coordinates[2] * radius_i / radius_squared) / scale;
             [
                 0.0,
-                direction * derivative_x,
-                direction * derivative_y,
-                direction * derivative_z,
+                branch_sign * derivative_x,
+                branch_sign * derivative_y,
+                branch_sign * derivative_z,
             ]
         });
         let geometry = Geometry {
@@ -593,21 +600,21 @@ impl KerrNewmanSpacetime {
         let numerator_gradient = radius_gradient * (2.0 * mass);
         let scalar_f_gradient =
             (numerator_gradient * sigma - sigma_gradient * numerator) / (sigma * sigma * scale);
-        let direction = self.coordinates.principal_direction();
-        let null_covector = [1.0, 0.0, 0.0, direction * axis_sign];
-        let null_vector = [-1.0, 0.0, 0.0, direction * axis_sign];
+        let branch_sign = self.chart.branch_sign();
+        let null_covector = [1.0, 0.0, 0.0, branch_sign * axis_sign];
+        let null_vector = [-1.0, 0.0, 0.0, branch_sign * axis_sign];
         let inverse_denominator_scale = sigma.recip() / scale;
         let null_vector_gradient = [
             [
                 0.0,
-                direction * scaled_radius * inverse_denominator_scale,
-                -direction * spin * inverse_denominator_scale,
+                branch_sign * scaled_radius * inverse_denominator_scale,
+                -spin * inverse_denominator_scale,
                 0.0,
             ],
             [
                 0.0,
-                direction * spin * inverse_denominator_scale,
-                direction * scaled_radius * inverse_denominator_scale,
+                spin * inverse_denominator_scale,
+                branch_sign * scaled_radius * inverse_denominator_scale,
                 0.0,
             ],
             [0.0; 4],
@@ -896,4 +903,142 @@ fn dot_components(left: [f64; 4], right: [f64; 4]) -> f64 {
         .zip(right)
         .map(|(left, right)| left * right)
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::{KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent};
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn both_charts_pull_back_to_the_same_physical_kerr_newman_metric(
+            mass in 0.5_f64..4.0,
+            spin_fraction in -0.9_f64..0.9,
+            charge_fraction in -0.2_f64..0.2,
+            radius_fraction in 3.0_f64..20.0,
+            polar in 0.1_f64..(std::f64::consts::PI - 0.1),
+            azimuth in -std::f64::consts::PI..std::f64::consts::PI,
+        ) {
+        let spin = mass * spin_fraction;
+        let charge = mass * charge_fraction;
+        let radius = mass * radius_fraction;
+        let (sin_theta, cos_theta) = polar.sin_cos();
+        let sin_theta_squared = sin_theta * sin_theta;
+            let sigma = radius.mul_add(radius, spin * spin * cos_theta * cos_theta);
+            let spin_charge_squared = charge.mul_add(charge, spin * spin);
+            let delta = radius.mul_add(radius, (2.0 * mass).mul_add(-radius, spin_charge_squared));
+            let radial_numerator = charge.mul_add(-charge, 2.0 * mass * radius);
+            let radial_factor = spin.mul_add(spin, radius * radius);
+            let expected = [
+                [
+                    -1.0 + radial_numerator / sigma,
+                    0.0,
+                    0.0,
+                    -radial_numerator * spin * sin_theta_squared / sigma,
+                ],
+                [0.0, sigma / delta, 0.0, 0.0],
+                [0.0, 0.0, sigma, 0.0],
+                [
+                    -radial_numerator * spin * sin_theta_squared / sigma,
+                    0.0,
+                    0.0,
+                    sin_theta_squared
+                        * (spin * spin * delta)
+                            .mul_add(-sin_theta_squared, radial_factor * radial_factor)
+                        / sigma,
+                ],
+            ];
+
+            for (chart, branch_sign) in [
+                (KerrSchildChart::Ingoing, 1.0),
+                (KerrSchildChart::Outgoing, -1.0),
+            ] {
+                let spacetime = KerrNewmanSpacetime::new(mass, spin, charge, chart)
+                    .expect("fixture parameters are valid");
+                let [x, y, z] = spacetime.oblate_to_cartesian(radius, polar, azimuth);
+                let event =
+                    SpacetimeEvent::from_txyz([0.0, x, y, z]).expect("fixture event is finite");
+                let metric = spacetime
+                    .metric_covariant_at(event)
+                    .expect("fixture metric is regular");
+                let (sin_phi, cos_phi) = azimuth.sin_cos();
+                let chart_spin = branch_sign * spin;
+                let chart_basis = [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, sin_theta * cos_phi, sin_theta * sin_phi, cos_theta],
+                    [
+                        0.0,
+                        cos_theta * chart_spin.mul_add(-sin_phi, radius * cos_phi),
+                        cos_theta * chart_spin.mul_add(cos_phi, radius * sin_phi),
+                        -radius * sin_theta,
+                    ],
+                    [0.0, -y, x, 0.0],
+                ];
+                let mut boyer_lindquist_basis = chart_basis;
+                for component in 0..4 {
+                    let radial_shift = (spin / delta).mul_add(
+                        chart_basis[3][component],
+                        radial_numerator / delta * chart_basis[0][component],
+                    );
+                    boyer_lindquist_basis[1][component] =
+                        branch_sign.mul_add(radial_shift, boyer_lindquist_basis[1][component]);
+                }
+
+                for row in 0..4 {
+                    for column in 0..4 {
+                        let (actual, term_norm) = metric_pairing(
+                            metric,
+                            boyer_lindquist_basis[row],
+                            boyer_lindquist_basis[column],
+                        );
+                        let scale = term_norm.max(expected[row][column].abs()).max(1.0);
+                        prop_assert!(
+                            (actual - expected[row][column]).abs() <= 128.0 * f64::EPSILON * scale,
+                            "{chart:?}, a={spin}: g[{row},{column}] was {actual:e}, expected {:e}",
+                            expected[row][column]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn axis_null_derivative_preserves_physical_spin_handedness() {
+        let spin = 0.8_f64;
+        let radius = 4.0_f64;
+        let expected_spin_derivative = spin / radius.mul_add(radius, spin * spin);
+        let event =
+            SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, radius]).expect("fixture event is finite");
+
+        for chart in [KerrSchildChart::Ingoing, KerrSchildChart::Outgoing] {
+            let spacetime = KerrNewmanSpacetime::new(1.0, spin, 0.0, chart)
+                .expect("fixture parameters are valid");
+            let geometry = spacetime.geometry(event).expect("axis geometry is regular");
+
+            assert!(
+                (geometry.null_vector_gradient[0][2] + expected_spin_derivative).abs()
+                    <= 8.0 * f64::EPSILON
+            );
+            assert!(
+                (geometry.null_vector_gradient[1][1] - expected_spin_derivative).abs()
+                    <= 8.0 * f64::EPSILON
+            );
+        }
+    }
+
+    fn metric_pairing(metric: [[f64; 4]; 4], left: [f64; 4], right: [f64; 4]) -> (f64, f64) {
+        let terms = metric.into_iter().zip(left).flat_map(|(row, left)| {
+            row.into_iter()
+                .zip(right)
+                .map(move |(component, right)| left * component * right)
+        });
+        terms.fold((0.0, 0.0), |(sum, norm), term| {
+            (sum + term, norm + term.abs())
+        })
+    }
 }

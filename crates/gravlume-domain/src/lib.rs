@@ -4,16 +4,16 @@
 
 mod math;
 mod observer;
-mod projection;
 mod scene;
 mod spacetime;
 mod validation;
+mod view;
 
 pub use math::{GeodesicState, SpacetimeEvent};
-pub use observer::{ObserverFrame, StationaryObserverDraft};
-pub use projection::{Angle, ViewportProjection, ViewportSample};
-pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneDraft};
+pub use observer::{ObserverFrame, StationaryObserverInput};
+pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput};
 pub use spacetime::{
-    GeodesicInvariants, GeometryError, KerrNewmanSpacetime, KerrSchildCoordinates, ParameterState,
+    Extremality, GeodesicInvariants, GeometryError, KerrNewmanSpacetime, KerrSchildChart,
 };
 pub use validation::{ValidationIssue, ValidationIssueCode, ValidationReport};
+pub use view::{Angle, ImageSample, PerspectiveView};

@@ -3,10 +3,10 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use crate::{CapabilityError, TimingError, TraceInputError};
+use crate::{CapabilityError, GpuTraceInputError, TimingError};
 
 #[derive(Debug, thiserror::Error)]
-pub enum RenderInitError {
+pub enum RendererInitError {
     #[error("failed to create the native presentation surface: {0}")]
     CreateSurface(#[from] wgpu::CreateSurfaceError),
     #[error("no adapter was available for the native surface: {0}")]
@@ -17,8 +17,8 @@ pub enum RenderInitError {
     SurfaceCapabilities(#[from] CapabilityError),
     #[error("failed to create the renderer device: {0}")]
     RequestDevice(#[from] wgpu::RequestDeviceError),
-    #[error("validated observation cannot enter the interactive renderer: {0}")]
-    InteractiveTrace(#[from] TraceInputError),
+    #[error("validated observation cannot enter the GPU renderer: {0}")]
+    TraceInput(#[from] GpuTraceInputError),
     #[error("failed to create {stage}: {source}")]
     GpuResource {
         stage: &'static str,
@@ -30,7 +30,7 @@ pub enum RenderInitError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum RenderRuntimeError {
+pub enum RendererError {
     #[error("GPU timing/readback failed: {0}")]
     Timing(#[from] TimingError),
     #[error("non-blocking GPU poll failed: {0}")]
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn initialization_error_scopes_capture_invalid_wgsl() {
-        let device = &crate::test_gpu::native_gpu().device;
+        let device = &crate::test_device::native_gpu().device;
         let scopes = GpuErrorScopes::push(device);
 
         let _invalid_shader = create_invalid_shader(device);
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn synchronous_runtime_scope_reports_invalid_resource_creation() {
-        let device = &crate::test_gpu::native_gpu().device;
+        let device = &crate::test_device::native_gpu().device;
 
         let error = scoped_gpu_operation(device, || create_invalid_shader(device))
             .expect_err("invalid runtime resource creation is reported by its local scope");

@@ -1,7 +1,7 @@
-use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates};
+use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 use gravlume_reference::{
-    AffineDirection, EventConfiguration, ReferenceConfigurationError, ReferencePolicy,
-    ReferenceTracer, Termination, TraceInputId, TraceRequest,
+    AffineDirection, EventConfiguration, GeodesicConfigurationError, GeodesicTrace, GeodesicTracer,
+    ReferencePolicy, Termination, TraceInputId,
 };
 
 #[test]
@@ -48,16 +48,16 @@ fn reference_policy_ids_are_stable_and_strict_refines_every_bound() {
 #[test]
 fn v1_reference_seam_rejects_a_non_normalized_mass_scale() {
     for mass_m in [2.0, 1.0_f64.next_up()] {
-        let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
-        let error = ReferenceTracer::new(
+        let error = GeodesicTracer::new(
             spacetime,
             ReferencePolicy::regular_v1(),
             EventConfiguration::horizon_only(),
         )
         .expect_err("v1 requires exact M = 1");
 
-        assert_eq!(error, ReferenceConfigurationError::NonNormalizedMass);
+        assert_eq!(error, GeodesicConfigurationError::NonNormalizedMass);
     }
 }
 
@@ -78,13 +78,13 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
         [-1.0, radial_momentum, tangential_momentum, 0.0],
     )
     .expect("constructed state is finite");
-    let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+    let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildChart::Ingoing)
         .expect("spacetime is valid");
     let events =
         EventConfiguration::with_escape_radius(boundary_radius_m).expect("escape surface is valid");
-    let outcome = ReferenceTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
+    let outcome = GeodesicTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
         .expect("mass is normalized")
-        .trace(TraceRequest::new(
+        .trace(GeodesicTrace::new(
             TraceInputId::new("weak-field-scattering"),
             state,
             AffineDirection::Positive,
@@ -102,16 +102,16 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
 
 #[test]
 fn equatorial_surface_is_localized_as_a_distinct_terminal_event() {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+    let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildChart::Ingoing)
         .expect("spacetime is valid");
     let state = GeodesicState::new([0.0, 50.0, 0.0, 1.0], [-1.0, -0.9, 0.0, -0.2])
         .expect("state is finite");
     let events = EventConfiguration::horizon_only()
         .with_equatorial_surface(5.0, 60.0)
         .expect("surface is valid");
-    let outcome = ReferenceTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
+    let outcome = GeodesicTracer::new(spacetime, ReferencePolicy::regular_v1(), events)
         .expect("mass is normalized")
-        .trace(TraceRequest::new(
+        .trace(GeodesicTrace::new(
             TraceInputId::new("equatorial-surface"),
             state,
             AffineDirection::Positive,

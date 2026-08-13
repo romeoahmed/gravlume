@@ -1,34 +1,34 @@
 use crate::{
-    GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates, ObserverFrame, ParameterState,
-    SpacetimeEvent, StationaryObserverDraft, ValidationIssueCode, ValidationReport,
-    ViewportProjection, ViewportSample, math::FourVector, observer::StationaryObserver,
+    Extremality, GeodesicState, ImageSample, KerrNewmanSpacetime, KerrSchildChart, ObserverFrame,
+    PerspectiveView, SpacetimeEvent, StationaryObserverInput, ValidationIssueCode,
+    ValidationReport, math::FourVector, observer::StationaryObserver,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
 
 #[derive(Clone, Debug)]
-pub struct PhysicalSceneDraft {
+pub struct PhysicalSceneInput {
     mass_m: f64,
     spin_m: f64,
     charge_m: f64,
-    coordinates: KerrSchildCoordinates,
-    observer: StationaryObserverDraft,
+    chart: KerrSchildChart,
+    observer: StationaryObserverInput,
 }
 
-impl PhysicalSceneDraft {
+impl PhysicalSceneInput {
     #[must_use]
     pub const fn new(
         mass_m: f64,
         spin_m: f64,
         charge_m: f64,
-        coordinates: KerrSchildCoordinates,
-        observer: StationaryObserverDraft,
+        chart: KerrSchildChart,
+        observer: StationaryObserverInput,
     ) -> Self {
         Self {
             mass_m,
             spin_m,
             charge_m,
-            coordinates,
+            chart,
             observer,
         }
     }
@@ -41,24 +41,24 @@ pub struct PhysicalScene {
 }
 
 impl PhysicalScene {
-    /// Validates and atomically commits a physical scene draft.
+    /// Validates physical scene input without producing a partial scene.
     ///
     /// # Errors
     ///
     /// Returns structured issues without producing a partial scene.
-    pub fn commit(draft: PhysicalSceneDraft) -> Result<Self, ValidationReport> {
-        let PhysicalSceneDraft {
+    pub fn new(input: PhysicalSceneInput) -> Result<Self, ValidationReport> {
+        let PhysicalSceneInput {
             mass_m,
             spin_m,
             charge_m,
-            coordinates,
+            chart,
             observer,
-        } = draft;
+        } = input;
         let spacetime = KerrNewmanSpacetime::validated_with_prefix(
             mass_m,
             spin_m,
             charge_m,
-            coordinates,
+            chart,
             "physical_scene.spacetime",
         );
         let observer_report = observer.validate("physical_scene.observer");
@@ -84,8 +84,8 @@ impl PhysicalScene {
     }
 
     #[must_use]
-    pub const fn parameter_state(&self) -> ParameterState {
-        self.spacetime.parameter_state()
+    pub const fn extremality(&self) -> Extremality {
+        self.spacetime.extremality()
     }
 
     #[must_use]
@@ -107,14 +107,14 @@ impl PhysicalScene {
 #[derive(Clone, Debug)]
 pub struct Observation {
     scene: PhysicalScene,
-    projection: ViewportProjection,
+    view: PerspectiveView,
 }
 
 impl Observation {
-    /// Binds a validated physical scene to a validated viewport projection.
+    /// Binds a validated physical scene to an image-space perspective view.
     #[must_use]
-    pub const fn new(scene: PhysicalScene, projection: ViewportProjection) -> Self {
-        Self { scene, projection }
+    pub const fn new(scene: PhysicalScene, view: PerspectiveView) -> Self {
+        Self { scene, view }
     }
 
     #[must_use]
@@ -123,17 +123,17 @@ impl Observation {
     }
 
     #[must_use]
-    pub const fn projection(&self) -> &ViewportProjection {
-        &self.projection
+    pub const fn view(&self) -> &PerspectiveView {
+        &self.view
     }
 
-    /// Maps one viewport sample to its physical future-directed photon momentum.
+    /// Maps one image sample to its physical future-directed photon momentum.
     ///
     /// # Errors
     ///
-    /// Revalidates the sample against this observation's projection and returns every seam issue.
-    pub fn initial_ray(&self, sample: ViewportSample) -> Result<InitialViewRay, ValidationReport> {
-        let [sight_x, sight_y] = self.projection.sight_plane(sample)?;
+    /// Revalidates the sample against this observation's view and returns every seam issue.
+    pub fn initial_ray(&self, sample: ImageSample) -> Result<InitialViewRay, ValidationReport> {
+        let [sight_x, sight_y] = self.view.sight_plane(sample)?;
         let non_finite = || {
             ValidationReport::from_error(
                 ValidationIssueCode::NonFinite,

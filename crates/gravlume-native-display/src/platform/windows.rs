@@ -248,7 +248,7 @@ fn activation_factory<I: windows::core::Interface>() -> windows::core::Result<I>
     windows::core::factory::<DisplayInformationFactory, I>()
 }
 
-// Private projection of the official header-only interface in
+// Private view of the official header-only interface in
 // windows.graphics.display.interop.h. The current windows crate projects the WinRT class but not
 // this desktop activation-factory interop interface.
 windows_core::imp::define_interface!(

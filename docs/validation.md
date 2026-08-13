@@ -111,7 +111,7 @@ CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 | 字段 | v1 值 |
 |---|---|
 | spacetime | ingoing Cartesian Kerr–Schild，$M=1,a=0.8,q_e=0$ |
-| parameter state | subextremal，$r_+=1.6M$ |
+| extremality | subextremal，$r_+=1.6M$ |
 | observer event | $t=0$；oblate $(r,\theta,\phi)=(30M,\pi/3,0)$ |
 | observer state | stationary $u=\partial_t/\sqrt{-g_{tt}}$；仅因 $g_{tt}<0$ 有效 |
 | target/up | target 为原点；up hint 为 spin $+z$ |
@@ -140,11 +140,11 @@ g_{tt}=-0.933345183078563810878066121578.
 
 ### 3.1 Geometry scene
 
-Phase 2 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱：经度/纬度主轴、六个 cubemap 方向和不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
+current GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱：经度/纬度主轴、六个 cubemap 方向和不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
 
 ### 3.2 Transport add-on
 
-Phase 3 增加 equatorial surface：
+future transport 增加 equatorial surface：
 
 - $r\in[6M,20M]$，prograde circular emitter；
 - comoving bolometric intensity $I_{\rm em}(r)=I_0(r/6M)^{-3}$；
@@ -212,9 +212,9 @@ escape direction 是 localized escape state 上 Hamilton RHS 空间分量按实�
 
 near-critical fixture 不套一个全局 angle tolerance。它必须给成对的 escape/capture 或两侧 branch 样本、distance-to-critical 标签和独立高精度 observable；discrete classification 必须正确，continuous tolerance 由 fixture 自身给出。
 
-### 5.3 Interactive agreement
+### 5.3 GPU renderer agreement
 
-下列是 Phase 2 的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
+下列是 current GPU 的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
 
 | observable | v1 gate |
 |---|---:|
@@ -228,6 +228,8 @@ near-critical fixture 不套一个全局 angle tolerance。它必须给成对的
 | stale history after generation/resize/cut | `0` accepted samples |
 
 落入 near-critical uncertainty band 的 sample 必须 refine；预算仍不足时输出 `NumericalFailure`/`Uncertain` diagnostic，不能给错误的确定 branch。null/Carter drift 是诊断与 classifier 输入，不可单独替代 observable agreement。
+
+presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过 travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入常规测试。
 
 ## 6. Fixture envelope
 
@@ -293,4 +295,4 @@ R(r)=r^4-b^2r^2+2b^2r.
 | $\sqrt{27}+10^{-3}$ | $50M\to r_{\rm turn}\to50M$ | `3.034497655706080454343638050694227224458` | `11.08947404451632010196559671422843740259` |
 | $\sqrt{27}-10^{-3}$ | $50M\to r_+=2M$ | — | `9.875337813686692580530011972416581225191` |
 
-对应 ingoing Cartesian Kerr–Schild 初始 covector 以 80 位十进制存档，并直接代入 $g^{\mu\nu}p_\mu p_\nu$；按文件中的实际十进制重算，absolute residual 依次为 $4.91\times10^{-81}$、$3.17\times10^{-81}$ 与 $3.66\times10^{-81}$。[fixture files](../tests/fixtures/v1/) 是独立、可复算的数据合同。[N]
+对应 ingoing Cartesian Kerr–Schild 初始 covector 以 80 位十进制存档，并直接代入 $g^{\mu\nu}p_\mu p_\nu$；按文件中的实际十进制重算，absolute residual 依次为 $4.91\times10^{-81}$、$3.17\times10^{-81}$ 与 $3.66\times10^{-81}$。[fixture files](../crates/gravlume-reference/fixtures/v1/) 是独立、可复算的数据合同。[N]

@@ -5,13 +5,13 @@ struct TraceUniforms {
     image_right: vec4<f32>,
     image_up: vec4<f32>,
     arrival: vec4<f32>,
-    projection: vec4<f32>,
+    view: vec4<f32>,
     event_surfaces: vec4<f32>,
     step_policy: vec4<f32>,
 }
 
 struct TraceDispatch {
-    pixels: vec4<u32>,
+    tile_region: vec4<u32>,
 }
 
 struct Geometry {
@@ -141,7 +141,7 @@ fn invalid_geometry(flags: u32) -> Geometry {
     );
 }
 
-fn geometry_at(position: vec3<f32>) -> Geometry {
+fn geometry_at_impl(position: vec3<f32>, include_singularity: bool) -> Geometry {
     let spin_physical = trace_uniforms.spacetime.y;
     let charge_physical = trace_uniforms.spacetime.z;
     let principal_direction = trace_uniforms.spacetime.w;
@@ -185,17 +185,20 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let null_dx = vec4<f32>(
             0.0,
             principal_direction * radius * inverse_denominator_scale,
-            -principal_direction * spin * inverse_denominator_scale,
+            -spin * inverse_denominator_scale,
             0.0,
         );
         let null_dy = vec4<f32>(
             0.0,
-            principal_direction * spin * inverse_denominator_scale,
+            spin * inverse_denominator_scale,
             principal_direction * radius * inverse_denominator_scale,
             0.0,
         );
         let physical_radius = scale * radius;
-        let singularity = singularity_measure(physical_radius, spin_physical, position.z);
+        var singularity = 0.0;
+        if include_singularity {
+            singularity = singularity_measure(physical_radius, spin_physical, position.z);
+        }
         if !finite_scalar(physical_radius)
             || !finite_scalar(scalar_f)
             || !finite_vec3(scalar_f_gradient)
@@ -264,9 +267,10 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
     if radial_denominator <= 0.0 || !finite_scalar(radial_denominator) {
         return invalid_geometry(FLAG_INVALID_DENOMINATOR);
     }
+    let chart_spin = principal_direction * spin;
     let null_spatial = principal_direction * vec3<f32>(
-        (radius * x + spin * y) / radial_denominator,
-        (radius * y - spin * x) / radial_denominator,
+        (radius * x + chart_spin * y) / radial_denominator,
+        (radius * y - chart_spin * x) / radial_denominator,
         z / radius,
     );
     var null_gradients = array<vec4<f32>, 3>();
@@ -275,8 +279,8 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         let delta_x = select(0.0, 1.0, index == 0u);
         let delta_y = select(0.0, 1.0, index == 1u);
         let delta_z = select(0.0, 1.0, index == 2u);
-        let numerator_x = radius_i * x + radius * delta_x + spin * delta_y;
-        let numerator_y = radius_i * y + radius * delta_y - spin * delta_x;
+        let numerator_x = radius_i * x + radius * delta_x + chart_spin * delta_y;
+        let numerator_y = radius_i * y + radius * delta_y - chart_spin * delta_x;
         let radial_derivative = 2.0 * radius * radius_i;
         let derivative_x =
             (numerator_x / radial_denominator
@@ -295,7 +299,10 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
         );
     }
     let physical_radius = scale * radius;
-    let singularity = singularity_measure(physical_radius, spin_physical, position.z);
+    var singularity = 0.0;
+    if include_singularity {
+        singularity = singularity_measure(physical_radius, spin_physical, position.z);
+    }
     if !finite_scalar(physical_radius)
         || !finite_scalar(scalar_f)
         || !finite_vec3(scalar_f_gradient)
@@ -320,13 +327,17 @@ fn geometry_at(position: vec3<f32>) -> Geometry {
     );
 }
 
+fn geometry_at(position: vec3<f32>) -> Geometry {
+    return geometry_at_impl(position, true);
+}
+
 fn sight_direction(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) -> vec4<f32> {
     let dimensions = vec2<f32>(extent);
     let normalized = vec2<f32>(
         2.0 * (f32(pixel.x) + subpixel.x) / dimensions.x - 1.0,
         1.0 - 2.0 * (f32(pixel.y) + subpixel.y) / dimensions.y,
     );
-    let tangent_half_fov = trace_uniforms.projection.x;
+    let tangent_half_fov = trace_uniforms.view.x;
     let sight_plane = vec2<f32>(
         dimensions.x / dimensions.y * tangent_half_fov * normalized.x,
         tangent_half_fov * normalized.y,
@@ -390,7 +401,12 @@ fn hamilton_rhs_from_geometry(state: TraceState, geometry: Geometry) -> RhsResul
 }
 
 fn hamilton_rhs(state: TraceState) -> RhsResult {
-    return hamilton_rhs_from_geometry(state, geometry_at(state.position.yzw));
+    return hamilton_rhs_from_geometry(
+        state,
+        // Intermediate RK stages consume only the metric and its derivatives. Event guards are
+        // evaluated on every committed endpoint and localized terminal state.
+        geometry_at_impl(state.position.yzw, false),
+    );
 }
 
 fn state_add(state: TraceState, derivative: RhsResult, factor: f32) -> TraceState {
@@ -465,7 +481,7 @@ fn dense_state_at(
 fn initial_state_at(pixel: vec2<u32>, extent: vec2<u32>, subpixel: vec2<f32>) -> InitialState {
     let sight = sight_direction(pixel, extent, subpixel);
     let arrival = -sight;
-    let momentum_contravariant = trace_uniforms.projection.y
+    let momentum_contravariant = trace_uniforms.view.y
         * (trace_uniforms.observer_velocity + arrival);
     let geometry = geometry_at(trace_uniforms.observer_event.yzw);
     if geometry.flags != 0u || !finite_vec4(momentum_contravariant) {
@@ -602,9 +618,12 @@ fn analytic_sky(direction: vec3<f32>) -> vec3<f32> {
 }
 
 fn store_scene_result(pixel: vec2<u32>, termination: u32, direction: vec3<f32>) {
-    var scene_linear = visible_failure_color(termination);
+    var scene_linear = vec4<f32>(
+        visible_failure_color(termination).rgb,
+        -f32(termination),
+    );
     if termination == TERMINATION_HORIZON {
-        scene_linear = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        scene_linear = vec4<f32>(0.0);
     } else if termination == TERMINATION_ESCAPE {
         scene_linear = vec4<f32>(analytic_sky(direction), 1.0);
     }
@@ -623,20 +642,7 @@ fn failure_result(flags: u32, steps: u32, travel_time: f32, maximum_drift: vec4<
     );
 }
 
-fn trace_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> TraceResult {
-    let initial = initial_state_at(pixel, extent, trace_uniforms.projection.zw);
-    if initial.rhs.flags != 0u {
-        return failure_result(initial.rhs.flags, 0u, 0.0, vec4<f32>(0.0));
-    }
-    let initial_invariants = invariants_from_geometry_rhs(
-        initial.state,
-        initial.geometry,
-        initial.rhs,
-    );
-    if initial_invariants.flags != 0u {
-        return failure_result(initial_invariants.flags, 0u, 0.0, vec4<f32>(0.0));
-    }
-
+fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> TraceResult {
     var state = initial.state;
     var state_geometry = initial.geometry;
     var state_rhs = initial.rhs;
@@ -823,15 +829,26 @@ fn trace_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> TraceResult {
     );
 }
 
-@compute @workgroup_size(8, 8, 1)
-fn trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    let extent = textureDimensions(scene_hdr);
-    let local_index = global_id.y * 8u + global_id.x;
-    let index = trace_dispatch.pixels.x + local_index;
-    if index >= extent.x * extent.y {
-        return;
+fn trace_pixel_at(
+    pixel: vec2<u32>,
+    extent: vec2<u32>,
+    subpixel: vec2<f32>,
+) -> TraceResult {
+    let initial = initial_state_at(pixel, extent, subpixel);
+    if initial.rhs.flags != 0u {
+        return failure_result(initial.rhs.flags, 0u, 0.0, vec4<f32>(0.0));
     }
-    let pixel = vec2<u32>(index % extent.x, index / extent.x);
-    let result = trace_pixel(pixel, extent);
-    store_scene_result(pixel, result.termination, result.direction);
+    let initial_invariants = invariants_from_geometry_rhs(
+        initial.state,
+        initial.geometry,
+        initial.rhs,
+    );
+    if initial_invariants.flags != 0u {
+        return failure_result(initial_invariants.flags, 0u, 0.0, vec4<f32>(0.0));
+    }
+    return trace_initialized(initial, initial_invariants);
+}
+
+fn trace_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> TraceResult {
+    return trace_pixel_at(pixel, extent, trace_uniforms.view.zw);
 }

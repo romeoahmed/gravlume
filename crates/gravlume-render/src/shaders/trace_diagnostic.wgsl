@@ -21,12 +21,11 @@ fn store_trace_record(index: u32, result: TraceResult) {
 @compute @workgroup_size(8, 8, 1)
 fn capture_trace_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(scene_hdr);
-    let local_index = global_id.y * 8u + global_id.x;
-    let index = trace_dispatch.pixels.x + local_index;
-    if index >= extent.x * extent.y {
+    let pixel = trace_dispatch.tile_region.xy * vec2<u32>(8u, 8u) + global_id.xy;
+    if any(pixel >= extent) {
         return;
     }
-    let pixel = vec2<u32>(index % extent.x, index / extent.x);
+    let index = pixel.y * extent.x + pixel.x;
     let result = trace_pixel(pixel, extent);
     store_trace_record(index, result);
     store_scene_result(pixel, result.termination, result.direction);

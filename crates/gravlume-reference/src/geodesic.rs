@@ -7,19 +7,19 @@ use crate::{
     fixture::GeodesicFixture,
     integrator::{DenseOutput, attempt_step, derivative},
     outcome::{
-        LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination, TraceDiagnostics,
-        TraceRequest,
+        GeodesicTrace, LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination,
+        TraceDiagnostics,
     },
     policy::ReferencePolicy,
 };
 #[derive(Clone, Debug)]
-pub struct ReferenceTracer {
+pub struct GeodesicTracer {
     spacetime: KerrNewmanSpacetime,
     policy: ReferencePolicy,
     events: EventConfiguration,
 }
 
-impl ReferenceTracer {
+impl GeodesicTracer {
     /// Creates a tracer for the `M = 1` normalization required by the v1 policies.
     ///
     /// # Errors
@@ -29,9 +29,9 @@ impl ReferenceTracer {
         spacetime: KerrNewmanSpacetime,
         policy: ReferencePolicy,
         events: EventConfiguration,
-    ) -> Result<Self, ReferenceConfigurationError> {
+    ) -> Result<Self, GeodesicConfigurationError> {
         if spacetime.mass_m().to_bits() != 1.0_f64.to_bits() {
-            return Err(ReferenceConfigurationError::NonNormalizedMass);
+            return Err(GeodesicConfigurationError::NonNormalizedMass);
         }
         Ok(Self {
             spacetime,
@@ -51,7 +51,7 @@ impl ReferenceTracer {
     }
 
     #[must_use]
-    pub fn trace(&self, mut request: TraceRequest) -> ReferenceOutcome {
+    pub fn trace(&self, mut request: GeodesicTrace) -> ReferenceOutcome {
         request.input_id = request.input_id.bind(
             self.spacetime,
             request.initial_state,
@@ -63,14 +63,14 @@ impl ReferenceTracer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ReferenceConfigurationError {
+pub enum GeodesicConfigurationError {
     #[error("reference-v1 inputs must be normalized to M = 1")]
     NonNormalizedMass,
 }
 
 struct TraceExecution<'tracer> {
-    tracer: &'tracer ReferenceTracer,
-    request: TraceRequest,
+    tracer: &'tracer GeodesicTracer,
+    request: GeodesicTrace,
     state: GeodesicState,
     affine_parameter_m: f64,
     step_m: f64,
@@ -90,7 +90,7 @@ struct TraceExecution<'tracer> {
 }
 
 impl<'tracer> TraceExecution<'tracer> {
-    fn new(tracer: &'tracer ReferenceTracer, request: TraceRequest) -> Self {
+    fn new(tracer: &'tracer GeodesicTracer, request: GeodesicTrace) -> Self {
         let state = request.initial_state;
         let traversal_sign = request.affine_direction.sign();
         let components = state.components();
@@ -488,7 +488,7 @@ struct EventArming {
 }
 
 impl EventArming {
-    fn new(tracer: &ReferenceTracer, state: GeodesicState) -> Self {
+    fn new(tracer: &GeodesicTracer, state: GeodesicState) -> Self {
         let band = tracer.policy.event_arming_band_m();
         Self {
             armed: EventKind::ordered().map(|kind| {
@@ -502,7 +502,7 @@ impl EventArming {
         self.armed[kind.index()]
     }
 
-    fn update(&mut self, tracer: &ReferenceTracer, state: GeodesicState) {
+    fn update(&mut self, tracer: &GeodesicTracer, state: GeodesicState) {
         let band = tracer.policy.event_arming_band_m();
         for kind in EventKind::ordered() {
             if !self.is_armed(kind)
@@ -631,7 +631,7 @@ fn localize_dense_root(
 }
 
 fn event_value_for(
-    tracer: &ReferenceTracer,
+    tracer: &GeodesicTracer,
     kind: EventKind,
     state: GeodesicState,
 ) -> Result<f64, GeometryError> {
@@ -705,24 +705,24 @@ fn select_earliest_event(
 
 #[cfg(test)]
 mod tests {
-    use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates};
+    use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 
     use super::{
-        EventArming, EventConfiguration, EventKind, ReferencePolicy, ReferenceTracer, Termination,
-        TraceRequest, event_value_for, select_earliest_event,
+        EventArming, EventConfiguration, EventKind, GeodesicTrace, GeodesicTracer, ReferencePolicy,
+        Termination, event_value_for, select_earliest_event,
     };
     use crate::{AffineDirection, TraceInputId};
 
     #[test]
     fn accepted_step_limit_is_a_typed_terminal_condition() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildCoordinates::Ingoing)
+        let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
         let state = GeodesicState::new([0.0, 50.0, 0.0, 0.0], [-1.0, -0.99, 0.1, 0.0])
             .expect("state is finite");
         let policy = ReferencePolicy::regular_v1().limited_to_one_step_for_test();
-        let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
+        let tracer = GeodesicTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
-        let outcome = tracer.trace(TraceRequest::new(
+        let outcome = tracer.trace(GeodesicTrace::new(
             TraceInputId::new("accepted-step-limit"),
             state,
             AffineDirection::Positive,
@@ -734,10 +734,10 @@ mod tests {
 
     #[test]
     fn singularity_guard_uses_the_unclamped_d_observable() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
         let policy = ReferencePolicy::regular_v1();
-        let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
+        let tracer = GeodesicTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
         let guard_radius = policy.singularity_guard_d_over_m4().sqrt().sqrt();
         let event_value = |factor: f64| {
@@ -755,10 +755,10 @@ mod tests {
 
     #[test]
     fn singularity_guard_arms_only_after_leaving_the_full_band() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
         let policy = ReferencePolicy::regular_v1();
-        let tracer = ReferenceTracer::new(spacetime, policy, EventConfiguration::horizon_only())
+        let tracer = GeodesicTracer::new(spacetime, policy, EventConfiguration::horizon_only())
             .expect("mass is normalized");
         let state_at_measure = |measure: f64| {
             let radius = measure.sqrt().sqrt();
@@ -780,17 +780,17 @@ mod tests {
 
     #[test]
     fn superextremal_ring_approach_stops_at_the_singularity_guard() {
-        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildCoordinates::Ingoing)
+        let spacetime = KerrNewmanSpacetime::new(1.0, 2.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
         let state = GeodesicState::new([0.0, 2.1, 0.0, 0.0], [-1.0, -1.0, 0.0, 0.0])
             .expect("state is finite");
-        let tracer = ReferenceTracer::new(
+        let tracer = GeodesicTracer::new(
             spacetime,
             ReferencePolicy::regular_v1(),
             EventConfiguration::horizon_only(),
         )
         .expect("mass is normalized");
-        let outcome = tracer.trace(TraceRequest::new(
+        let outcome = tracer.trace(GeodesicTrace::new(
             TraceInputId::new("superextremal-ring-approach"),
             state,
             AffineDirection::Positive,
