@@ -60,7 +60,7 @@ geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostic
 - metric/derivative 每步较贵，但状态与 event 语义通用；
 - backward trace 的 ingoing/outgoing chart 必须与传播/数值方向验证。
 
-默认相机从 observer 沿 negative affine direction 回溯，因此 interactive 路径选择 outgoing Kerr–Schild。Bozzola、Chan 与 Paschalidis 对该传播方向证明 ingoing chart 在过去视界形成 coordinate barrier，而 outgoing chart 给出数值正则的光线；这不是精度旋钮，而是算法定义域选择：[Phys. Rev. D 108, 084004 (2023)](https://doi.org/10.1103/PhysRevD.108.084004)。versioned ingoing reference fixture 保持原语义，不能静默换 chart。
+默认相机从 observer 沿 negative affine direction 回溯，因此 GPU renderer 选择 outgoing Kerr–Schild。Bozzola、Chan 与 Paschalidis 对该传播方向证明 ingoing chart 在过去视界形成 coordinate barrier，而 outgoing chart 给出数值正则的光线；这不是精度旋钮，而是算法定义域选择：[Phys. Rev. D 108, 084004 (2023)](https://doi.org/10.1103/PhysRevD.108.084004)。两 chart 的 public spin 都是固定右手 Cartesian orientation 中的物理 $a=J/M$；outgoing 只把 oblate spatial twist 取为 $-a$，不能把整个 spacetime 或 UI 参数解释成 $-a$。versioned ingoing reference fixture 保持原语义，不能静默换 chart。
 
 GPU 候选先比较固定 RK4 + 几何/量化 step 与少量有界 embedded tier。每 ray 的完全自适应 DP5(4) 容易产生 accept/reject 发散；它优先属于 CPU reference。选择基于 GPU milliseconds 对 observable error 曲线，不基于“阶数更高”的名字。
 
@@ -84,7 +84,7 @@ Carter separability、Carlson elliptic forms、analytic geodesics，以及 [AART
 1. CPU oracle 与 fixture；
 2. 固定 observer/薄赤道源 transfer map；
 3. photon-ring/lensing-band 专用高分辨率图；
-4. 经 bake-off 后的 interactive accelerator。
+4. 经 bake-off 后的 GPU accelerator。
 
 输入域必须写清 observer near/far、source surface、allowed roots/turning points、horizon policy 与 coordinate time。analytic code 仍要测试 branch classification、root degeneracy 和 `f32` condition；“闭式”不等于数值稳定。
 
@@ -92,9 +92,9 @@ Carter separability、Carlson elliptic forms、analytic geodesics，以及 [AART
 
 Kerr–Newman exterior 有 Mino-time 显式解，可用于 CPU semi-analytic reference 或固定参数 LUT。[Wang–Lee–Lin 2022](https://arxiv.org/abs/2208.11906) 但 WGSL 内同时实现完整 elliptic functions、root branches、任意近场 observer 与 horizon crossing 风险很高。
 
-产品策略：domain/reference 保留 $q_e$ 和 sub/extreme/superextreme 分类；interactive 通用路径用 Kerr–Schild；analytic KN 只有独立 fixture、误差与产品场景证明价值后再实现。
+产品策略：domain/reference 保留 $q_e$ 和 sub/extreme/superextreme 分类；GPU 通用路径用 Kerr–Schild；analytic KN 只有独立 fixture、误差与产品场景证明价值后再实现。
 
-## 4. Exterior Mino-time candidate
+## 4. Exterior Mino-time research candidate
 
 解析/半解析 Kerr 路径是 accelerator，不是跨后端数值基线。为比较一个不依赖完整椭圆函数的 exterior candidate，取 $M=E=1$、$b=L_z/E$、$\eta=\mathcal Q/E^2$、$\mu=\cos\theta$、electric charge $e=q_e/M$：
 
@@ -147,7 +147,9 @@ reciprocal-$u$ 明显改善，但近 critical impact parameter 仍观察到精�
 | $b=6$ | 0.02 / 0.01 / 0.005 / 0.001 | `2.071e-4 / 4.470e-6 / 7.754e-7 / 1.985e-5` | `1.252e-6 / 2.086e-7 / 5.662e-7 / 1.505e-6` | 39 / 78 / 155 / 771 |
 | $b=\sqrt{27}+10^{-3}$ | 0.02 / 0.01 / 0.005 / 0.001 | `2.886e-4 / 5.509e-4 / 2.540e-4 / 1.246e-3` | `5.364e-7 / 4.387e-7 / 4.768e-7 / 1.520e-6` | 107 / 214 / 427 / 2134 |
 
-这组候选数据表明减小 step 未必单调改善角度，constraint drift 也不能单独预测 branch/angle error。因此 Exterior Mino 只参加同一 observable budget 下的 bake-off。`[A][X]`
+这组历史候选数据表明 raw binary32 角度不会随 step 逐点严格单调，constraint drift 也不能单独预测 branch/angle/time error。corrected physical-spin/outgoing seam 后，研究实现曾把 pure Kerr、off-axis、`|a| <= 0.9` exterior 作为受限域，并对 high-winding、turning、constraint、finite 或 domain uncertainty 回退 Cartesian KS。
+
+SymPy 对实际三次 polynomial core 精确证明 RK4 local defect 从 `h^5` 开始，因此 smooth global envelope 是 `O(f^4)`，理想工作量是 `Theta(1/f)`。低分辨率 oracle 曾把经验上界定在 `f=0.85716907`，默认 1280×720 Metal 也曾测得 `84.136%` acceptance 和 `35.768%` 改善；但 `320×180` 独立 reference 找到 accepted ray 的 travel-time error 约 `2.661354e-3 M`，超过 `1e-3 M` contract。这证明 factor envelope 没有约束 terminal phase，故 fixed-step Mino solver 已从 production 删除。后续工作转向具名 root topology 与 elliptic/Carlson terminal solver；完整正反证据见 [Mino candidate conclusion](research/mino-step-selection.md)。`[N][G]`
 
 ## 5. Surface、volume 与时间
 
@@ -189,7 +191,7 @@ geometry 与 transport 可分开，但 geometry sample 必须保留 travel time/
 
 ### 5.4 Forward scattering
 
-deterministic Backward Trace 从 viewport sample 找 source，适合图像形成。Monte Carlo forward packets 适合 scattering/energy deposition，但其随机 sample、queue、variance 和终止模型不同。两者共享 domain/medium definitions 与 artifact schema，不共享一个最低公分母 GPU pass。
+deterministic Backward Trace 从 image sample 找 source，适合图像形成。Monte Carlo forward packets 适合 scattering/energy deposition，但其随机 sample、queue、variance 和终止模型不同。两者共享 domain/medium definitions 与 artifact schema，不共享一个最低公分母 GPU pass。
 
 若 forward packets 必须向同一 pixel/bin splat，可单独测试 `SHADER_FLOAT32_ATOMIC` variant；它只解决冲突写入，不解决高争用、方差或浮点求和次序。接纳条件是在 Vulkan 与 Metal 上都优于分层归约，并在固定 seed 下满足相对于确定性 reference 的误差预算。Backward Trace、per-pixel transport、active queue 和主诊断归约均不依赖该 feature。
 

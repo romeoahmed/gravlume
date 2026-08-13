@@ -1,93 +1,69 @@
-# 实施路线与退出条件
+# 能力路线与退出条件
 
-实施阶段从 Phase 0 起；实际仓库状态只由根 [README](../README.md#当前状态) 维护。阶段编号表达依赖关系，不是日历承诺。任一阶段必须以数据满足退出条件；“画面看起来正确”不能替代 machine-readable observable。
+路线按依赖关系组织，不使用会渗入文件名、API 或错误文案的 Phase 编号。当前完成度以根 [README](../README.md#当前状态) 和两份实现证据文档为准；本页只定义下一项能力何时可以声称完成。
 
-## Phase 0 · 桌面栈闭环
+## 已建立的基础闭环
 
-**交付物**：Cargo workspace 基线、lockfile、winit window、compute 写入 scene-linear HDR intermediate、独立 UI target、线性 final composite、typed HDR/scRGB 或 SDR surface presentation、resize/zero extent、surface recovery 和结构化 device error。
+- validated domain 与独立 CPU `f64` reference；
+- native winit/egui/wgpu 生命周期；
+- Metal/Vulkan Cartesian Kerr–Schild GPU trace；
+- 原子完整帧发布、选择性 shadow coverage、HDR/scRGB 与 SDR 输出；
+- 保守 direction reconstruction、interval Kerr capture 与完整 KS fallback；
+- typed errors、GPU timestamp、fixture 和 CPU/GPU observable gate。
 
-**退出条件**：
+退出证据见 [Reference 实现](reference-implementation.md)、[GPU renderer](gpu-renderer.md)和[验证合同](validation.md)。Windows/Linux 仍需具名系统、adapter、driver 与 compositor 的实机发布证据。
 
-- 最新 macOS/Metal，以及具名 Windows/Linux desktop Vulkan adapter/driver 原生 smoke；
-- wgpu validation 无错误，奇数 extent 和边界 workgroup 无 OOB；
-- acquire → submit → egui texture release → present 保持单一线性实现，并通过 native validation smoke；suspend/resume 与 surface reconfigure 测试通过；
-- wgpu 30 的每个 surface acquire variant 在 production match 中穷尽处理；one-shot readback 在提交后立即 idle 仍能完成；
-- 发行闭包不依赖未记录的外部 shader compiler、动态库或网络资产。
+## 可解释物理图像
 
-## Phase 1 · 领域与 CPU reference
+交付：薄表面盘、scalar emission/absorption、frequency ratio、blackbody/spectral LUT、scene-linear capture。
 
-**交付物**：validated Observation、Observer Event/Frame、Kerr–Schild `f64` DP5(4)、dense-output event localization、[验证合同](validation.md) fixture 和 comparison report。
+退出条件：
 
-当前实现与适用域证据见 [Reference 实现与证据](reference-implementation.md)；未覆盖的 oracle 梯级不得因代码交付物存在而视为自动满足。
-
-**退出条件**：
-
-- Minkowski、Schwarzschild、Kerr、Kerr–Newman 特殊极限与 inverse identity 通过；
-- weak-field、$\sqrt{27}M$ shadow、published trajectories 和 step/tolerance convergence 通过；
-- null、E、Lz、Carter、event residual 和 observer-frame 残差分开报告；
-- 无 GPU 也能运行 reference tests，oracle 的适用域和误差有记录。
-- baseline/strict reference policy 对 v1 regular fixtures 满足具名阈值；near-critical fixtures 与 80 位基准的离散分类一致。
-- raw-radius/reciprocal-radius 数值条件性反例已固化为 machine-readable fixture，或文档继续只把它标记为待验证候选。
-
-## Phase 2 · Interactive trace
-
-**交付物**：WGSL `f32` Cartesian Kerr–Schild tracer、typed termination、diagnostic fields、headless readback、sky/horizon 画面。
-
-**退出条件**：
-
-- CPU/GPU sample matrix 的 termination、escape direction 和 continuous observables 达到预算；
-- NaN、radicand/denominator failure、step exhaustion 不会静默变黑；
-- WGSL binding/layout/discriminant contract tests 通过；
-- Viewport Sample → Initial View Ray 的中心、四角和 jitter fixture 与 CPU 合同一致；
-- 可以交互，但尚不因“能动”声称 60 FPS。
-
-## Phase 3 · 可解释图像
-
-**交付物**：薄表面盘、scalar emission/absorption、Frequency Ratio、blackbody/spectral LUT、HDR capture 和中性 display transform。
-
-**退出条件**：
-
-- `I_nu/nu^3`、frequency ratio、常系数 slab 和 optical-depth 解析回归通过；
+- `I_nu/nu^3`、frequency ratio、常系数 slab 与 optical-depth 解析回归通过；
 - Physical/Appearance controls 不能互相绕过；
-- RGB source 的非物理 hue shift 被明确标记，EXR 保持 scene-linear。
+- numerical failure 不伪装成物理黑色；
+- EXR/科学输出绕过 display tone mapping。
 
-## Phase 4 · 重建与预算
+## 重建与交互预算
 
-**交付物**：coarse/classify/refine、source footprint、branch-aware spatial reconstruction、stationary accumulation、动态分辨率和 pass profiling。
+交付：source-space footprint、branch-aware reconstruction、stationary accumulation、resize reuse 与具名质量政策。
 
-**退出条件**：
+退出条件：
 
-- critical curve、caustic、多像薄盘和高频 sky 专项字段误差通过；
-- resize/cut/generation change 100% 拒绝旧 history；
-- 选定中档独显 1080p p95 不高于 16.7 ms，集显 720p p95 不高于 33.3 ms；
-- 1440p 核心中间资源低于 256 MiB，总峰值初始目标低于 512 MiB。
+- critical curve、caustic、多像薄盘和高频 source 的字段误差通过；
+- resize/cut/generation change 必须拒绝不相容 history；
+- 选定 Metal/Vulkan 设备达到预注册的 p50/p95 时延与峰值显存预算；
+- 动态分辨率若引入，必须原子发布完整画面且有 hysteresis，不显示低分辨率阶段。
 
-## Phase 5 · 视觉广度与资产闭包
+## 解析与半解析 Kerr 路线
 
-**交付物**：经重新设计并标注的 jet/noise/热扰动/网格/false color/bloom，以及新的 asset manifest。
+优先研究完整 Kerr elliptic/Carlson terminal solver，并以当前 Cartesian KS 作为定义域外与数值不确定时的基线。Mino fixed-step candidate 已因高分辨率 observable 反例退出 production，不能凭低分辨率 benchmark 复活。
 
-**退出条件**：每项效果明确属于 Physical 或 Appearance；来源、许可、色彩空间、方向、转换链和发行权闭合；默认场景完全离线。
+退出条件：
 
-## Phase 6 · 测量后的加速器
+- chart/physical-spin/turning-root 约定经符号和高精度数值验证；
+- regular、near-critical、near-axis、near-extreme 与高绕转样本达到同一 observable budget；
+- fallback 分类无误接受，mutation 可击穿 gate；
+- 完整 invalidation→publish 的 GPU p50/p95 在具名设备上形成更优 Pareto 点。
 
-**交付物**：Exterior Mino 与 Kerr–Schild bake-off，可选 Schwarzschild LUT、Kerr analytic/transfer map、active-ray compaction。
+## 视觉与资产闭包
 
-**退出条件**：只有在同一 observable error budget 下给出显著更好的误差—时间曲线，才进入 interactive resolved plan；artifact 带 domain fingerprint、branch schema、producer 和 error bound。
+交付：经定义的 sky/disk/jet/noise/bloom/false-color 与 asset manifest。
 
-## Phase 7 · 研究质量
+退出条件：每项效果明确属于 Physical 或 Appearance；来源、许可、色彩空间、方向、转换链和发行权闭合；默认场景离线启动。
 
-**交付物**：Kerr 真空偏振、Jacobi beam；再评估 Kerr–Newman 偏振、slow-light 与 Stokes/Faraday。
+## 研究质量
 
-**退出条件**：screen basis、gauge、平行输运、Walker–Penrose/EVPA、analytic slab 和至少一个独立代码对照闭合；研究路径不拖慢或复杂化默认产品。
+候选：Kerr 真空偏振、Jacobi beam、Kerr–Newman 偏振、slow-light 与 Stokes/Faraday。
 
-## 完成定义
+退出条件：screen basis、gauge、平行输运、Walker–Penrose/EVPA、analytic slab 和至少一个独立实现对照闭合；研究路径不增加默认产品的状态或依赖，除非成为 resolved plan。
 
-一个可发行核心至少完成 Phase 0–4，并同时满足：
+## 可发行核心
 
-1. 数学：reference ladder 与 fixture 的适用域、精度和收敛已记录；
-2. GPU：Metal/Vulkan 无 validation error，ABI 和 shader 产物可复现；
-3. 图像：field comparison 与视觉回归同时通过；
-4. 生命周期：zero extent、resize、suspend、surface/device error 无 panic/死锁/跨代 handle；
-5. 性能：在具名 adapter/driver/profile 上达到 p50/p95 和显存门槛；
+1. 数学：reference ladder 的适用域、精度与收敛有记录；
+2. GPU：Metal/Vulkan 无 validation error，ABI 和 shader 可复现；
+3. 图像：machine-readable fields 与视觉回归同时通过；
+4. 生命周期：zero extent、resize、suspend、surface/device error 无 panic/死锁/跨代发布；
+5. 性能：具名 adapter/driver/profile 达到时延和显存门槛；
 6. 发行：依赖、资产、字体、shader、配置和许可证闭环；
 7. 声明：UI/export 不把研究状态、外观效果或未验证模型描述成物理预测。

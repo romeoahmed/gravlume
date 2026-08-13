@@ -6,23 +6,22 @@ mod batch;
 mod comparison;
 mod events;
 mod fixture;
-mod instrument;
+mod geodesic;
 mod integrator;
+mod observation;
 mod outcome;
 mod policy;
-mod tracer;
 
-pub use batch::{ReferenceBatch, ReferenceBatchError};
+pub use batch::{GeodesicBatch, GeodesicBatchError};
 pub use comparison::{ComparisonError, ComparisonIssue, ReferenceComparison};
 pub use events::{EventConfiguration, EventConfigurationError, EventKind};
 pub use fixture::{
-    CriticalSide, ExpectedOutcome, FixtureDocument, FixtureError, GeodesicApplicability,
-    GeodesicFixture, GeodesicOrbit, ObservationFixture,
+    ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture,
 };
-pub use instrument::{ReferenceInstrument, ReferenceRequest, ReferenceRuntimeError};
+pub use geodesic::{GeodesicConfigurationError, GeodesicTracer};
+pub use observation::{ObservationTrace, ObservationTraceError, ObservationTracer};
 pub use outcome::{
-    AffineDirection, LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination,
-    TraceDiagnostics, TraceInputId, TraceRequest,
+    AffineDirection, GeodesicTrace, LocalizedEvent, NumericalFailure, ReferenceOutcome,
+    Termination, TraceDiagnostics, TraceInputId,
 };
 pub use policy::ReferencePolicy;
-pub use tracer::{ReferenceConfigurationError, ReferenceTracer};

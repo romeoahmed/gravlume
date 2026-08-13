@@ -30,7 +30,7 @@ Gravlume 是一个桌面黑洞观测仪器：用户定义时空、观察者、�
 
 - Schwarzschild 与 Kerr exterior geometry；领域层保留 Kerr–Newman 参数和极端性分类。
 - 外部 Observer Event 与正交、定向 Observer Frame。
-- CPU `f64` reference trace；GPU WGSL `f32` interactive trace。
+- CPU `f64` reference trace；GPU WGSL `f32` GPU trace。
 - escape、horizon crossing、emitter hit、singularity guard、step exhaustion 和 numerical failure 的类型化分类。
 - sky 与薄表面发射，正确的局部频率比和标量 emission/absorption。
 - scene-linear HDR、中性 display transform、egui overlay 与可审计捕获。

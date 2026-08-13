@@ -1,30 +1,30 @@
 use gravlume_domain::{
-    InitialViewRay, KerrNewmanSpacetime, Observation, ValidationReport, ViewportSample,
+    ImageSample, InitialViewRay, KerrNewmanSpacetime, Observation, ValidationReport,
 };
 
 use crate::{
-    AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, ReferenceTracer,
-    TraceInputId, TraceRequest,
+    AffineDirection, EventConfiguration, GeodesicTrace, GeodesicTracer, ReferenceOutcome,
+    ReferencePolicy, TraceInputId,
 };
 
 #[derive(Clone, Debug)]
-pub struct ReferenceRequest {
+pub struct ObservationTrace {
     input_id: TraceInputId,
     spacetime: KerrNewmanSpacetime,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
 }
 
-impl ReferenceRequest {
+impl ObservationTrace {
     /// Binds a stable logical identity and sample to the observation, then resolves its initial ray.
     ///
     /// # Errors
     ///
-    /// Rejects a sample that is invalid for the request observation's projection.
+    /// Rejects a sample that is invalid for the request observation's view.
     pub fn new(
         input_id: TraceInputId,
         observation: &Observation,
-        sample: ViewportSample,
+        sample: ImageSample,
         policy: ReferencePolicy,
     ) -> Result<Self, ValidationReport> {
         let initial_ray = observation.initial_ray(sample)?;
@@ -38,17 +38,17 @@ impl ReferenceRequest {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct ReferenceInstrument {
+pub struct ObservationTracer {
     _private: (),
 }
 
-impl ReferenceInstrument {
+impl ObservationTracer {
     #[must_use]
     pub const fn baseline_v1() -> Self {
         Self { _private: () }
     }
 
-    /// Traces a viewport sample backward while preserving future-directed photon momentum.
+    /// Traces an image sample backward while preserving future-directed photon momentum.
     ///
     /// # Errors
     ///
@@ -56,24 +56,24 @@ impl ReferenceInstrument {
     /// integration failures are successful, typed outcomes.
     pub fn trace(
         &self,
-        request: ReferenceRequest,
-    ) -> Result<ReferenceOutcome, ReferenceRuntimeError> {
-        let ReferenceRequest {
+        request: ObservationTrace,
+    ) -> Result<ReferenceOutcome, ObservationTraceError> {
+        let ObservationTrace {
             input_id,
             spacetime,
             initial_ray,
             policy,
         } = request;
         if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
-            return Err(ReferenceRuntimeError::NonNormalizedReferenceInput);
+            return Err(ObservationTraceError::NonNormalizedReferenceInput);
         }
-        let tracer = ReferenceTracer::new(
+        let tracer = GeodesicTracer::new(
             spacetime,
             policy,
             EventConfiguration::observation_baseline_v1(),
         )
-        .map_err(|_| ReferenceRuntimeError::NonNormalizedReferenceInput)?;
-        Ok(tracer.trace(TraceRequest::new(
+        .map_err(|_| ObservationTraceError::NonNormalizedReferenceInput)?;
+        Ok(tracer.trace(GeodesicTrace::new(
             input_id,
             initial_ray.state(),
             AffineDirection::Negative,
@@ -82,7 +82,7 @@ impl ReferenceInstrument {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum ReferenceRuntimeError {
+pub enum ObservationTraceError {
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
 }

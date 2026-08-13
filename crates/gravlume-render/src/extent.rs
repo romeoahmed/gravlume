@@ -84,47 +84,47 @@ impl ExtentTracker {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{ExtentChange, ExtentTracker, RenderExtent};
 
-    fn extent(width: u32, height: u32) -> RenderExtent {
-        RenderExtent::new(width, height).expect("test extent is nonzero")
-    }
+    proptest! {
+        #[test]
+        fn updates_follow_extent_and_generation_contract(updates in prop::collection::vec((0_u32..=64, 0_u32..=64), 0..128)) {
+            let mut tracker = ExtentTracker::default();
+            let mut model_extent = None;
+            let mut model_generation = 0;
+            let mut model_paused = false;
 
-    #[test]
-    fn updates_are_transactional_and_generation_based() {
-        let original = ExtentTracker::default();
+            for (width, height) in updates {
+                let previous = tracker;
+                let (next, change) = tracker.updated(width, height);
+                let requested = RenderExtent::new(width, height);
+                let expected = match requested {
+                    None if model_paused => ExtentChange::Unchanged,
+                    None => {
+                        model_extent = None;
+                        model_paused = true;
+                        ExtentChange::Paused
+                    }
+                    Some(extent) if !model_paused && model_extent == Some(extent) => ExtentChange::Unchanged,
+                    Some(extent) => {
+                        model_extent = Some(extent);
+                        model_paused = false;
+                        model_generation += 1;
+                        ExtentChange::Rebuild { extent, generation: model_generation }
+                    }
+                };
 
-        let (active, change) = original.updated(1279, 719);
-        assert_eq!(
-            change,
-            ExtentChange::Rebuild {
-                extent: extent(1279, 719),
-                generation: 1,
+                prop_assert_eq!(change, expected);
+                prop_assert_eq!(next.extent(), model_extent);
+                prop_assert_eq!(next.generation(), model_generation);
+                if change == ExtentChange::Unchanged {
+                    prop_assert_eq!(next.extent(), previous.extent());
+                    prop_assert_eq!(next.generation(), previous.generation());
+                }
+                tracker = next;
             }
-        );
-        assert_eq!(original.extent(), None);
-        assert_eq!(original.generation(), 0);
-
-        let (active, change) = active.updated(1279, 719);
-        assert_eq!(change, ExtentChange::Unchanged);
-        assert_eq!(active.generation(), 1);
-
-        let (paused, change) = active.updated(0, 719);
-        assert_eq!(change, ExtentChange::Paused);
-        assert_eq!(paused.extent(), None);
-        assert_eq!(paused.generation(), 1);
-
-        let (paused, change) = paused.updated(0, 0);
-        assert_eq!(change, ExtentChange::Unchanged);
-
-        let (resumed, change) = paused.updated(1279, 719);
-        assert_eq!(
-            change,
-            ExtentChange::Rebuild {
-                extent: extent(1279, 719),
-                generation: 2,
-            }
-        );
-        assert_eq!(resumed.extent(), Some(extent(1279, 719)));
+        }
     }
 }

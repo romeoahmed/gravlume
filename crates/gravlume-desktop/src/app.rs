@@ -1,6 +1,5 @@
 use std::{
     ffi::OsStr,
-    num::NonZeroU32,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -8,14 +7,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, PhysicalScene,
-    PhysicalSceneDraft, StationaryObserverDraft, ValidationReport, ViewportProjection,
-};
-use gravlume_native_display::DisplayMonitor;
+use gravlume_domain::ValidationReport;
+use gravlume_native_display::{DisplayMonitor, DynamicRange, UnknownDisplayState};
 use gravlume_render::{
-    DeviceEvent, DisplayState, FrameSkip, FrameStatus, GpuEngine, HdrParameters, RenderDiagnostics,
-    RenderInitError, RenderRuntimeError, ResizeError, TraceAdvance, UnknownDisplayState,
+    DeviceEvent, PresentResult, PresentSkip, Renderer, RendererError, RendererInitError,
+    ResizeError,
 };
 use winit::{
     application::ApplicationHandler,
@@ -26,13 +22,15 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{Launch, lifecycle::Lifecycle};
+use crate::{
+    Launch,
+    lifecycle::Lifecycle,
+    schedule::{EventLoopSchedule, PendingResize, earliest},
+    ui::{default_observation, install_fonts, show_overlay},
+};
 
-const PENDING_GPU_POLL_INTERVAL: Duration = Duration::from_millis(2);
 const RETRY_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SMOKE_ONCE_ENV: &str = "GRAVLUME_SMOKE_ONCE";
-const UI_FONT_NAME: &str = "Noto Sans SC";
-const UI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.otf");
 
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
@@ -43,11 +41,11 @@ pub enum RunError {
     #[error("failed to monitor the native display: {0}")]
     NativeDisplay(#[from] gravlume_native_display::MonitorError),
     #[error("failed to initialize the GPU renderer: {0}")]
-    RenderInit(#[from] RenderInitError),
+    RenderInit(#[from] RendererInitError),
     #[error("failed to construct the validated default observation: {0}")]
     DefaultObservation(#[from] ValidationReport),
     #[error("rendering failed: {0}")]
-    RenderRuntime(#[from] RenderRuntimeError),
+    RenderRuntime(#[from] RendererError),
     #[error("fatal resize failure: {0}")]
     Resize(#[from] ResizeError),
     #[error("fatal GPU event: {0}")]
@@ -85,10 +83,11 @@ struct DesktopApp {
     launch: Launch,
     lifecycle: Lifecycle,
     window: Option<WindowState>,
-    renderer: Option<GpuEngine>,
+    renderer: Option<Renderer>,
     egui_context: egui::Context,
     event_proxy: EventLoopProxy<AppEvent>,
     schedule: EventLoopSchedule,
+    pending_resize: PendingResize,
     pending_textures: egui::TexturesDelta,
     last_device_event: Option<DeviceEvent>,
     last_resize_event: Option<DeviceEvent>,
@@ -101,7 +100,7 @@ struct DesktopApp {
 impl DesktopApp {
     fn new(launch: Launch, event_proxy: EventLoopProxy<AppEvent>) -> Self {
         let egui_context = egui::Context::default();
-        install_ui_font(&egui_context);
+        install_fonts(&egui_context);
         Self {
             launch,
             lifecycle: Lifecycle::default(),
@@ -110,6 +109,7 @@ impl DesktopApp {
             egui_context,
             event_proxy,
             schedule: EventLoopSchedule::default(),
+            pending_resize: PendingResize::default(),
             pending_textures: egui::TexturesDelta::default(),
             last_device_event: None,
             last_resize_event: None,
@@ -180,7 +180,7 @@ impl DesktopApp {
         let display_state = self.current_display_state();
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.resume_surface()?;
-            renderer.refresh_output(display_state)?;
+            renderer.update_output(display_state)?;
             let size = window.inner_size();
             self.resize_renderer(event_loop, size.width, size.height);
             return Ok(());
@@ -188,10 +188,10 @@ impl DesktopApp {
         let size = window.inner_size();
         let observation = default_observation(size.width, size.height)?;
         let mut renderer =
-            pollster::block_on(GpuEngine::new(window.clone(), &observation, display_state))?;
+            pollster::block_on(Renderer::new(window.clone(), &observation, display_state))?;
         // Configuring extended-linear output can arm macOS EDR. Re-read the live snapshot after
         // the surface exists so current headroom is not left at its pre-configuration value.
-        renderer.refresh_output(self.current_display_state())?;
+        renderer.update_output(self.current_display_state())?;
         let diagnostics = renderer.diagnostics();
         tracing::info!(
             adapter = diagnostics.adapter_name(),
@@ -200,7 +200,7 @@ impl DesktopApp {
             format = diagnostics.surface_format(),
             color_space = diagnostics.color_space(),
             transfer = diagnostics.display_transfer(),
-            "initialized interactive desktop renderer"
+            "initialized desktop renderer"
         );
         self.renderer = Some(renderer);
         window.request_redraw();
@@ -237,26 +237,26 @@ impl DesktopApp {
             );
             let paint_jobs = self.egui_context.tessellate(shapes, pixels_per_point);
             self.pending_textures.append(textures_delta);
-            renderer.render(&paint_jobs, &self.pending_textures, pixels_per_point)
+            renderer.present(&paint_jobs, &self.pending_textures, pixels_per_point)
         };
 
         match render_result {
-            Ok(FrameStatus::Presented) => {
+            Ok(PresentResult::Presented) => {
                 self.pending_textures.clear();
             }
-            Ok(FrameStatus::Skipped(FrameSkip::Timeout)) => {
+            Ok(PresentResult::Skipped(PresentSkip::Timeout)) => {
                 self.schedule
                     .request_repaint(Instant::now(), RETRY_FRAME_INTERVAL);
             }
-            Ok(FrameStatus::Skipped(FrameSkip::Outdated | FrameSkip::Lost)) => {
+            Ok(PresentResult::Skipped(PresentSkip::Outdated | PresentSkip::Lost)) => {
                 self.schedule
                     .request_repaint(Instant::now(), Duration::ZERO);
             }
-            Ok(FrameStatus::Skipped(
-                FrameSkip::Validation
-                | FrameSkip::Occluded
-                | FrameSkip::ZeroExtent
-                | FrameSkip::Suspended,
+            Ok(PresentResult::Skipped(
+                PresentSkip::Validation
+                | PresentSkip::Occluded
+                | PresentSkip::ZeroExtent
+                | PresentSkip::Suspended,
             )) => {}
             Err(error) => self.fail(event_loop, error.into()),
         }
@@ -277,6 +277,18 @@ impl DesktopApp {
         }
         if report_changed {
             self.request_redraw();
+        }
+    }
+
+    fn request_resize(&mut self, event_loop: &ActiveEventLoop, size: PhysicalSize<u32>) {
+        if self.pending_resize.request(Instant::now(), size) {
+            self.resize_renderer(event_loop, size.width, size.height);
+        }
+    }
+
+    fn apply_pending_resize(&mut self, event_loop: &ActiveEventLoop, gpu_idle: bool) {
+        if let Some(size) = self.pending_resize.take_due(Instant::now(), gpu_idle) {
+            self.resize_renderer(event_loop, size.width, size.height);
         }
     }
 
@@ -314,10 +326,10 @@ impl DesktopApp {
         }
     }
 
-    fn current_display_state(&self) -> DisplayState {
+    fn current_display_state(&self) -> DynamicRange {
         self.window.as_ref().map_or(
-            DisplayState::Unknown(UnknownDisplayState::PlatformIntegrationUnavailable),
-            |state| map_dynamic_range(state.display_monitor.dynamic_range()),
+            DynamicRange::Unknown(UnknownDisplayState::PlatformIntegrationUnavailable),
+            |state| state.display_monitor.dynamic_range(),
         )
     }
 
@@ -355,22 +367,6 @@ impl DesktopApp {
     }
 }
 
-fn install_ui_font(context: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        UI_FONT_NAME.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(UI_FONT_BYTES)),
-    );
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .push(UI_FONT_NAME.to_owned());
-    }
-    context.set_fonts(fonts);
-}
-
 impl ApplicationHandler<AppEvent> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.lifecycle.resume()
@@ -396,7 +392,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 }
                 let display_state = self.current_display_state();
                 if let Some(renderer) = self.renderer.as_mut()
-                    && let Err(error) = renderer.refresh_output(display_state)
+                    && let Err(error) = renderer.update_output(display_state)
                 {
                     self.fail(event_loop, error.into());
                     return;
@@ -425,22 +421,31 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
 
         let response = window_state.egui.on_window_event(&window, &event);
         // This event is the requested repaint; echoing it would queue another frame.
-        if response.repaint && !matches!(&event, WindowEvent::RedrawRequested) {
+        if response.repaint
+            && !matches!(
+                &event,
+                WindowEvent::RedrawRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
             window.request_redraw();
         }
 
         match event {
             WindowEvent::CloseRequested => self.request_exit(event_loop),
             WindowEvent::Resized(size) => {
-                self.resize_renderer(event_loop, size.width, size.height);
+                self.request_resize(event_loop, size);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 let size = window.inner_size();
-                self.resize_renderer(event_loop, size.width, size.height);
+                self.request_resize(event_loop, size);
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
-            WindowEvent::Occluded(true) => {}
-            WindowEvent::RedrawRequested => self.draw_frame(event_loop),
+            WindowEvent::RedrawRequested if !self.pending_resize.is_pending() => {
+                self.draw_frame(event_loop);
+            }
+            WindowEvent::Occluded(true) | WindowEvent::RedrawRequested => {}
             _ if response.consumed => {}
             _ => {}
         }
@@ -451,29 +456,29 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             self.finish_exit(event_loop);
             return;
         }
-        let poll_result = self.renderer.as_mut().map(GpuEngine::poll);
+        let poll_result = self.renderer.as_mut().map(Renderer::poll);
         match poll_result {
-            Some(Ok(outcome)) => {
-                let (published_generation, completed_present_generation, events) =
-                    outcome.into_parts();
-                self.process_device_events(event_loop, events);
+            Some(Ok(mut update)) => {
+                let published_generation = update.published_generation();
+                let completed_present_generation = update.completed_present_generation();
+                self.process_device_events(event_loop, update.take_events());
                 if published_generation.is_some() {
                     self.request_redraw();
                 }
                 if let Some(generation) = completed_present_generation {
                     self.completed_present_generation = Some(generation);
                 }
-                let current_generation = self.renderer.as_ref().map(GpuEngine::extent_generation);
+                let current_generation = self.renderer.as_ref().map(Renderer::generation);
                 if self.smoke_once
                     && current_generation.is_some()
                     && self.completed_present_generation == current_generation
                 {
-                    if let Some(diagnostics) = self.renderer.as_ref().map(GpuEngine::diagnostics) {
+                    if let Some(diagnostics) = self.renderer.as_ref().map(Renderer::diagnostics) {
                         tracing::info!(
                             trace_batches = diagnostics.completed_trace_batches(),
                             total_trace_compute_ms = diagnostics.total_trace_compute_ms(),
                             maximum_trace_batch_ms = diagnostics.maximum_trace_batch_ms(),
-                            "interactive one-frame smoke completed"
+                            "one-frame renderer smoke completed"
                         );
                     }
                     self.request_exit(event_loop);
@@ -495,24 +500,22 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         }
 
         let now = Instant::now();
-        if self
+        let gpu_idle = self
             .renderer
             .as_ref()
-            .is_some_and(GpuEngine::trace_can_advance)
+            .is_none_or(|renderer| !renderer.has_pending_work());
+        self.apply_pending_resize(event_loop, gpu_idle);
+        if !self.pending_resize.is_pending()
+            && let Some(Err(error)) = self.renderer.as_mut().map(Renderer::advance_trace)
         {
-            match self.renderer.as_mut().map(GpuEngine::advance_trace) {
-                Some(Ok(TraceAdvance::Submitted | TraceAdvance::Idle)) | None => {}
-                Some(Err(error)) => {
-                    self.fail(event_loop, error.into());
-                    return;
-                }
-            }
+            self.fail(event_loop, error.into());
+            return;
         }
-        let has_pending_gpu_work = self
+        let has_pending_work = self
             .renderer
             .as_ref()
-            .is_some_and(GpuEngine::has_pending_gpu_work);
-        self.schedule.after_gpu_poll(now, has_pending_gpu_work);
+            .is_some_and(Renderer::has_pending_work);
+        self.schedule.after_gpu_poll(now, has_pending_work);
         if self.schedule.take_due_repaint(now) {
             self.request_redraw();
         }
@@ -520,13 +523,16 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             .window
             .as_ref()
             .and_then(|window| window.display_monitor.next_dispatch_deadline());
-        match earliest_deadline(self.schedule.next_wake(), native_dispatch_deadline) {
+        let resize_deadline = gpu_idle.then(|| self.pending_resize.deadline()).flatten();
+        let application_deadline = earliest(self.schedule.next_wake(), resize_deadline);
+        match earliest(application_deadline, native_dispatch_deadline) {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.pending_resize.clear();
         if self.lifecycle.suspend()
             && let Some(renderer) = self.renderer.as_mut()
         {
@@ -538,240 +544,5 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         if let Some(window) = self.window.as_mut() {
             window.display_monitor.shutdown();
         }
-    }
-}
-
-fn map_dynamic_range(dynamic_range: gravlume_native_display::DynamicRange) -> DisplayState {
-    match dynamic_range {
-        gravlume_native_display::DynamicRange::Hdr {
-            tone_map_headroom,
-            reference_white_scale,
-        } => HdrParameters::new(tone_map_headroom, reference_white_scale).map_or(
-            DisplayState::Unknown(UnknownDisplayState::StateQueryFailed),
-            DisplayState::Hdr,
-        ),
-        gravlume_native_display::DynamicRange::Sdr => DisplayState::Sdr,
-        gravlume_native_display::DynamicRange::Suppressed => DisplayState::Suppressed,
-        gravlume_native_display::DynamicRange::Unknown(reason) => {
-            DisplayState::Unknown(match reason {
-                gravlume_native_display::UnknownDisplayState::PlatformIntegrationUnavailable => {
-                    UnknownDisplayState::PlatformIntegrationUnavailable
-                }
-                gravlume_native_display::UnknownDisplayState::UnsupportedOsVersion => {
-                    UnknownDisplayState::UnsupportedOsVersion
-                }
-                gravlume_native_display::UnknownDisplayState::StateQueryFailed => {
-                    UnknownDisplayState::StateQueryFailed
-                }
-                gravlume_native_display::UnknownDisplayState::WaylandColorManagementUnavailable => {
-                    UnknownDisplayState::WaylandColorManagementUnavailable
-                }
-                gravlume_native_display::UnknownDisplayState::WaylandProtocolTooOld => {
-                    UnknownDisplayState::WaylandProtocolTooOld
-                }
-                gravlume_native_display::UnknownDisplayState::WaylandEncodingUnavailable => {
-                    UnknownDisplayState::WaylandEncodingUnavailable
-                }
-            })
-        }
-    }
-}
-
-fn earliest_deadline(first: Option<Instant>, second: Option<Instant>) -> Option<Instant> {
-    match (first, second) {
-        (Some(first), Some(second)) => Some(first.min(second)),
-        (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-        (None, None) => None,
-    }
-}
-
-fn show_overlay(
-    context: &egui::Context,
-    diagnostics: &RenderDiagnostics<'_>,
-    device_event: Option<&DeviceEvent>,
-    resize_event: Option<&DeviceEvent>,
-) {
-    let style = context.style_of(context.theme());
-    let panel_frame =
-        egui::Frame::window(&style).fill(egui::Color32::from_rgba_unmultiplied(12, 14, 18, 228));
-    let title_frame =
-        egui::Frame::window(&style).fill(egui::Color32::from_rgba_unmultiplied(20, 22, 26, 236));
-    egui::Window::new("Gravlume")
-        .default_pos([16.0, 16.0])
-        .default_width(380.0)
-        .resizable(false)
-        .collapsible(false)
-        .frame(panel_frame)
-        .title_frame(title_frame)
-        .show(context, |ui| {
-            ui.spacing_mut().item_spacing.y = 3.0;
-            ui.strong("Kerr black-hole lensing");
-            match diagnostics.trace_completion() {
-                Some(completion) if completion < 1.0 => {
-                    ui.label("Tracing a complete full-resolution view.");
-                    ui.weak("Previous complete frame remains visible.");
-                }
-                _ => {
-                    ui.label("Full-resolution trace complete.");
-                }
-            }
-            ui.label("a/M 0.8 | r_obs/M 30 | vertical FOV 45 deg");
-            ui.label("Black: horizon shadow | Color: lensed sky");
-            ui.label(format!(
-                "GPU RK4 geometry preview | Output: {}",
-                diagnostics.display_transfer()
-            ));
-            ui.weak("No accretion disk or radiative transfer.");
-            if device_event.is_some() || resize_event.is_some() {
-                ui.separator();
-            }
-            if let Some(event) = device_event {
-                ui.colored_label(
-                    egui::Color32::from_rgb(255, 170, 80),
-                    format!("GPU {:?}: {}", event.kind(), event.message()),
-                );
-            }
-            if let Some(event) = resize_event {
-                ui.colored_label(
-                    egui::Color32::from_rgb(255, 170, 80),
-                    format!("Resize {:?}: {}", event.kind(), event.message()),
-                );
-            }
-        });
-}
-
-#[cfg(test)]
-mod font_tests {
-    use super::install_ui_font;
-
-    #[test]
-    fn bundled_ui_font_covers_required_unicode_fallbacks() {
-        let context = egui::Context::default();
-        install_ui_font(&context);
-        let mut output = context.run_ui(egui::RawInput::default(), |_| {});
-
-        context.fonts_mut(|fonts| {
-            assert!(fonts.has_glyphs(
-                &egui::FontId::proportional(14.0),
-                "\u{4e2d}\u{6587} \u{2192} Kerr\u{2013}Schild \u{00b7} HDR/SDR"
-            ));
-        });
-        output.textures_delta.clear();
-    }
-}
-
-fn default_observation(width: u32, height: u32) -> Result<Observation, ValidationReport> {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildCoordinates::Outgoing)?;
-    let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
-    let observer = StationaryObserverDraft::new(
-        [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
-        [0.0; 4],
-        [0.0, 0.0, 1.0],
-        1.0,
-    );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
-        1.0,
-        0.8,
-        0.0,
-        KerrSchildCoordinates::Outgoing,
-        observer,
-    ))?;
-    let projection = ViewportProjection::perspective(
-        NonZeroU32::new(width).unwrap_or(NonZeroU32::MIN),
-        NonZeroU32::new(height).unwrap_or(NonZeroU32::MIN),
-        Angle::from_radians(std::f64::consts::FRAC_PI_4)?,
-    )?;
-    Ok(Observation::new(scene, projection))
-}
-
-/// Keeps timer wakeups for GPU progress separate from repaint requests.
-///
-/// Source: <https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html#method.about_to_wait>
-#[derive(Debug, Default)]
-struct EventLoopSchedule {
-    repaint_deadline: Option<Instant>,
-    gpu_poll_deadline: Option<Instant>,
-}
-
-impl EventLoopSchedule {
-    fn request_repaint(&mut self, now: Instant, delay: Duration) {
-        if delay != Duration::MAX {
-            self.request_repaint_at(now.checked_add(delay).unwrap_or(now));
-        }
-    }
-
-    fn request_repaint_at(&mut self, deadline: Instant) {
-        self.repaint_deadline = Some(
-            self.repaint_deadline
-                .map_or(deadline, |current| current.min(deadline)),
-        );
-    }
-
-    fn after_gpu_poll(&mut self, now: Instant, has_pending_work: bool) {
-        if !has_pending_work {
-            self.gpu_poll_deadline = None;
-            return;
-        }
-        if self
-            .gpu_poll_deadline
-            .is_none_or(|deadline| deadline <= now)
-        {
-            self.gpu_poll_deadline =
-                Some(now.checked_add(PENDING_GPU_POLL_INTERVAL).unwrap_or(now));
-        }
-    }
-
-    fn take_due_repaint(&mut self, now: Instant) -> bool {
-        if self
-            .repaint_deadline
-            .is_some_and(|deadline| deadline <= now)
-        {
-            self.repaint_deadline = None;
-            true
-        } else {
-            false
-        }
-    }
-
-    fn next_wake(&self) -> Option<Instant> {
-        match (self.repaint_deadline, self.gpu_poll_deadline) {
-            (Some(repaint), Some(gpu_poll)) => Some(repaint.min(gpu_poll)),
-            (Some(deadline), None) | (None, Some(deadline)) => Some(deadline),
-            (None, None) => None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use super::EventLoopSchedule;
-
-    #[test]
-    fn gpu_progress_never_consumes_or_requests_a_repaint() {
-        let now = std::time::Instant::now();
-        let mut schedule = EventLoopSchedule::default();
-
-        schedule.request_repaint(now, Duration::from_millis(20));
-        schedule.request_repaint(now, Duration::from_millis(10));
-        schedule.request_repaint(now, Duration::from_millis(15));
-        schedule.after_gpu_poll(now, true);
-
-        let first_poll = now + super::PENDING_GPU_POLL_INTERVAL;
-        assert_eq!(schedule.next_wake(), Some(first_poll));
-        assert!(!schedule.take_due_repaint(first_poll));
-
-        schedule.after_gpu_poll(first_poll, true);
-        let second_poll = first_poll + super::PENDING_GPU_POLL_INTERVAL;
-        assert_eq!(schedule.next_wake(), Some(second_poll));
-        assert!(!schedule.take_due_repaint(second_poll));
-
-        schedule.after_gpu_poll(second_poll, false);
-        let repaint = now + Duration::from_millis(10);
-        assert_eq!(schedule.next_wake(), Some(repaint));
-        assert!(!schedule.take_due_repaint(now + Duration::from_millis(9)));
-        assert!(schedule.take_due_repaint(repaint));
-        assert_eq!(schedule.next_wake(), None);
     }
 }

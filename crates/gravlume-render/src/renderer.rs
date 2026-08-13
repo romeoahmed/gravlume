@@ -1,38 +1,39 @@
 use std::sync::{Arc, mpsc};
 
 use gravlume_domain::Observation;
+use gravlume_native_display::DynamicRange;
 use num_traits::ToPrimitive as _;
 
 use crate::{
     capabilities::{
-        BASELINE_FEATURES, DisplayState, OutputMode, SurfaceSelection, check_baseline_adapter,
+        BASELINE_FEATURES, OutputMode, SurfaceSelection, check_baseline_adapter,
         required_device_limits, select_surface,
     },
     display::{DisplayPipeline, DisplayTarget, PublishedScene, ScenePresentation, UI_FORMAT},
-    extent::{ExtentChange, ExtentTracker, RenderExtent},
-    gpu_error::{
-        DeviceEvent, GpuErrorScopes, RenderInitError, RenderRuntimeError, ResizeError,
+    error::{
+        DeviceEvent, GpuErrorScopes, RendererError, RendererInitError, ResizeError,
         install_device_callbacks, scoped_gpu_operation,
     },
-    timing::GpuTimings,
-    trace::{
-        TRACE_WORKGROUP_HEIGHT, TRACE_WORKGROUP_WIDTH, TraceCompute, TracePixels, TraceTarget,
+    extent::{ExtentChange, ExtentTracker, RenderExtent},
+    ray_tracer::{
+        RayTracer, TileRegion, TraceImage, direction_reconstruction_scratch_bytes,
+        shadow_coverage_scratch_bytes, tile_grid,
     },
+    timing::GpuTimings,
 };
 
 const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 3_840 * 2_160;
 const HDR_BYTES_PER_PIXEL: u64 = 8;
 const UI_BYTES_PER_PIXEL: u64 = 4;
 const MAXIMUM_CORE_RESOURCE_BYTES: u64 = 256 * 1024 * 1024;
-const INITIAL_TRACE_PIXELS_PER_BATCH: u32 = 32_768;
+const INITIAL_TRACE_TILES_PER_BATCH: u32 = 512;
 const TARGET_TRACE_BATCH_MS: f64 = 32.0;
 const MAXIMUM_TRACE_BATCH_MS: f64 = 50.0;
 const MAXIMUM_BATCH_SCALE: f64 = 1.5;
 const MINIMUM_BATCH_SCALE: f64 = 0.5;
-const TRACE_WORKGROUP_PIXELS: u32 = TRACE_WORKGROUP_WIDTH * TRACE_WORKGROUP_HEIGHT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameSkip {
+pub enum PresentSkip {
     ZeroExtent,
     Suspended,
     Timeout,
@@ -43,36 +44,35 @@ pub enum FrameSkip {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameStatus {
+pub enum PresentResult {
     Presented,
-    Skipped(FrameSkip),
+    Skipped(PresentSkip),
 }
 
 #[derive(Debug, Default)]
-pub struct PollOutcome {
+pub struct RendererUpdate {
     published_generation: Option<u64>,
     completed_present_generation: Option<u64>,
     events: Vec<DeviceEvent>,
 }
 
-impl PollOutcome {
+impl RendererUpdate {
     #[must_use]
-    pub fn into_parts(self) -> (Option<u64>, Option<u64>, Vec<DeviceEvent>) {
-        (
-            self.published_generation,
-            self.completed_present_generation,
-            self.events,
-        )
+    pub const fn published_generation(&self) -> Option<u64> {
+        self.published_generation
+    }
+
+    #[must_use]
+    pub const fn completed_present_generation(&self) -> Option<u64> {
+        self.completed_present_generation
+    }
+
+    pub fn take_events(&mut self) -> Vec<DeviceEvent> {
+        std::mem::take(&mut self.events)
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TraceAdvance {
-    Submitted,
-    Idle,
-}
-
-pub struct RenderDiagnostics<'a> {
+pub struct RendererDiagnostics<'a> {
     adapter_name: &'a str,
     backend: &'a str,
     driver: &'a str,
@@ -84,14 +84,14 @@ pub struct RenderDiagnostics<'a> {
 
 #[derive(Clone, Copy, Debug)]
 struct TraceProgressDiagnostics {
-    completed_pixels: u32,
-    total_pixels: u32,
+    completed_tiles: u32,
+    total_tiles: u32,
     completed_batches: u32,
     total_compute_ms: f64,
     maximum_batch_ms: f64,
 }
 
-impl RenderDiagnostics<'_> {
+impl RendererDiagnostics<'_> {
     #[must_use]
     pub const fn adapter_name(&self) -> &str {
         self.adapter_name
@@ -125,7 +125,7 @@ impl RenderDiagnostics<'_> {
     #[must_use]
     pub fn trace_completion(&self) -> Option<f64> {
         self.trace_progress
-            .map(|progress| f64::from(progress.completed_pixels) / f64::from(progress.total_pixels))
+            .map(|progress| f64::from(progress.completed_tiles) / f64::from(progress.total_tiles))
     }
 
     #[must_use]
@@ -158,7 +158,7 @@ struct FrameResources {
 }
 
 struct TraceCandidate {
-    trace: TraceTarget,
+    trace: TraceImage,
     completed_presentation: ScenePresentation,
     progress: TraceProgress,
 }
@@ -170,11 +170,13 @@ struct CompletedCandidate {
 
 #[derive(Debug)]
 struct TraceProgress {
-    total_pixels: u32,
-    next_pixel: u32,
-    pixels_per_batch: u32,
-    maximum_batch_pixels: u32,
-    in_flight: Option<TracePixels>,
+    grid: [u32; 2],
+    total_tiles: u32,
+    next_tile: u32,
+    tiles_per_batch: u32,
+    maximum_batch_tiles: u32,
+    maximum_dispatch_dimension: u32,
+    in_flight: Option<TileRegion>,
     completed_batches: u32,
     total_compute_ms: f64,
     maximum_batch_ms: f64,
@@ -185,7 +187,7 @@ enum PreparedSurfaceFrame {
         texture: wgpu::SurfaceTexture,
         reconfigure_after_present: bool,
     },
-    Skip(FrameSkip),
+    Skip(PresentSkip),
 }
 
 struct SurfaceUpdate {
@@ -201,42 +203,75 @@ struct TraceSubmission {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CoreResourcePlan {
     published: u64,
-    installed_frame: u64,
-    replacement_frame: u64,
+    installed: FrameResourceFootprint,
+    replacement: FrameResourceFootprint,
 }
 
-impl CoreResourcePlan {
-    const fn without_installed_frame(published: RenderExtent, replacement: RenderExtent) -> Self {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FrameResourceFootprint {
+    ui: u64,
+    candidate: u64,
+    trace_scratch: u64,
+}
+
+impl FrameResourceFootprint {
+    const EMPTY: Self = Self {
+        ui: 0,
+        candidate: 0,
+        trace_scratch: 0,
+    };
+
+    const fn display_only(extent: RenderExtent) -> Self {
         Self {
-            published: extent_pixels(published),
-            installed_frame: 0,
-            replacement_frame: extent_pixels(replacement),
+            ui: extent_pixels(extent),
+            candidate: 0,
+            trace_scratch: 0,
         }
     }
 
-    const fn rebuild(
+    fn tracing(extent: RenderExtent) -> Self {
+        Self {
+            ui: extent_pixels(extent),
+            candidate: extent_pixels(extent),
+            trace_scratch: shadow_coverage_scratch_bytes(extent)
+                .saturating_add(direction_reconstruction_scratch_bytes(extent)),
+        }
+    }
+
+    const fn required_bytes(self) -> u64 {
+        self.ui
+            .saturating_mul(UI_BYTES_PER_PIXEL)
+            .saturating_add(self.candidate.saturating_mul(HDR_BYTES_PER_PIXEL))
+            .saturating_add(self.trace_scratch)
+    }
+}
+
+impl CoreResourcePlan {
+    fn without_installed_frame(published: RenderExtent, replacement: RenderExtent) -> Self {
+        Self {
+            published: extent_pixels(published),
+            installed: FrameResourceFootprint::EMPTY,
+            replacement: FrameResourceFootprint::tracing(replacement),
+        }
+    }
+
+    fn rebuild(
         published: RenderExtent,
-        installed_frame: RenderExtent,
+        installed: FrameResourceFootprint,
         replacement: RenderExtent,
     ) -> Self {
         Self {
             published: extent_pixels(published),
-            installed_frame: extent_pixels(installed_frame),
-            replacement_frame: extent_pixels(replacement),
+            installed,
+            replacement: FrameResourceFootprint::tracing(replacement),
         }
     }
 
     const fn required_bytes(self) -> u64 {
         self.published
             .saturating_mul(HDR_BYTES_PER_PIXEL)
-            .saturating_add(
-                self.installed_frame
-                    .saturating_mul(HDR_BYTES_PER_PIXEL + UI_BYTES_PER_PIXEL),
-            )
-            .saturating_add(
-                self.replacement_frame
-                    .saturating_mul(HDR_BYTES_PER_PIXEL + UI_BYTES_PER_PIXEL),
-            )
+            .saturating_add(self.installed.required_bytes())
+            .saturating_add(self.replacement.required_bytes())
     }
 }
 
@@ -250,7 +285,7 @@ enum TraceCompletion {
 impl FrameResources {
     fn new(
         device: &wgpu::Device,
-        trace: &TraceCompute,
+        trace: &RayTracer,
         display: &DisplayPipeline,
         published: &PublishedScene,
         extent: RenderExtent,
@@ -271,7 +306,7 @@ impl FrameResources {
 
     fn create_candidate(
         device: &wgpu::Device,
-        trace: &TraceCompute,
+        trace: &RayTracer,
         display: &DisplayPipeline,
         display_target: &DisplayTarget,
         extent: RenderExtent,
@@ -288,11 +323,11 @@ impl FrameResources {
         }
     }
 
-    fn next_batch(&self) -> Option<TracePixels> {
+    fn next_batch(&self) -> Option<TileRegion> {
         self.candidate.as_ref()?.progress.next_batch()
     }
 
-    fn submitted(&mut self, batch: TracePixels) {
+    fn submitted(&mut self, batch: TileRegion) {
         if let Some(candidate) = self.candidate.as_mut() {
             candidate.progress.submitted(batch);
         }
@@ -331,38 +366,60 @@ impl FrameResources {
     }
 
     fn diagnostics(&self) -> TraceProgressDiagnostics {
-        let (completed_pixels, total_pixels) = self.candidate.as_ref().map_or_else(
+        let (completed_tiles, total_tiles) = self.candidate.as_ref().map_or_else(
             || {
-                let pixels = self.presentation_extent.width() * self.presentation_extent.height();
-                (pixels, pixels)
+                let [columns, rows] = tile_grid(self.presentation_extent);
+                let tiles = columns * rows;
+                (tiles, tiles)
             },
             |candidate| {
                 let diagnostics = candidate.progress.diagnostics();
-                (diagnostics.completed_pixels, diagnostics.total_pixels)
+                (diagnostics.completed_tiles, diagnostics.total_tiles)
             },
         );
         TraceProgressDiagnostics {
-            completed_pixels,
-            total_pixels,
+            completed_tiles,
+            total_tiles,
             completed_batches: self.completed_batches,
             total_compute_ms: self.total_compute_ms,
             maximum_batch_ms: self.maximum_batch_ms,
         }
     }
+
+    fn resource_footprint(&self) -> FrameResourceFootprint {
+        if self.candidate.is_some() {
+            FrameResourceFootprint::tracing(self.presentation_extent)
+        } else {
+            FrameResourceFootprint::display_only(self.presentation_extent)
+        }
+    }
 }
 
 impl TraceProgress {
-    const fn new(extent: RenderExtent, maximum_workgroups: u32) -> Self {
-        let maximum_batch_pixels = maximum_workgroups.saturating_mul(TRACE_WORKGROUP_PIXELS);
-        Self {
-            total_pixels: extent.width() * extent.height(),
-            next_pixel: 0,
-            pixels_per_batch: if INITIAL_TRACE_PIXELS_PER_BATCH < maximum_batch_pixels {
-                INITIAL_TRACE_PIXELS_PER_BATCH
+    const fn new(extent: RenderExtent, maximum_dispatch_dimension: u32) -> Self {
+        debug_assert!(maximum_dispatch_dimension > 0);
+        let grid = tile_grid(extent);
+        let total_tiles = grid[0] * grid[1];
+        let maximum_batch_tiles = if grid[0] > maximum_dispatch_dimension {
+            maximum_dispatch_dimension
+        } else {
+            grid[0].saturating_mul(if grid[1] < maximum_dispatch_dimension {
+                grid[1]
             } else {
-                maximum_batch_pixels
+                maximum_dispatch_dimension
+            })
+        };
+        Self {
+            grid,
+            total_tiles,
+            next_tile: 0,
+            tiles_per_batch: if INITIAL_TRACE_TILES_PER_BATCH < maximum_batch_tiles {
+                INITIAL_TRACE_TILES_PER_BATCH
+            } else {
+                maximum_batch_tiles
             },
-            maximum_batch_pixels,
+            maximum_batch_tiles,
+            maximum_dispatch_dimension,
             in_flight: None,
             completed_batches: 0,
             total_compute_ms: 0.0,
@@ -370,22 +427,37 @@ impl TraceProgress {
         }
     }
 
-    fn next_batch(&self) -> Option<TracePixels> {
-        if self.in_flight.is_some() || self.next_pixel == self.total_pixels {
+    fn next_batch(&self) -> Option<TileRegion> {
+        if self.in_flight.is_some() || self.next_tile == self.total_tiles {
             return None;
         }
-        Some(TracePixels::new(
-            self.next_pixel,
-            self.next_pixel
-                .saturating_add(self.pixels_per_batch)
-                .min(self.total_pixels),
+        let tile_x = self.next_tile % self.grid[0];
+        let tile_y = self.next_tile / self.grid[0];
+        let remaining_tiles = self.total_tiles - self.next_tile;
+        let budget = self.tiles_per_batch.min(remaining_tiles);
+        let remaining_columns = self.grid[0] - tile_x;
+        let workgroups_x = budget
+            .min(remaining_columns)
+            .min(self.maximum_dispatch_dimension);
+        let workgroups_y = if tile_x == 0 && workgroups_x == self.grid[0] && budget >= self.grid[0]
+        {
+            (budget / self.grid[0])
+                .min(self.grid[1] - tile_y)
+                .min(self.maximum_dispatch_dimension)
+        } else {
+            1
+        };
+        Some(TileRegion::new(
+            [tile_x, tile_y],
+            [workgroups_x, workgroups_y],
         ))
     }
 
-    fn submitted(&mut self, batch: TracePixels) {
-        debug_assert_eq!(batch.start(), self.next_pixel);
+    fn submitted(&mut self, batch: TileRegion) {
+        let origin = batch.origin();
+        debug_assert_eq!(origin[1] * self.grid[0] + origin[0], self.next_tile);
         debug_assert!(self.in_flight.is_none());
-        self.next_pixel += batch.len();
+        self.next_tile += batch.len();
         self.in_flight = Some(batch);
     }
 
@@ -398,7 +470,7 @@ impl TraceProgress {
             self.total_compute_ms += compute_ms;
             self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
         }
-        if self.next_pixel == self.total_pixels || !compute_ms.is_finite() || compute_ms <= 0.0 {
+        if self.next_tile == self.total_tiles || !compute_ms.is_finite() || compute_ms <= 0.0 {
             return;
         }
 
@@ -408,11 +480,10 @@ impl TraceProgress {
             (TARGET_TRACE_BATCH_MS / compute_ms).clamp(MINIMUM_BATCH_SCALE, MAXIMUM_BATCH_SCALE)
         };
         let scaled = (f64::from(batch.len()) * scale).round().clamp(
-            f64::from(TRACE_WORKGROUP_PIXELS),
-            f64::from(self.total_pixels.min(self.maximum_batch_pixels)),
+            1.0,
+            f64::from(self.total_tiles.min(self.maximum_batch_tiles)),
         );
-        let scaled = scaled.to_u32().unwrap_or(self.total_pixels);
-        self.pixels_per_batch = scaled.div_ceil(TRACE_WORKGROUP_PIXELS) * TRACE_WORKGROUP_PIXELS;
+        self.tiles_per_batch = scaled.to_u32().unwrap_or(self.total_tiles);
     }
 
     fn complete_submission(
@@ -433,17 +504,17 @@ impl TraceProgress {
     }
 
     const fn is_complete(&self) -> bool {
-        self.next_pixel == self.total_pixels && self.in_flight.is_none()
+        self.next_tile == self.total_tiles && self.in_flight.is_none()
     }
 
     const fn diagnostics(&self) -> TraceProgressDiagnostics {
-        let completed_pixels = match self.in_flight {
-            Some(batch) => batch.start(),
-            None => self.next_pixel,
+        let completed_tiles = match self.in_flight {
+            Some(batch) => self.next_tile - batch.len(),
+            None => self.next_tile,
         };
         TraceProgressDiagnostics {
-            completed_pixels,
-            total_pixels: self.total_pixels,
+            completed_tiles,
+            total_tiles: self.total_tiles,
             completed_batches: self.completed_batches,
             total_compute_ms: self.total_compute_ms,
             maximum_batch_ms: self.maximum_batch_ms,
@@ -488,7 +559,7 @@ const fn display_transfer_label(selection: SurfaceSelection) -> &'static str {
     }
 }
 
-pub struct GpuEngine {
+pub struct Renderer {
     surface: Option<wgpu::Surface<'static>>,
     surface_suspended: bool,
     instance: wgpu::Instance,
@@ -497,13 +568,13 @@ pub struct GpuEngine {
     device: wgpu::Device,
     queue: wgpu::Queue,
     selection: SurfaceSelection,
-    display_state: DisplayState,
+    display_state: DynamicRange,
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
-    trace: TraceCompute,
+    trace: RayTracer,
     display: DisplayPipeline,
-    egui_renderer: egui_wgpu::Renderer,
+    egui: egui_wgpu::Renderer,
     timings: GpuTimings,
     trace_submission: Option<TraceSubmission>,
     pending_present_generation: Option<u64>,
@@ -511,8 +582,8 @@ pub struct GpuEngine {
     device_events: mpsc::Receiver<DeviceEvent>,
 }
 
-impl GpuEngine {
-    /// Creates the GPU device, interactive trace, and presentation resources.
+impl Renderer {
+    /// Creates the GPU device, ray tracer, and presentation resources.
     ///
     /// # Errors
     ///
@@ -521,8 +592,8 @@ impl GpuEngine {
     pub async fn new(
         window: Arc<winit::window::Window>,
         observation: &Observation,
-        display_state: DisplayState,
-    ) -> Result<Self, RenderInitError> {
+        display_state: DynamicRange,
+    ) -> Result<Self, RendererInitError> {
         let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         instance_descriptor.backends = crate::native_backends();
         let instance = wgpu::Instance::new(instance_descriptor);
@@ -543,7 +614,7 @@ impl GpuEngine {
             adapter.features(),
             hdr_features.allowed_usages,
         )
-        .map_err(|reason| RenderInitError::UnsupportedAdapter {
+        .map_err(|reason| RendererInitError::UnsupportedAdapter {
             adapter: adapter_info.name.clone(),
             reason: reason.to_string(),
         })?;
@@ -561,14 +632,14 @@ impl GpuEngine {
 
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
-        let trace = TraceCompute::new(&device, observation)?;
+        let trace = RayTracer::new(&device, observation)?;
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
-        let egui_renderer =
+        let egui =
             egui_wgpu::Renderer::new(&device, UI_FORMAT, egui_wgpu::RendererOptions::default());
         let timings = GpuTimings::new(&device);
         let initial_size = window.inner_size();
-        let mut engine = Self {
+        let mut renderer = Self {
             surface: Some(surface),
             surface_suspended: false,
             instance,
@@ -583,23 +654,23 @@ impl GpuEngine {
             published_scene,
             trace,
             display,
-            egui_renderer,
+            egui,
             timings,
             trace_submission: None,
             pending_present_generation: None,
             diagnostic_labels,
             device_events,
         };
-        let resize_result = engine.resize(initial_size.width, initial_size.height);
+        let resize_result = renderer.resize(initial_size.width, initial_size.height);
         resource_scopes
             .finish()
             .await
-            .map_err(|source| RenderInitError::GpuResource {
-                stage: "interactive trace GPU resources",
+            .map_err(|source| RendererInitError::GpuResource {
+                stage: "ray-tracing resources",
                 source,
             })?;
-        resize_result.map_err(RenderInitError::InitialResize)?;
-        Ok(engine)
+        resize_result.map_err(RendererInitError::InitialResize)?;
+        Ok(renderer)
     }
 
     /// Rebuilds every size-dependent resource as one transaction.
@@ -675,14 +746,14 @@ impl GpuEngine {
     /// # Errors
     ///
     /// Returns an error when surface recovery or frame-resource validation fails.
-    pub fn render(
+    pub fn present(
         &mut self,
         paint_jobs: &[egui::ClippedPrimitive],
         textures_delta: &egui::TexturesDelta,
         pixels_per_point: f32,
-    ) -> Result<FrameStatus, RenderRuntimeError> {
+    ) -> Result<PresentResult, RendererError> {
         let Some(extent) = self.extent.extent() else {
-            return Ok(FrameStatus::Skipped(FrameSkip::ZeroExtent));
+            return Ok(PresentResult::Skipped(PresentSkip::ZeroExtent));
         };
         let (surface_texture, reconfigure_after_present) =
             match self.prepare_surface_frame(extent)? {
@@ -690,7 +761,7 @@ impl GpuEngine {
                     texture,
                     reconfigure_after_present,
                 } => (texture, reconfigure_after_present),
-                PreparedSurfaceFrame::Skip(reason) => return Ok(FrameStatus::Skipped(reason)),
+                PreparedSurfaceFrame::Skip(reason) => return Ok(PresentResult::Skipped(reason)),
             };
 
         let surface_view = surface_texture
@@ -702,12 +773,8 @@ impl GpuEngine {
         };
         for (texture_id, image_deltas) in &textures_delta.set {
             for image_delta in image_deltas {
-                self.egui_renderer.update_texture(
-                    &self.device,
-                    &self.queue,
-                    *texture_id,
-                    image_delta,
-                );
+                self.egui
+                    .update_texture(&self.device, &self.queue, *texture_id, image_delta);
             }
         }
 
@@ -716,19 +783,15 @@ impl GpuEngine {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Gravlume frame encoder"),
             });
-        let callback_buffers = self.egui_renderer.update_buffers(
-            &self.device,
-            &self.queue,
-            &mut encoder,
-            paint_jobs,
-            &screen,
-        );
+        let callback_buffers =
+            self.egui
+                .update_buffers(&self.device, &self.queue, &mut encoder, paint_jobs, &screen);
         let frame = self
             .frame_resources
             .as_mut()
-            .ok_or(RenderRuntimeError::MissingFrameResources)?;
+            .ok_or(RendererError::MissingFrameResources)?;
         encode_egui(
-            &self.egui_renderer,
+            &self.egui,
             &mut encoder,
             frame.display.ui_view(),
             paint_jobs,
@@ -739,7 +802,7 @@ impl GpuEngine {
         let main_buffer = encoder.finish();
         self.queue
             .submit(callback_buffers.into_iter().chain([main_buffer]));
-        free_egui_textures_after_submit(&mut self.egui_renderer, textures_delta);
+        free_egui_textures_after_submit(&mut self.egui, textures_delta);
         self.window.pre_present_notify();
         self.queue.present(surface_texture);
         self.pending_present_generation = self.published_scene.generation();
@@ -747,7 +810,7 @@ impl GpuEngine {
         if reconfigure_after_present {
             self.reconfigure_surface(extent, true)?;
         }
-        Ok(FrameStatus::Presented)
+        Ok(PresentResult::Presented)
     }
 
     /// Submits one hidden full-resolution trace batch without acquiring or presenting a surface.
@@ -755,34 +818,41 @@ impl GpuEngine {
     /// # Errors
     ///
     /// Returns an error when size-dependent resources are unavailable.
-    pub fn advance_trace(&mut self) -> Result<TraceAdvance, RenderRuntimeError> {
+    pub fn advance_trace(&mut self) -> Result<(), RendererError> {
         if self.surface_suspended
             || self.extent.extent().is_none()
             || !self.timings.capture_available()
         {
-            return Ok(TraceAdvance::Idle);
+            return Ok(());
         }
         let Some(frame) = self.frame_resources.as_mut() else {
-            return Ok(TraceAdvance::Idle);
+            return Ok(());
         };
         let Some(batch) = frame.next_batch() else {
-            return Ok(TraceAdvance::Idle);
+            return Ok(());
         };
         let candidate = frame
             .candidate
             .as_ref()
-            .ok_or(RenderRuntimeError::MissingFrameResources)?;
+            .ok_or(RendererError::MissingFrameResources)?;
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Gravlume trace encoder"),
             });
-        self.trace.encode(
+        self.trace.encode_node_pass(
             &self.queue,
             &mut encoder,
             &candidate.trace,
             batch,
-            Some(self.timings.compute_writes()),
+            Some(self.timings.node_writes()),
+        );
+        self.trace.encode_resolve_pass(
+            &mut encoder,
+            &candidate.trace,
+            batch,
+            Some(self.timings.resolve_writes()),
+            true,
         );
         self.timings.encode_resolve(&mut encoder);
         self.queue.submit([encoder.finish()]);
@@ -791,7 +861,7 @@ impl GpuEngine {
         self.trace_submission = Some(TraceSubmission {
             extent_generation: self.extent.generation(),
         });
-        Ok(TraceAdvance::Submitted)
+        Ok(())
     }
 
     /// Advances pending GPU work without blocking the event loop.
@@ -799,7 +869,7 @@ impl GpuEngine {
     /// # Errors
     ///
     /// Returns an error when device polling or timestamp readback fails.
-    pub fn poll(&mut self) -> Result<PollOutcome, RenderRuntimeError> {
+    pub fn poll(&mut self) -> Result<RendererUpdate, RendererError> {
         let mut poll_status = None;
         let timing = if self.timings.has_pending_readback() {
             self.timings
@@ -829,29 +899,19 @@ impl GpuEngine {
             .then(|| self.pending_present_generation.take())
             .flatten();
         let events = self.device_events.try_iter().collect();
-        Ok(PollOutcome {
+        Ok(RendererUpdate {
             published_generation,
             completed_present_generation,
             events,
         })
     }
 
-    pub const fn has_pending_gpu_work(&self) -> bool {
+    pub const fn has_pending_work(&self) -> bool {
         self.timings.has_pending_readback() || self.pending_present_generation.is_some()
     }
 
-    pub const fn extent_generation(&self) -> u64 {
+    pub const fn generation(&self) -> u64 {
         self.extent.generation()
-    }
-
-    pub fn trace_can_advance(&self) -> bool {
-        !self.surface_suspended
-            && self.extent.extent().is_some()
-            && self.timings.capture_available()
-            && self
-                .frame_resources
-                .as_ref()
-                .is_some_and(|frame| frame.next_batch().is_some())
     }
 
     pub fn suspend(&mut self) {
@@ -864,7 +924,7 @@ impl GpuEngine {
     /// # Errors
     ///
     /// Returns an error when the native surface cannot be recreated or its capabilities changed.
-    pub fn resume_surface(&mut self) -> Result<(), RenderRuntimeError> {
+    pub fn resume_surface(&mut self) -> Result<(), RendererError> {
         if self.surface.is_none() {
             self.recreate_surface()?;
         }
@@ -872,8 +932,8 @@ impl GpuEngine {
         Ok(())
     }
 
-    pub fn diagnostics(&self) -> RenderDiagnostics<'_> {
-        RenderDiagnostics {
+    pub fn diagnostics(&self) -> RendererDiagnostics<'_> {
+        RendererDiagnostics {
             adapter_name: &self.diagnostic_labels.adapter_name,
             backend: &self.diagnostic_labels.backend,
             driver: &self.diagnostic_labels.driver,
@@ -892,10 +952,7 @@ impl GpuEngine {
     /// # Errors
     ///
     /// Returns an error when the live surface no longer has a presentable SDR fallback.
-    pub fn refresh_output(
-        &mut self,
-        display_state: DisplayState,
-    ) -> Result<(), RenderRuntimeError> {
+    pub fn update_output(&mut self, display_state: DynamicRange) -> Result<(), RendererError> {
         self.display_state = display_state;
         if self.surface_suspended {
             return Ok(());
@@ -910,15 +967,15 @@ impl GpuEngine {
     fn prepare_surface_frame(
         &mut self,
         extent: RenderExtent,
-    ) -> Result<PreparedSurfaceFrame, RenderRuntimeError> {
+    ) -> Result<PreparedSurfaceFrame, RendererError> {
         let acquisition = match self.surface.as_ref() {
             Some(surface) => surface.get_current_texture(),
             None if self.surface_suspended => {
-                return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Suspended));
+                return Ok(PreparedSurfaceFrame::Skip(PresentSkip::Suspended));
             }
             None => {
                 self.recreate_surface()?;
-                return Ok(PreparedSurfaceFrame::Skip(FrameSkip::Lost));
+                return Ok(PreparedSurfaceFrame::Skip(PresentSkip::Lost));
             }
         };
 
@@ -931,20 +988,22 @@ impl GpuEngine {
                 texture,
                 reconfigure_after_present: true,
             },
-            wgpu::CurrentSurfaceTexture::Timeout => PreparedSurfaceFrame::Skip(FrameSkip::Timeout),
+            wgpu::CurrentSurfaceTexture::Timeout => {
+                PreparedSurfaceFrame::Skip(PresentSkip::Timeout)
+            }
             wgpu::CurrentSurfaceTexture::Occluded => {
-                PreparedSurfaceFrame::Skip(FrameSkip::Occluded)
+                PreparedSurfaceFrame::Skip(PresentSkip::Occluded)
             }
             wgpu::CurrentSurfaceTexture::Outdated => {
                 self.reconfigure_surface(extent, true)?;
-                PreparedSurfaceFrame::Skip(FrameSkip::Outdated)
+                PreparedSurfaceFrame::Skip(PresentSkip::Outdated)
             }
             wgpu::CurrentSurfaceTexture::Lost => {
                 self.recreate_surface()?;
-                PreparedSurfaceFrame::Skip(FrameSkip::Lost)
+                PreparedSurfaceFrame::Skip(PresentSkip::Lost)
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                PreparedSurfaceFrame::Skip(FrameSkip::Validation)
+                PreparedSurfaceFrame::Skip(PresentSkip::Validation)
             }
         };
         Ok(frame)
@@ -954,18 +1013,18 @@ impl GpuEngine {
         &mut self,
         extent: RenderExtent,
         force: bool,
-    ) -> Result<(), RenderRuntimeError> {
+    ) -> Result<(), RendererError> {
         let surface = self
             .surface
             .as_ref()
-            .ok_or(RenderRuntimeError::MissingPresentationSurface)?;
+            .ok_or(RendererError::MissingPresentationSurface)?;
         let capabilities = surface.get_capabilities(&self.adapter);
         let update = self.prepare_runtime_surface_update(&capabilities)?;
         if (force || surface_configuration_changed(self.selection, update.selection))
             && let Err(source) =
                 configure_surface_scoped(surface, &self.device, update.selection, extent)
         {
-            return Err(RenderRuntimeError::GpuResource {
+            return Err(RendererError::GpuResource {
                 stage: "configure the presentation surface",
                 source,
             });
@@ -976,18 +1035,13 @@ impl GpuEngine {
 
     fn resource_plan_for_rebuild(&self, replacement: RenderExtent) -> CoreResourcePlan {
         let published = self.published_scene.extent();
-        self.frame_resources
-            .as_ref()
-            .map(|frame| frame.presentation_extent)
-            .map_or_else(
-                || CoreResourcePlan::without_installed_frame(published, replacement),
-                |installed_frame| {
-                    CoreResourcePlan::rebuild(published, installed_frame, replacement)
-                },
-            )
+        self.frame_resources.as_ref().map_or_else(
+            || CoreResourcePlan::without_installed_frame(published, replacement),
+            |frame| CoreResourcePlan::rebuild(published, frame.resource_footprint(), replacement),
+        )
     }
 
-    fn recreate_surface(&mut self) -> Result<(), RenderRuntimeError> {
+    fn recreate_surface(&mut self) -> Result<(), RendererError> {
         let replacement = self.instance.create_surface(Arc::clone(&self.window))?;
         let capabilities = replacement.get_capabilities(&self.adapter);
         let update = self.prepare_runtime_surface_update(&capabilities)?;
@@ -995,7 +1049,7 @@ impl GpuEngine {
             && let Err(source) =
                 configure_surface_scoped(&replacement, &self.device, update.selection, extent)
         {
-            return Err(RenderRuntimeError::GpuResource {
+            return Err(RendererError::GpuResource {
                 stage: "configure the recreated presentation surface",
                 source,
             });
@@ -1008,11 +1062,11 @@ impl GpuEngine {
     fn prepare_runtime_surface_update(
         &self,
         capabilities: &wgpu::SurfaceCapabilities,
-    ) -> Result<SurfaceUpdate, RenderRuntimeError> {
+    ) -> Result<SurfaceUpdate, RendererError> {
         let selection = select_surface(capabilities, self.display_state)?;
         let presentation_pipeline = self
             .create_presentation_pipeline_if_needed(selection)
-            .map_err(|source| RenderRuntimeError::GpuResource {
+            .map_err(|source| RendererError::GpuResource {
                 stage: "rebuild the surface presentation pipeline",
                 source,
             })?;
@@ -1159,45 +1213,62 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::{
-        CoreResourcePlan, INITIAL_TRACE_PIXELS_PER_BATCH, MAXIMUM_CORE_RESOURCE_BYTES,
+        CoreResourcePlan, FrameResourceFootprint, MAXIMUM_CORE_RESOURCE_BYTES,
         MAXIMUM_NATIVE_TRACE_PIXELS, ResizeError, TraceCompletion, TraceProgress, TraceSubmission,
         validate_render_extent,
     };
-    use crate::extent::RenderExtent;
+    use crate::{extent::RenderExtent, ray_tracer::tile_grid};
 
-    #[test]
-    fn trace_progress_covers_a_generation_once_with_bounded_batches() {
-        let extent =
-            RenderExtent::new(INITIAL_TRACE_PIXELS_PER_BATCH + 13, 2).expect("extent is nonzero");
-        let mut progress = TraceProgress::new(
-            extent,
-            wgpu::Limits::default().max_compute_workgroups_per_dimension,
-        );
-        let mut covered = 0;
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn trace_progress_covers_each_tile_once_with_bounded_batches(
+            width in 1_u32..=257,
+            height in 1_u32..=257,
+            maximum_dispatch_dimension in 1_u32..=16,
+        ) {
+        let extent = RenderExtent::new(width, height).expect("generated extent is nonzero");
+        let mut progress = TraceProgress::new(extent, maximum_dispatch_dimension);
+        let [tile_columns, tile_rows] = tile_grid(extent);
+        let mut covered =
+            vec![false; usize::try_from(tile_columns * tile_rows).expect("small grid")];
 
         while let Some(batch) = progress.next_batch() {
-            assert_eq!(batch.start(), covered);
-            assert!(batch.len() <= progress.pixels_per_batch);
+            let [origin_x, origin_y] = batch.origin();
+            let [workgroups_x, workgroups_y] = batch.workgroups();
+            prop_assert!(workgroups_x <= maximum_dispatch_dimension);
+            prop_assert!(workgroups_y <= maximum_dispatch_dimension);
+            for tile_y in origin_y..origin_y + workgroups_y {
+                for tile_x in origin_x..origin_x + workgroups_x {
+                    prop_assert!(tile_x < tile_columns && tile_y < tile_rows);
+                    let index =
+                        usize::try_from(tile_y * tile_columns + tile_x).expect("small grid index");
+                    prop_assert!(!covered[index], "tile ({tile_x}, {tile_y}) was repeated");
+                    covered[index] = true;
+                }
+            }
             progress.submitted(batch);
-            assert!(progress.next_batch().is_none(), "one batch stays in flight");
-            covered += batch.len();
+            prop_assert!(progress.next_batch().is_none(), "one batch stays in flight");
             progress.completed(super::TARGET_TRACE_BATCH_MS);
         }
 
-        assert_eq!(covered, extent.width() * extent.height());
-        assert_eq!(progress.next_pixel, progress.total_pixels);
-        assert!(progress.in_flight.is_none());
-        assert!(
+        prop_assert!(covered.into_iter().all(|tile| tile));
+        prop_assert_eq!(progress.next_tile, progress.total_tiles);
+        prop_assert!(progress.in_flight.is_none());
+        prop_assert!(
             progress.next_batch().is_none(),
             "complete traces are reused"
         );
+        }
     }
 
     #[test]
     fn publication_gate_requires_the_complete_current_generation() {
-        let extent =
-            RenderExtent::new(INITIAL_TRACE_PIXELS_PER_BATCH + 13, 2).expect("extent is nonzero");
+        let extent = RenderExtent::new(4_097, 9).expect("extent is nonzero");
         let mut progress = TraceProgress::new(
             extent,
             wgpu::Limits::default().max_compute_workgroups_per_dimension,
@@ -1205,16 +1276,17 @@ mod tests {
         let submission = TraceSubmission {
             extent_generation: 7,
         };
-        let mut covered = 0;
+        let mut covered_tiles = 0;
 
         while let Some(batch) = progress.next_batch() {
             progress.submitted(batch);
-            covered += batch.len();
-            let expected = if covered == extent.width() * extent.height() {
+            covered_tiles += batch.len();
+            let expected = if covered_tiles == progress.total_tiles {
                 TraceCompletion::Ready
             } else {
                 TraceCompletion::Pending
             };
+            assert_eq!(batch.finishes(extent), expected == TraceCompletion::Ready);
             assert_eq!(
                 progress.complete_submission(submission, 7, super::TARGET_TRACE_BATCH_MS),
                 expected
@@ -1228,7 +1300,7 @@ mod tests {
         );
         let batch = stale
             .next_batch()
-            .expect("one pixel requires one submission");
+            .expect("one tile requires one submission");
         stale.submitted(batch);
         assert_eq!(
             stale.complete_submission(submission, 8, super::TARGET_TRACE_BATCH_MS),
@@ -1241,23 +1313,25 @@ mod tests {
         let limits = wgpu::Limits::default();
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
         let initial = CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent);
-        let rebuild = CoreResourcePlan::rebuild(extent, extent, extent);
-        let cold_rebuild = CoreResourcePlan::rebuild(RenderExtent::ONE, extent, extent);
-
+        let active_rebuild =
+            CoreResourcePlan::rebuild(extent, FrameResourceFootprint::tracing(extent), extent);
+        let completed_rebuild =
+            CoreResourcePlan::rebuild(extent, FrameResourceFootprint::display_only(extent), extent);
+        let cold_rebuild = CoreResourcePlan::rebuild(
+            RenderExtent::ONE,
+            FrameResourceFootprint::tracing(extent),
+            extent,
+        );
         assert_eq!(super::extent_pixels(extent), MAXIMUM_NATIVE_TRACE_PIXELS);
         assert!(initial.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
         assert!(validate_render_extent(extent, &limits, initial).is_ok());
-        assert_eq!(
-            cold_rebuild.required_bytes(),
-            8 + 2 * MAXIMUM_NATIVE_TRACE_PIXELS * (8 + 4)
-        );
         assert!(validate_render_extent(extent, &limits, cold_rebuild).is_ok());
-        assert_eq!(
-            rebuild.required_bytes(),
-            MAXIMUM_NATIVE_TRACE_PIXELS * (8 + 12 + 12)
-        );
-        assert!(rebuild.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
-        assert!(validate_render_extent(extent, &limits, rebuild).is_ok());
+        assert!(active_rebuild.required_bytes() > MAXIMUM_CORE_RESOURCE_BYTES);
+        assert!(matches!(
+            validate_render_extent(extent, &limits, active_rebuild),
+            Err(ResizeError::FrameResourceBudget { .. })
+        ));
+        assert!(validate_render_extent(extent, &limits, completed_rebuild).is_ok());
     }
 
     #[test]
@@ -1282,19 +1356,23 @@ mod tests {
     #[test]
     fn trace_batches_respect_the_device_dispatch_dimension_at_4k() {
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
-        let maximum_workgroups = 512;
-        let maximum_batch_pixels = maximum_workgroups * super::TRACE_WORKGROUP_PIXELS;
-        let mut progress = TraceProgress::new(extent, maximum_workgroups);
-        let mut covered = 0;
+        let maximum_dispatch_dimension = 512;
+        let mut progress = TraceProgress::new(extent, maximum_dispatch_dimension);
+        let [tile_columns, tile_rows] = tile_grid(extent);
+        let mut covered_tiles = 0;
 
         while let Some(batch) = progress.next_batch() {
-            assert!(batch.len() <= maximum_batch_pixels);
+            let [workgroups_x, workgroups_y] = batch.workgroups();
+            assert!(workgroups_x <= maximum_dispatch_dimension);
+            assert!(workgroups_y <= maximum_dispatch_dimension);
+            let [origin_x, origin_y] = batch.origin();
+            assert_eq!(origin_y * tile_columns + origin_x, covered_tiles);
             progress.submitted(batch);
-            covered += batch.len();
+            covered_tiles += batch.len();
             progress.completed(f64::MIN_POSITIVE);
         }
 
-        assert_eq!(covered, extent.width() * extent.height());
+        assert_eq!(covered_tiles, tile_columns * tile_rows);
     }
 
     #[test]

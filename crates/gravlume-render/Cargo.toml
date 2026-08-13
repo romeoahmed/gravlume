@@ -5,11 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+gpu-benchmarks = ["dep:criterion"]
+
 [dependencies]
 bytemuck.workspace = true
+criterion = { workspace = true, optional = true }
 egui.workspace = true
 egui-wgpu.workspace = true
 gravlume-domain = { path = "../gravlume-domain" }
+gravlume-native-display = { path = "../gravlume-native-display" }
 num-traits.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
@@ -19,7 +24,12 @@ winit.workspace = true
 
 [dev-dependencies]
 gravlume-reference = { path = "../gravlume-reference" }
-naga = { version = "30.0", features = ["wgsl-in"] }
+proptest.workspace = true
+
+[[bench]]
+name = "trace_gpu"
+harness = false
+required-features = ["gpu-benchmarks"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 wgpu = { workspace = true, features = ["metal"] }

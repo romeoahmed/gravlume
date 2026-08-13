@@ -42,27 +42,47 @@ impl Lifecycle {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::Lifecycle;
 
-    #[test]
-    fn redundant_resume_and_suspend_events_are_idempotent() {
-        let mut lifecycle = Lifecycle::default();
-
-        assert!(lifecycle.resume());
-        assert!(!lifecycle.resume());
-        assert!(lifecycle.suspend());
-        assert!(!lifecycle.suspend());
-        assert!(lifecycle.resume());
+    #[derive(Clone, Copy, Debug)]
+    enum Event {
+        Resume,
+        Suspend,
+        Fail,
     }
 
-    #[test]
-    fn fatal_state_never_attempts_to_initialize_again() {
-        let mut lifecycle = Lifecycle::default();
-        assert!(lifecycle.resume());
+    fn event() -> impl Strategy<Value = Event> {
+        prop_oneof![Just(Event::Resume), Just(Event::Suspend), Just(Event::Fail),]
+    }
 
-        lifecycle.fail();
+    proptest! {
+        #[test]
+        fn lifecycle_matches_its_small_transition_model(events in prop::collection::vec(event(), 0..64)) {
+            let mut lifecycle = Lifecycle::default();
+            let mut active = false;
+            let mut fatal = false;
 
-        assert!(!lifecycle.suspend());
-        assert!(!lifecycle.resume());
+            for event in events {
+                match event {
+                    Event::Resume => {
+                        let expected = !fatal && !active;
+                        prop_assert_eq!(lifecycle.resume(), expected);
+                        active |= expected;
+                    }
+                    Event::Suspend => {
+                        let expected = !fatal && active;
+                        prop_assert_eq!(lifecycle.suspend(), expected);
+                        active &= !expected;
+                    }
+                    Event::Fail => {
+                        lifecycle.fail();
+                        active = false;
+                        fatal = true;
+                    }
+                }
+            }
+        }
     }
 }

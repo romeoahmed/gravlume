@@ -90,13 +90,13 @@ impl fmt::Display for TraceInputId {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct TraceRequest {
+pub struct GeodesicTrace {
     pub(super) input_id: TraceInputId,
     pub(super) initial_state: GeodesicState,
     pub(super) affine_direction: AffineDirection,
 }
 
-impl TraceRequest {
+impl GeodesicTrace {
     #[must_use]
     pub const fn new(
         input_id: TraceInputId,

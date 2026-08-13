@@ -7,14 +7,14 @@ use crate::{
 const BASIS_TOLERANCE: f64 = 1.0e-12;
 
 #[derive(Clone, Debug)]
-pub struct StationaryObserverDraft {
+pub struct StationaryObserverInput {
     event_txyz_m: [f64; 4],
     target_txyz_m: [f64; 4],
     up_hint_xyz: [f64; 3],
     measured_frequency: f64,
 }
 
-impl StationaryObserverDraft {
+impl StationaryObserverInput {
     #[must_use]
     pub const fn new(
         event_txyz_m: [f64; 4],
@@ -107,11 +107,11 @@ fn construct_frame(
     spacetime: KerrNewmanSpacetime,
     event: SpacetimeEvent,
     four_velocity: FourVector,
-    draft: &StationaryObserverDraft,
+    input: &StationaryObserverInput,
     prefix: &str,
 ) -> Result<ObserverFrame, ValidationReport> {
     let target_seed = FourVector::new(std::array::from_fn(|index| {
-        draft.target_txyz_m[index] - draft.event_txyz_m[index]
+        input.target_txyz_m[index] - input.event_txyz_m[index]
     }));
     let Ok(sight) = project_and_normalize(spacetime, event, four_velocity, target_seed, &[]) else {
         return Err(ValidationReport::from_error(
@@ -123,9 +123,9 @@ fn construct_frame(
     let arrival = sight.scaled(-1.0);
     let requested_up = FourVector::new([
         0.0,
-        draft.up_hint_xyz[0],
-        draft.up_hint_xyz[1],
-        draft.up_hint_xyz[2],
+        input.up_hint_xyz[0],
+        input.up_hint_xyz[1],
+        input.up_hint_xyz[2],
     ]);
     let requested_up =
         project_and_normalize(spacetime, event, four_velocity, requested_up, &[sight]);

@@ -1,34 +1,31 @@
 #![forbid(unsafe_code)]
 
-//! Private GPU frame engine for Gravlume.
+//! Native GPU renderer for Gravlume.
 
 mod capabilities;
 mod display;
-mod engine;
+mod error;
 mod extent;
-mod gpu_error;
+mod ray_tracer;
+mod renderer;
+mod shadow_coverage;
 mod timing;
-mod trace;
+
+#[cfg(feature = "gpu-benchmarks")]
+pub mod benchmark;
 
 #[cfg(test)]
-mod interactive_trace_contract_tests;
+mod gpu_capture;
 #[cfg(test)]
-mod test_gpu;
+mod gpu_trace_tests;
 #[cfg(test)]
-mod trace_test_support;
+mod test_device;
 
-#[doc(hidden)]
-pub use capabilities::{CapabilityError, DisplayState, HdrParameters, UnknownDisplayState};
-#[doc(hidden)]
-pub use engine::{FrameSkip, FrameStatus, GpuEngine, PollOutcome, RenderDiagnostics, TraceAdvance};
-#[doc(hidden)]
-pub use gpu_error::{
-    DeviceEvent, DeviceEventKind, RenderInitError, RenderRuntimeError, ResizeError,
-};
-#[doc(hidden)]
+pub use capabilities::CapabilityError;
+pub use error::{DeviceEvent, DeviceEventKind, RendererError, RendererInitError, ResizeError};
+pub use ray_tracer::GpuTraceInputError;
+pub use renderer::{PresentResult, PresentSkip, Renderer, RendererDiagnostics, RendererUpdate};
 pub use timing::TimingError;
-#[doc(hidden)]
-pub use trace::{TraceInputError, TraceTermination, UnknownTraceTermination};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("gravlume-render supports only native macOS, Windows, and Linux targets");

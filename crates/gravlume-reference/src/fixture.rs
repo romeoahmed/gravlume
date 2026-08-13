@@ -1,27 +1,25 @@
 use std::{fmt, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, GeodesicState, KerrNewmanSpacetime, KerrSchildCoordinates, Observation, ParameterState,
-    PhysicalScene, PhysicalSceneDraft, StationaryObserverDraft, ViewportProjection,
+    Angle, Extremality, GeodesicState, KerrNewmanSpacetime, KerrSchildChart, Observation,
+    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
 };
 use serde::{Deserialize, Deserializer, de};
 
 use crate::{
-    AffineDirection, EventConfiguration, ReferenceOutcome, ReferencePolicy, Termination,
-    TraceInputId, TraceRequest, events::escape_event_is_armed,
+    AffineDirection, EventConfiguration, GeodesicTrace, ReferenceOutcome, ReferencePolicy,
+    Termination, TraceInputId, events::escape_event_is_armed,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
 const V1_PRODUCER_PRECISION_DIGITS: u32 = 80;
 const V1_GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
-const V1_OBSERVATION: &str =
-    include_str!("../../../tests/fixtures/v1/default-kerr-observation.toml");
-const V1_SCATTER_B6: &str =
-    include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-b6.toml");
+const V1_OBSERVATION: &str = include_str!("../fixtures/v1/default-kerr-observation.toml");
+const V1_SCATTER_B6: &str = include_str!("../fixtures/v1/schwarzschild-scatter-b6.toml");
 const V1_SCATTER_NEAR_CRITICAL: &str =
-    include_str!("../../../tests/fixtures/v1/schwarzschild-scatter-near-critical.toml");
+    include_str!("../fixtures/v1/schwarzschild-scatter-near-critical.toml");
 const V1_CAPTURE_NEAR_CRITICAL: &str =
-    include_str!("../../../tests/fixtures/v1/schwarzschild-capture-near-critical.toml");
+    include_str!("../fixtures/v1/schwarzschild-capture-near-critical.toml");
 
 #[derive(Clone, Debug)]
 pub enum FixtureDocument {
@@ -94,7 +92,6 @@ pub struct GeodesicFixture {
     initial_state: GeodesicState,
     affine_direction: AffineDirection,
     events: EventConfiguration,
-    applicability: GeodesicApplicability,
     expected: ExpectedOutcome,
 }
 
@@ -114,8 +111,8 @@ impl GeodesicFixture {
     }
 
     #[must_use]
-    pub fn trace_request(&self) -> TraceRequest {
-        TraceRequest::new(
+    pub fn trace_request(&self) -> GeodesicTrace {
+        GeodesicTrace::new(
             self.input_id.clone(),
             self.initial_state,
             self.affine_direction,
@@ -123,39 +120,9 @@ impl GeodesicFixture {
     }
 
     #[must_use]
-    pub const fn applicability(&self) -> GeodesicApplicability {
-        self.applicability
-    }
-
-    #[must_use]
     pub const fn expected(&self) -> &ExpectedOutcome {
         &self.expected
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum GeodesicOrbit {
-    EquatorialSingleTurnScatter,
-    EquatorialCapture,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CriticalSide {
-    Escape,
-    Capture,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum GeodesicApplicability {
-    Regular {
-        orbit: GeodesicOrbit,
-    },
-    NearCritical {
-        orbit: GeodesicOrbit,
-        critical_impact_parameter_m: f64,
-        impact_parameter_offset_m: f64,
-        side: CriticalSide,
-    },
 }
 
 #[derive(Clone, Debug)]
@@ -311,8 +278,7 @@ struct RawObserver {
 #[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawViewport {
-    #[serde(rename = "projection")]
-    _projection: Projection,
+    projection: Projection,
     width: u32,
     height: u32,
     vertical_fov_rad: DecimalString,
@@ -331,7 +297,7 @@ struct RawObservationEvents {
 #[derive(Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 struct RawObservationExpected {
-    parameter_state: ParameterStateName,
+    parameter_state: ExtremalityName,
     outer_horizon_radius_m: DecimalString,
     observer_cartesian_xyz_m: [DecimalString; 3],
     observer_g_tt: DecimalString,
@@ -445,7 +411,7 @@ fixture_enum!(ObserverState { Stationary => "stationary" });
 fixture_enum!(UpHint { SpinPositiveZ => "spin-positive-z" });
 fixture_enum!(Projection { Perspective => "perspective" });
 fixture_enum!(ViewportOrigin { TopLeft => "top-left" });
-fixture_enum!(ParameterStateName { Subextremal => "subextremal" });
+fixture_enum!(ExtremalityName { Subextremal => "subextremal" });
 fixture_enum!(AffineDirectionName { Positive => "positive", Negative => "negative" });
 fixture_enum!(RawOrbit {
     EquatorialSingleTurnScatter => "equatorial-single-turn-scatter",
@@ -480,7 +446,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             raw.spacetime.mass_m.value,
             raw.spacetime.spin_m.value,
             raw.spacetime.charge_m.value,
-            KerrSchildCoordinates::Ingoing,
+            KerrSchildChart::Ingoing,
         )
         .map_err(|error| FixtureError::InvalidPhysicalData(error.to_string()))?;
         let initial_state = GeodesicState::new(
@@ -503,7 +469,7 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
                 "initial energy/null contract is inconsistent".to_owned(),
             ));
         }
-        let applicability = validate_geodesic_applicability(
+        validate_geodesic_applicability(
             &raw.applicability,
             termination,
             initial_invariants.energy(),
@@ -539,7 +505,6 @@ impl TryFrom<RawGeodesicFixture> for FixtureDocument {
             initial_state,
             affine_direction,
             events,
-            applicability,
             expected,
         }))
     }
@@ -604,14 +569,13 @@ fn validate_geodesic_applicability(
     termination: Termination,
     energy: f64,
     angular_momentum_z: f64,
-) -> Result<GeodesicApplicability, FixtureError> {
+) -> Result<(), FixtureError> {
     match raw {
         RawApplicability::Regular { orbit } => {
-            let orbit = GeodesicOrbit::from(*orbit);
-            if !orbit_matches_termination(orbit, termination) {
+            if !orbit_matches_termination(*orbit, termination) {
                 return Err(FixtureError::InconsistentApplicability);
             }
-            Ok(GeodesicApplicability::Regular { orbit })
+            Ok(())
         }
         RawApplicability::NearCritical {
             orbit,
@@ -619,52 +583,40 @@ fn validate_geodesic_applicability(
             impact_parameter_offset_m,
             side,
         } => {
-            let orbit = GeodesicOrbit::from(*orbit);
-            let side = CriticalSide::from(*side);
             let critical_impact_parameter_m = critical_impact_parameter_m.value;
             let impact_parameter_offset_m = impact_parameter_offset_m.value;
             let labeled_impact_parameter_m =
                 critical_impact_parameter_m + impact_parameter_offset_m;
             let actual_impact_parameter_m = angular_momentum_z / energy;
             let side_matches_offset = match side {
-                CriticalSide::Escape => impact_parameter_offset_m > 0.0,
-                CriticalSide::Capture => impact_parameter_offset_m < 0.0,
+                RawCriticalSide::Escape => impact_parameter_offset_m > 0.0,
+                RawCriticalSide::Capture => impact_parameter_offset_m < 0.0,
             };
             let side_matches_orbit = matches!(
                 (side, orbit),
                 (
-                    CriticalSide::Escape,
-                    GeodesicOrbit::EquatorialSingleTurnScatter
-                ) | (CriticalSide::Capture, GeodesicOrbit::EquatorialCapture)
+                    RawCriticalSide::Escape,
+                    RawOrbit::EquatorialSingleTurnScatter
+                ) | (RawCriticalSide::Capture, RawOrbit::EquatorialCapture)
             );
             if critical_impact_parameter_m <= 0.0
                 || !side_matches_offset
                 || !side_matches_orbit
-                || !orbit_matches_termination(orbit, termination)
+                || !orbit_matches_termination(*orbit, termination)
                 || !approximately_equal(actual_impact_parameter_m, labeled_impact_parameter_m)
             {
                 return Err(FixtureError::InconsistentApplicability);
             }
-            Ok(GeodesicApplicability::NearCritical {
-                orbit,
-                critical_impact_parameter_m,
-                impact_parameter_offset_m,
-                side,
-            })
+            Ok(())
         }
     }
 }
 
-const fn orbit_matches_termination(orbit: GeodesicOrbit, termination: Termination) -> bool {
+const fn orbit_matches_termination(orbit: RawOrbit, termination: Termination) -> bool {
     matches!(
         (orbit, termination),
-        (
-            GeodesicOrbit::EquatorialSingleTurnScatter,
-            Termination::Escape
-        ) | (
-            GeodesicOrbit::EquatorialCapture,
-            Termination::HorizonCrossing
-        )
+        (RawOrbit::EquatorialSingleTurnScatter, Termination::Escape)
+            | (RawOrbit::EquatorialCapture, Termination::HorizonCrossing)
     )
 }
 
@@ -674,24 +626,6 @@ fn approximately_equal(left: f64, right: f64) -> bool {
     }
     let scale = left.abs().max(right.abs()).max(1.0);
     (left - right).abs() <= 64.0 * f64::EPSILON * scale
-}
-
-impl From<RawOrbit> for GeodesicOrbit {
-    fn from(value: RawOrbit) -> Self {
-        match value {
-            RawOrbit::EquatorialSingleTurnScatter => Self::EquatorialSingleTurnScatter,
-            RawOrbit::EquatorialCapture => Self::EquatorialCapture,
-        }
-    }
-}
-
-impl From<RawCriticalSide> for CriticalSide {
-    fn from(value: RawCriticalSide) -> Self {
-        match value {
-            RawCriticalSide::Escape => Self::Escape,
-            RawCriticalSide::Capture => Self::Capture,
-        }
-    }
 }
 
 fn validate_geodesic_events(
@@ -792,7 +726,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         raw.spacetime.mass_m.value,
         raw.spacetime.spin_m.value,
         raw.spacetime.charge_m.value,
-        KerrSchildCoordinates::Ingoing,
+        KerrSchildChart::Ingoing,
     )
     .map_err(invalid_physical_data)?;
     let observer_xyz = spacetime.oblate_to_cartesian(
@@ -800,7 +734,7 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         raw.observer.polar_angle_rad.value,
         raw.observer.azimuth_rad.value,
     );
-    let observer_draft = StationaryObserverDraft::new(
+    let observer_input = StationaryObserverInput::new(
         [
             raw.observer.coordinate_time_m.value,
             observer_xyz[0],
@@ -811,12 +745,12 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         [0.0, 0.0, 1.0],
         raw.observer.measured_frequency.value,
     );
-    let scene = PhysicalScene::commit(PhysicalSceneDraft::new(
+    let scene = PhysicalScene::new(PhysicalSceneInput::new(
         raw.spacetime.mass_m.value,
         raw.spacetime.spin_m.value,
         raw.spacetime.charge_m.value,
-        KerrSchildCoordinates::Ingoing,
-        observer_draft,
+        KerrSchildChart::Ingoing,
+        observer_input,
     ))
     .map_err(invalid_physical_data)?;
     let width = NonZeroU32::new(raw.viewport.width)
@@ -825,13 +759,11 @@ fn build_observation(raw: &RawObservationFixture) -> Result<Observation, Fixture
         .ok_or_else(|| FixtureError::InvalidPhysicalData("viewport height is zero".to_owned()))?;
     let vertical_fov =
         Angle::from_radians(raw.viewport.vertical_fov_rad.value).map_err(invalid_physical_data)?;
-    let projection = ViewportProjection::perspective(width, height, vertical_fov)
-        .map_err(invalid_physical_data)?;
+    let view = PerspectiveView::new(width, height, vertical_fov).map_err(invalid_physical_data)?;
     let subpixel = decimal_array(&raw.viewport.default_subpixel);
-    projection
-        .sample(0, 0, subpixel[0], subpixel[1])
+    view.sample(0, 0, subpixel[0], subpixel[1])
         .map_err(invalid_physical_data)?;
-    Ok(Observation::new(scene, projection))
+    Ok(Observation::new(scene, view))
 }
 
 fn validate_observation_expected(
@@ -847,8 +779,8 @@ fn validate_observation_expected(
         .radius(event)
         .map_err(invalid_physical_data)?;
     let radius_tolerance = raw.tolerance.radius_abs_m.value;
-    let expected_parameter_state = match raw.expected.parameter_state {
-        ParameterStateName::Subextremal => ParameterState::Subextremal,
+    let expected_extremality = match raw.expected.parameter_state {
+        ExtremalityName::Subextremal => Extremality::Subextremal,
     };
     let expected_horizon = raw.expected.outer_horizon_radius_m.value;
     let horizon_matches = scene
@@ -865,7 +797,7 @@ fn validate_observation_expected(
         (scene.observer_metric_g_tt() - raw.expected.observer_g_tt.value).abs() <= radius_tolerance;
     let radius_matches = (radius - raw.observer.oblate_radius_m.value).abs() <= radius_tolerance;
     let center_sample = observation
-        .projection()
+        .view()
         .sample(raw.viewport.width / 2, raw.viewport.height / 2, 0.5, 0.5)
         .map_err(invalid_physical_data)?;
     let null_matches = observation
@@ -873,7 +805,7 @@ fn validate_observation_expected(
         .map_err(invalid_physical_data)?
         .normalized_null_residual()
         <= raw.tolerance.initial_null_normalized_abs.value;
-    if scene.parameter_state() != expected_parameter_state
+    if scene.extremality() != expected_extremality
         || !horizon_matches
         || !position_matches
         || !frame_matches

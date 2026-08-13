@@ -178,3 +178,34 @@ impl ReferencePolicy {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::ReferencePolicy;
+
+    proptest! {
+        #[test]
+        fn adaptive_step_stays_bounded_and_decreases_with_error(
+            current in ReferencePolicy::regular_v1().minimum_step_m()
+                ..=ReferencePolicy::regular_v1().maximum_step_m(),
+            error_a in 0.0_f64..1.0e12,
+            error_b in 0.0_f64..1.0e12,
+            accepted in any::<bool>(),
+        ) {
+            let policy = ReferencePolicy::regular_v1();
+            let smaller_error = error_a.min(error_b);
+            let larger_error = error_a.max(error_b);
+            let larger_step = policy.next_step_magnitude(current, smaller_error, accepted);
+            let smaller_step = policy.next_step_magnitude(current, larger_error, accepted);
+
+            prop_assert!((policy.minimum_step_m()..=policy.maximum_step_m()).contains(&larger_step));
+            prop_assert!((policy.minimum_step_m()..=policy.maximum_step_m()).contains(&smaller_step));
+            prop_assert!(smaller_step <= larger_step);
+            if !accepted {
+                prop_assert!(larger_step <= current);
+            }
+        }
+    }
+}
