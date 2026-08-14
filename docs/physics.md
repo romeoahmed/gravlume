@@ -1,6 +1,6 @@
 # 数学物理合同
 
-本文固定 Gravlume 的符号、连续模型和可观测量。任何实现若采用另一 chart 或状态表示，必须显式转换到这里定义的 observable 再比较。离散积分、fixture 和容差属于[验证合同](validation.md)。
+本文固定 Gravlume 的符号、连续模型和可观测量。任何实现若采用另一 chart 或状态表示，必须显式转换到这里定义的 observable 再比较。本文不记录 shader 布局、离散积分选择或实验性能；这些内容分别属于[架构](architecture.md)、[验证合同](validation.md)和[研究记录](research/README.md)。
 
 ## 1. 约定
 
@@ -28,7 +28,7 @@ a^2+q_e^2
 \begin{cases}
 <M^2 & \text{subextremal},\\
 =M^2 & \text{extremal},\\
->M^2 & \text{superextremal}.
+{}>M^2 & \text{superextremal}.
 \end{cases}
 \]
 
@@ -63,6 +63,18 @@ u=
 \]
 
 第二式避免 $b<0$ 时大数相消。轴线上必须先用解析恒等式 $r=|z|$ 及其导数极限，不能要求可表示的 $r$ 还必须有可表示的 $r^2$。测试必须覆盖 $a=0$、轴线、赤道面、远场和接近 ring 的条件数；不能以 `max(epsilon, ...)` 后的值替代未截断恒等式。
+
+同一个二次约束还精确给出
+
+\[
+\boxed{
+\Sigma=r^2+\frac{a^2z^2}{r^2}=2r^2-b=\sqrt{b^2+4a^2z^2}.
+}
+\]
+
+因此 GPU radius solver 直接把 discriminant root 解释为 $\Sigma$，不重新形成
+$a^2z^2/r^2$。该形式在 $r=0$ branch disk 上仍有限，只有 ring 本身令 $\Sigma=0$；CPU
+reference 保留独立 residual reconstruction 作为不同舍入路径的 oracle。
 
 隐式微分给出
 
@@ -235,7 +247,42 @@ N_i=(6Mr^2-2q_e^2r)r_i,
 \qquad \partial_i l^t=0.
 \]
 
-这些表达与第 2.1 节的 $r_i$ 一起构成 current 的 Kerr–Schild RHS 合同；任一 denominator guard 在求值前触发 typed numerical failure，不能以 clamp 改写方程。上述导数、$l^2=0$ 和 rank-one inverse 已用精确符号代数独立复算。[A]
+这些完整导数与第 2.1 节的 $r_i$ 构成 domain/CPU reference 的独立 Kerr–Schild RHS。
+GPU 不构造完整 $3\times3$ Jacobian，因为 Hamilton force 只消费
+$\mathbf w=J_{\boldsymbol\ell}^{\mathsf T}\mathbf p$。令 $K=r^2+a^2$，则
+
+\[
+\mathbf e=\left(
+\frac{s r p_x-a p_y}{K},
+\frac{a p_x+s r p_y}{K},
+\frac{s p_z}{r}
+\right),
+\]
+
+\[
+C=\frac{(s x-2r\ell_x)p_x+(s y-2r\ell_y)p_y}{K}
+-\frac{s z p_z}{r^2},
+\qquad
+\boxed{\mathbf w=\mathbf e+C\nabla r}.
+\]
+
+stationarity 允许 GPU state 只动态保存 $(\mathbf x,\mathbf p)$ 和每 ray 常量
+$E=-p_t$。写 $q=E+\boldsymbol\ell\cdot\mathbf p$，精确 reduced system 是
+
+\[
+\boxed{
+\begin{aligned}
+\mathbf x'&=\mathbf p-fq\boldsymbol\ell,\\
+\mathbf p'&=fq\mathbf w+\tfrac12q^2\nabla f,\\
+t'&=E+fq,\\
+E'&=0.
+\end{aligned}}
+\]
+
+RK4 用同四个 stages 累计相对 coordinate-time increment；GPU `RhsResult` 把
+$(t',x',y',z')$ 打包为一个 `vec4`，但 state 不保存 absolute $t$。任一 denominator guard 在
+求值前触发 typed numerical failure，不能以 clamp 改写方程。完整 Jacobian与 contracted form、
+$l^2=0$、rank-one inverse 及 reduced Hamiltonian 已用精确符号代数独立复算。[A]
 
 stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。第 2.2 节的
 chart-handed oblate coordinates 与同一个 physical-spin Kerr–Newman BL chart 局部满足
@@ -260,20 +307,32 @@ p_\theta=\cot\theta(xp_x+yp_y)-r\sin\theta\,p_z,
 \left(\frac{L_z^2}{\sin^2\theta}-a^2E^2\right).
 \]
 
-数值实现不先求 $\phi$。当 $\rho=\sqrt{x^2+y^2}>0$ 时直接计算
+GPU 数值实现不构造 $\theta,\phi$。令
 
 \[
-\frac{L_z}{\sin\theta}
-=\sqrt{r^2+a^2}\frac{xp_y-yp_x}{\rho};
+\varpi^2=x^2+y^2,\quad D=r^2+a^2,\quad
+S=xp_x+yp_y,\quad P_\perp^2=p_x^2+p_y^2.
 \]
 
-在精确轴线上使用连续极限
+二维恒等式 $S^2+L_z^2=\varpi^2P_\perp^2$ 消去全部 axis-singular 中间量，得到不借助
+$H=0$ 的全域式
 
 \[
-\mathcal Q_{\rm axis}=(r^2+a^2)(p_x^2+p_y^2)-a^2E^2.
+\boxed{
+\mathcal Q=
+\frac{z^2}{r^2}\left(DP_\perp^2-a^2E^2\right)
+-2zS p_z
++\frac{r^2\varpi^2}{D}p_z^2.
+}
 \]
 
-$a=0$ 时该定义精确化为 $\mathcal Q=L^2-L_z^2$。常数来自 Hamilton–Jacobi separability，见 [Carter 1968](https://doi.org/10.1103/PhysRev.174.1559)。坐标变换、轴极限和 Schwarzschild 极限已用符号代数验证；near-axis 与 Killing-tensor contraction 的 overlap test 仍是实现 gate。`[P][A]`
+该式在轴线上可直接代入
+$\mathcal Q=(r^2+a^2)(p_x^2+p_y^2)-a^2E^2$，没有 epsilon、分支或坐标 seam；
+$a=0$ 时精确化为 $\mathcal Q=L_x^2+L_y^2=L^2-L_z^2$。GPU 从 scaled geometry 的
+cached reciprocals 形成 $(z^2/r^2,\varpi^2/D)$，避免远场先形成大平方。CPU reference 保留
+独立 trigonometric/axis 形式作为 oracle。常数来自 Hamilton–Jacobi separability，见
+[Carter 1968](https://doi.org/10.1103/PhysRev.174.1559)；两形式、axis 与 Schwarzschild limit
+均已用符号代数验证。[P][A]
 
 每条 trace 至少报告：
 
@@ -368,13 +427,13 @@ Backward Trace 使用负 affine step 或等价反向状态演化，从 observer 
 
 numerical baseline 的 event function 固定如下；$R_{\rm esc}$、$D_{\rm guard}$ 和步数上限来自 Validation Profile，不属于 Physical Scene：
 
-| 候选 | 连续函数 | 额外条件 | crossing |
-|---|---|---|---|
-| outer horizon | $F_h=r-r_+$ | sub/extremal exterior；superextremal 不安装 | outside → inside |
-| escape | $F_e=r-R_{\rm esc}$ | event 已 armed | inside → outside |
-| equatorial surface | $F_d=z$ | localized $r\in[r_{\rm in},r_{\rm out}]$；surface enabled | either |
-| singularity guard | $F_s=D-D_{\rm guard}$，$D=r^4+a^2z^2$ | numerical guard，不是物理表面 | safe → guard |
-| chart boundary | chart-specific $F_c$ | 仅所选 chart 有限域时安装 | inside → outside |
+| 候选               | 连续函数                              | 额外条件                                                  | crossing         |
+| ------------------ | ------------------------------------- | --------------------------------------------------------- | ---------------- |
+| outer horizon      | $F_h=r-r_+$                           | sub/extremal exterior；superextremal 不安装               | outside → inside |
+| escape             | $F_e=r-R_{\rm esc}$                   | event 已 armed                                            | inside → outside |
+| equatorial surface | $F_d=z$                               | localized $r\in[r_{\rm in},r_{\rm out}]$；surface enabled | either           |
+| singularity guard  | $F_s=D-D_{\rm guard}$，$D=r^4+a^2z^2$ | numerical guard，不是物理表面                             | safe → guard     |
+| chart boundary     | chart-specific $F_c$                  | 仅所选 chart 有限域时安装                                 | inside → outside |
 
 初始点恰在某 event surface 时，该 event 必须先离开一个 profile 规定的 arming band，再允许反向 crossing；这使“从 escape sphere 入射、转向后返回”的 fixture 不会在 $\lambda=0$ 立即终止。step exhaustion、non-finite、非法 radicand/denominator 与 reject exhaustion 是 terminal conditions，不伪装成连续根。
 

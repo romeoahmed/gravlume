@@ -7,8 +7,8 @@ use wgpu::util::DeviceExt as _;
 use crate::{
     extent::RenderExtent,
     ray_tracer::{
-        DIRECTION_RECONSTRUCTION_SHADER, KERR_CAPTURE_OVERRIDE, SHADOW_COVERAGE_SHADER,
-        TRACE_SHADER, TraceUniforms, size_of,
+        GEODESIC_ACCELERATION_SHADER, KERR_SCHILD_TRACE_SHADER, LENSING_PREVIEW_SHADER,
+        SHADOW_COVERAGE_SHADER, TraceUniforms, size_of,
     },
 };
 
@@ -34,15 +34,15 @@ pub struct ShadowCoverage {
 }
 
 pub struct ShadowTarget {
-    pub(super) extent: RenderExtent,
+    pub extent: RenderExtent,
     capacity: u32,
-    pub(super) control: wgpu::Buffer,
+    pub control: wgpu::Buffer,
     classify_bind_group: wgpu::BindGroup,
     refine_bind_group: wgpu::BindGroup,
 }
 
 impl ShadowCoverage {
-    pub(super) fn new(device: &wgpu::Device, uniforms: &wgpu::Buffer) -> Self {
+    pub fn new(device: &wgpu::Device, uniforms: &wgpu::Buffer) -> Self {
         let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("shadow refinement uniform layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
@@ -93,17 +93,15 @@ impl ShadowCoverage {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selective shadow coverage shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
-                "{TRACE_SHADER}\n{DIRECTION_RECONSTRUCTION_SHADER}\n{SHADOW_COVERAGE_SHADER}"
+                "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{GEODESIC_ACCELERATION_SHADER}\n{SHADOW_COVERAGE_SHADER}"
             ))),
         });
-        let pipeline_constants = [(KERR_CAPTURE_OVERRIDE, 1.0)];
         let classify_pipeline = create_pipeline(
             device,
             &shader,
             "classify shadow edges",
             "classify_shadow_edges",
             &[None, Some(&classify_layout)],
-            &pipeline_constants,
         );
         let refine_pipeline = create_pipeline(
             device,
@@ -111,7 +109,6 @@ impl ShadowCoverage {
             "refine shadow edges",
             "refine_shadow_edges",
             &[Some(&uniform_layout), None, Some(&refine_layout)],
-            &pipeline_constants,
         );
         let uniform_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shadow refinement uniforms"),
@@ -131,7 +128,7 @@ impl ShadowCoverage {
         }
     }
 
-    pub(super) fn create_target(
+    pub fn create_target(
         &self,
         device: &wgpu::Device,
         view: &wgpu::TextureView,
@@ -202,18 +199,17 @@ impl ShadowCoverage {
         }
     }
 
-    pub(super) fn reset_control(encoder: &mut wgpu::CommandEncoder, target: &ShadowTarget) {
+    pub fn reset_control(encoder: &mut wgpu::CommandEncoder, target: &ShadowTarget) {
         encoder.clear_buffer(&target.control, 0, Some(size_of::<u32>()));
     }
 
-    pub(super) fn encode<'pass>(
+    pub fn encode<'pass>(
         &'pass self,
         pass: &mut wgpu::ComputePass<'pass>,
         target: &'pass ShadowTarget,
     ) {
-        // wgpu-core 30 tracks compute usage per dispatch and drains barriers before each dispatch.
-        // Distinct layouts keep the sampled classification view and write-only refinement view out
-        // of the same usage scope.
+        // Separate dispatches keep sampled classification and write-only refinement in distinct
+        // resource-usage scopes.
         pass.set_pipeline(&self.classify_pipeline);
         pass.set_bind_group(1, &target.classify_bind_group, &[]);
         pass.dispatch_workgroups(
@@ -263,7 +259,6 @@ fn create_pipeline(
     label: &'static str,
     entry_point: &'static str,
     bind_group_layouts: &[Option<&wgpu::BindGroupLayout>],
-    constants: &[(&str, f64)],
 ) -> wgpu::ComputePipeline {
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
@@ -275,10 +270,7 @@ fn create_pipeline(
         layout: Some(&layout),
         module: shader,
         entry_point: Some(entry_point),
-        compilation_options: wgpu::PipelineCompilationOptions {
-            constants,
-            ..Default::default()
-        },
+        compilation_options: wgpu::PipelineCompilationOptions::default(),
         cache: None,
     })
 }

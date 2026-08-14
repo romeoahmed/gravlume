@@ -5,8 +5,8 @@ use crate::{
     error::ResizeError,
     extent::RenderExtent,
     ray_tracer::{
-        RayTracer, TileRegion, TraceImage, direction_reconstruction_scratch_bytes,
-        shadow_coverage_scratch_bytes, tile_grid,
+        RayTracer, TileRegion, TraceImage, escape_map_scratch_bytes, shadow_coverage_scratch_bytes,
+        tile_grid,
     },
 };
 
@@ -128,7 +128,7 @@ impl FrameResourceFootprint {
             ui: extent_pixels(extent),
             candidate: extent_pixels(extent),
             trace_scratch: shadow_coverage_scratch_bytes(extent)
-                .saturating_add(direction_reconstruction_scratch_bytes(extent)),
+                .saturating_add(escape_map_scratch_bytes(extent)),
         }
     }
 

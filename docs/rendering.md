@@ -1,8 +1,8 @@
 # 渲染算法、适用边界与研究门槛
 
-本文把黑洞图像拆成 geometry、transport、sampling/reconstruction 和 display 四类问题。外部论文或作者实现只支持其明确的 spacetime、source、observer、precision 和 hardware domain；所有方法在进入 Gravlume 前都要通过本项目 fixture 与帧时测量。
+本文把黑洞图像拆成 geometry、transport、sampling/reconstruction 和 display 四类问题。它规定算法边界与准入原则；当前实现证据见 [GPU renderer](gpu-renderer.md)，实验过程和性能数据见 [research](research/README.md)。外部论文或作者实现只支持其明确的 spacetime、source、observer、precision 和 hardware domain；任何方法进入 Gravlume 前都必须通过项目自己的 observable contract。
 
-## 1. 开发结论
+## 1. 决策原则
 
 1. **生产顺序是 Schwarzschild → Kerr → Kerr 专用加速；Kerr–Newman 是 research geometry。** Kerr 是解析轨迹、transfer map 和观测解释的主干，显著净电荷没有默认产品优先级所需的天体证据。
 2. **GPU Cartesian Kerr–Schild `f32` tracer 是数值基线。** CPU `f64` reference 与之独立；analytic/LUT 不能成为唯一路径。
@@ -62,6 +62,14 @@ geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostic
 
 默认相机从 observer 沿 negative affine direction 回溯，因此 GPU renderer 选择 outgoing Kerr–Schild。Bozzola、Chan 与 Paschalidis 对该传播方向证明 ingoing chart 在过去视界形成 coordinate barrier，而 outgoing chart 给出数值正则的光线；这不是精度旋钮，而是算法定义域选择：[Phys. Rev. D 108, 084004 (2023)](https://doi.org/10.1103/PhysRevD.108.084004)。两 chart 的 public spin 都是固定右手 Cartesian orientation 中的物理 $a=J/M$；outgoing 只把 oblate spatial twist 取为 $-a$，不能把整个 spacetime 或 UI 参数解释成 $-a$。versioned ingoing reference fixture 保持原语义，不能静默换 chart。
 
+production KS kernel 使用精确约化后的六维 dynamic phase：每 ray 保存常量 $E=-p_t$，将
+$(t',x',y',z')$ 作为一个 `vec4` 做 RK4 权重，coordinate time 只累计相对 increment。geometry
+直接复用 discriminant-root $\Sigma$、$1/r$、$1/(r^2+a^2)$，Hamilton force 只计算
+$J_\ell^{\mathsf T}p$，不构造 full null Jacobian。Carter diagnostic 使用无 axis seam、且不借
+null constraint 的 Cartesian 形式；event guard 仅在证明 cubic 单调且 derivative 有条件下做
+Hermite refinement。完整公式与形式化证明见
+[KS RK4 reduction](research/kerr-schild-rk4-reduction.md)。
+
 GPU 候选先比较固定 RK4 + 几何/量化 step 与少量有界 embedded tier。每 ray 的完全自适应 DP5(4) 容易产生 accept/reject 发散；它优先属于 CPU reference。选择基于 GPU milliseconds 对 observable error 曲线，不基于“阶数更高”的名字。
 
 ### 3.2 Schwarzschild 专用路径
@@ -92,76 +100,28 @@ Carter separability、Carlson elliptic forms、analytic geodesics，以及 [AART
 
 Kerr–Newman exterior 有 Mino-time 显式解，可用于 CPU semi-analytic reference 或固定参数 LUT。[Wang–Lee–Lin 2022](https://arxiv.org/abs/2208.11906) 但 WGSL 内同时实现完整 elliptic functions、root branches、任意近场 observer 与 horizon crossing 风险很高。
 
-产品策略：domain/reference 保留 $q_e$ 和 sub/extreme/superextreme 分类；GPU 通用路径用 Kerr–Schild；analytic KN 只有独立 fixture、误差与产品场景证明价值后再实现。
+产品策略：domain/reference 保留 $q_e$ 和 sub/extreme/superextreme 分类；GPU 通用路径用 Kerr–Schild。
+neutral photon 在严格亚极端受限域可先用 outward-rounded Bernstein coefficient 证明径向势在
+$[r_+,r_{obs}]$ 严格为正并直接判定 capture；证书不确定、near-extreme、axis 或无 horizon 时仍
+走通用 KS。analytic KN 只有独立 fixture、误差与产品场景证明价值后再实现。
 
-## 4. Exterior Mino-time research candidate
+## 4. Kerr 解析与 Mino 路径的边界
 
-解析/半解析 Kerr 路径是 accelerator，不是跨后端数值基线。为比较一个不依赖完整椭圆函数的 exterior candidate，取 $M=E=1$、$b=L_z/E$、$\eta=\mathcal Q/E^2$、$\mu=\cos\theta$、electric charge $e=q_e/M$：
+解析或半解析 Kerr solver 是受限 accelerator，不是通用数值基线。已经实验过的 fixed-step reciprocal-Mino RK4 candidate 虽能显著减少通用 Kerr–Schild work，却在扩大 reference lattice 后越过正式 travel-time budget，因此不得进入 resolved production plan。potential residual、局部阶数和低分辨率 acceptance 都不能单独约束 terminal phase observable。
 
-\[
-\Delta=r^2-2r+a^2+e^2,
-\quad P=r^2+a^2-ab,
-\quad A=(b-a)^2+\eta,
-\]
-
-\[
-R(r)=P^2-\Delta A,
-\quad
-U(\mu)=\eta+(a^2-\eta-b^2)\mu^2-a^2\mu^4,
-\]
-
-\[
-r'=v_r,
-\quad v_r'=2rP-(r-1)A,
-\]
-
-\[
-\mu'=v_\mu,
-\quad v_\mu'=(a^2-\eta-b^2)\mu-2a^2\mu^3.
-\]
-
-二阶势状态可自然穿过 turning point，并监测 $v_r^2-R$、$v_\mu^2-U$。但 $\Delta$ 分母仍使它只适合 exterior。
-
-为改善远场条件数，令 $u=1/r,w=du/d\lambda,c=a^2-ab,d=a^2+e^2$：
-
-\[
-V(u)=w^2=(1+cu^2)^2-(u^2-2u^3+du^4)A,
-\]
-
-\[
-u'=w,
-\qquad
-w'=(2c-A)u+3Au^2+2(c^2-dA)u^3.
-\]
-
-reciprocal state 没有消除临界轨道误差放大，也没有解决 horizon 分母；它必须携带 domain、branch 与 refine，并在域外选择 Kerr–Schild 数值路径。
-
-### 4.1 `f32` 反例
-
-Schwarzschild、$r_0=50M$、固定 RK4 的探索性复算观察到：raw-$r$ polynomial state 在 `f32` 中可能因 $r^4-b^2r^2+2b^2r$、$v_r^2-R$ 和大量小步相消，把应 escape 的 ray 错判 capture。该结果支持暂不采用 raw-$r$ state，但在完整初值、update/event/termination、浮点模式、高精度 oracle 和 machine-readable checkpoints 固化为 fixture 前，只是候选反例 `[X]`，不是对所有 raw-radius 方法的普遍证明。
-
-reciprocal-$u$ 明显改善，但近 critical impact parameter 仍观察到精度地板。下表使用 equatorial Schwarzschild、$M=E=1$、$r_0=50M$，以 `float32` RK4 积分 $(u,w,\phi)$，返回 $u_0$ 时线性定位事件；角度基准由 80 位积分用 $r=r_{\rm turn}+s^2$ 消去 turning-point 端点奇性得到。表中数字保留为候选 fixture 的验收输入 `[X]`；只有补齐[验证合同的 numerical-conditioning metadata](validation.md#2-最低-fixture-矩阵)后才升级为 `[N]`。
-
-| case | affine step | angle absolute error | max `abs(w²-V)` | steps |
-|---|---:|---:|---:|---:|
-| $b=6$ | 0.02 / 0.01 / 0.005 / 0.001 | `2.071e-4 / 4.470e-6 / 7.754e-7 / 1.985e-5` | `1.252e-6 / 2.086e-7 / 5.662e-7 / 1.505e-6` | 39 / 78 / 155 / 771 |
-| $b=\sqrt{27}+10^{-3}$ | 0.02 / 0.01 / 0.005 / 0.001 | `2.886e-4 / 5.509e-4 / 2.540e-4 / 1.246e-3` | `5.364e-7 / 4.387e-7 / 4.768e-7 / 1.520e-6` | 107 / 214 / 427 / 2134 |
-
-这组历史候选数据表明 raw binary32 角度不会随 step 逐点严格单调，constraint drift 也不能单独预测 branch/angle/time error。corrected physical-spin/outgoing seam 后，研究实现曾把 pure Kerr、off-axis、`|a| <= 0.9` exterior 作为受限域，并对 high-winding、turning、constraint、finite 或 domain uncertainty 回退 Cartesian KS。
-
-SymPy 对实际三次 polynomial core 精确证明 RK4 local defect 从 `h^5` 开始，因此 smooth global envelope 是 `O(f^4)`，理想工作量是 `Theta(1/f)`。低分辨率 oracle 曾把经验上界定在 `f=0.85716907`，默认 1280×720 Metal 也曾测得 `84.136%` acceptance 和 `35.768%` 改善；但 `320×180` 独立 reference 找到 accepted ray 的 travel-time error 约 `2.661354e-3 M`，超过 `1e-3 M` contract。这证明 factor envelope 没有约束 terminal phase，故 fixed-step Mino solver 已从 production 删除。后续工作转向具名 root topology 与 elliptic/Carlson terminal solver；完整正反证据见 [Mino candidate conclusion](research/mino-step-selection.md)。`[N][G]`
+后续 Kerr 专用路线优先研究具名 root topology 与 elliptic/Carlson terminal solver；任何实现都必须显式处理 turning branch、near-critical conditioning、axis/horizon domain 和 observable error，并在条件不明时回退 Cartesian Kerr–Schild。完整推导、正面性能结果与否决证据只保留在 [Mino candidate 研究结论](research/mino-step-selection.md)；chart 与 physical-spin seam 见 [KS–BL/Mino 零步映射](research/kerr-schild-mino-map.md)。
 
 ## 5. Surface、volume 与时间
 
 ### 5.1 可复用关系
 
-| 输出消费者 | 可复用 geometry | 必须重做 |
-|---|---|---|
-| static sky/surface | branch、source anchor、frequency ratio、travel time、Jacobian | source radiance 与 display 可独立变化 |
-| dynamic surface fast-light | 同 geometry；source revision 参与 transport key | 当前 snapshot 的 emission |
-| scalar volume fast-light | geodesic checkpoints 可复用 | 沿有序 path 的 emission/absorption 积分 |
-| slow-light volume | geometry + travel time/checkpoint | 按 retarded time 取 snapshot/interpolate，再积 transport |
-| polarized medium | geometry + transported basis checkpoints（若合同一致） | Stokes transfer 的有序矩阵演化 |
+| 输出消费者                 | 可复用 geometry                                               | 必须重做                                                 |
+| -------------------------- | ------------------------------------------------------------- | -------------------------------------------------------- |
+| static sky/surface         | branch、source anchor、frequency ratio、travel time、Jacobian | source radiance 与 display 可独立变化                    |
+| dynamic surface fast-light | 同 geometry；source revision 参与 transport key               | 当前 snapshot 的 emission                                |
+| scalar volume fast-light   | geodesic checkpoints 可复用                                   | 沿有序 path 的 emission/absorption 积分                  |
+| slow-light volume          | geometry + travel time/checkpoint                             | 按 retarded time 取 snapshot/interpolate，再积 transport |
+| polarized medium           | geometry + transported basis checkpoints（若合同一致）        | Stokes transfer 的有序矩阵演化                           |
 
 表面 transfer map 是高收益资产，因为 source evaluation 可在 map 后独立完成。volume 的 integrand 沿整条 ray 变化；缓存最终颜色或单点 source coordinate 不能代表另一 medium。
 
@@ -347,14 +307,14 @@ WGSL 没有可作为完整防线的 core `isFinite` 工作流。实现先在运�
 
 ## 11. 发行前最低算法矩阵
 
-| 能力 | 必须比较 | 未通过时 |
-|---|---|---|
-| GPU trace | CPU reference 的 termination/source/frequency/error | 降低 extent/提高 refine；不能隐藏 failure |
-| spatial reconstruction | full-resolution fields，不只 PSNR | 扩大真实 trace 区域 |
-| temporal | no-history reference + branch-aware fields | 限制 stationary 或关闭 |
-| dynamic resolution | fixed-resolution quality/performance | 固定分辨率 |
-| LUT/analytic | Cartesian KS in-domain/out-of-domain | 不进入 resolved plan |
-| scalar volume | analytic slab + step/tolerance sequence | 限制 surface/vacuum |
-| polarization | direct parallel transport/analytic slab/independent code | 不发行该能力 |
+| 能力                   | 必须比较                                                 | 未通过时                                  |
+| ---------------------- | -------------------------------------------------------- | ----------------------------------------- |
+| GPU trace              | CPU reference 的 termination/source/frequency/error      | 降低 extent/提高 refine；不能隐藏 failure |
+| spatial reconstruction | full-resolution fields，不只 PSNR                        | 扩大真实 trace 区域                       |
+| temporal               | no-history reference + branch-aware fields               | 限制 stationary 或关闭                    |
+| dynamic resolution     | fixed-resolution quality/performance                     | 固定分辨率                                |
+| LUT/analytic           | Cartesian KS in-domain/out-of-domain                     | 不进入 resolved plan                      |
+| scalar volume          | analytic slab + step/tolerance sequence                  | 限制 surface/vacuum                       |
+| polarization           | direct parallel transport/analytic slab/independent code | 不发行该能力                              |
 
 任何 accelerator 只有在适用域可检查、错误可观察，并相对数值基线满足同一 observable budget 时才能进入 resolved plan。完整实施顺序与阶段退出条件见[路线图](roadmap.md)。

@@ -1,9 +1,6 @@
-# Restricted numerical Mino candidate：研究结论
+# 数值 Mino candidate：研究结论
 
-状态：**数值 reciprocal-Mino RK4 candidate 已拒绝并从 production 删除。** 它曾在低分辨率
-矩阵和本机 GPU timing 上表现很好，但更高分辨率独立 reference 暴露出超过正式 observable
-budget 的 terminal phase error。本文保留数学结论、正面性能证据和否决依据，避免把一次失败
-误写成“从未有价值”，也避免再次把局部 gate 当成全域证明。
+> **状态：已拒绝。** 数值 reciprocal-Mino RK4 candidate 已从 production 删除。它曾在低分辨率矩阵和本机 GPU timing 上表现很好，但更高分辨率独立 reference 暴露出超过正式 observable budget 的 terminal phase error。本文保留数学结论、正面性能证据和否决依据，避免把一次失败误写成“从未有价值”，也避免再次把局部 gate 当成全域证明。
 
 坐标/physical-spin 的 exact seam 见 [KS–BL/Mino seam](kerr-schild-mino-map.md)；RK4/Hermite
 局部阶数的可复现脚本为 [verify_mino_step_model.py](scripts/verify_mino_step_model.py)。

@@ -1,49 +1,36 @@
 # Gravlume
 
-**以可验证的物理量为核心，构建原生黑洞科学可视化工具。**
+Gravlume 是一个以可验证物理量为核心的原生黑洞可视化工具。它计算抵达观察者的光线与可观测量，并明确区分物理场景、数值质量和最终外观；目标不是只生成一张“像黑洞”的图。
 
-Gravlume 是一个从零实现的 Rust 桌面项目，目标是在 Metal 与 Vulkan 上交互研究孤立黑洞附近的光传播及其可观测外观。名称由 *gravitation* 与 *lumen* 组合而来：这里关心的是引力如何改变抵达观察者的光，而不只是生成一张看起来像黑洞的图。
+项目使用 Rust 2024、winit、wgpu 与 WGSL。CPU `f64` reference 和 GPU `f32` renderer 分别实现连续模型，通过结构化 observable 比较，而不共享离散求解器。
 
-## 当前状态
+## 当前能力
 
-项目目前具备首个可验证的 **GPU renderer** 闭环。原生窗口运行独立的 WGSL `f32` Cartesian Kerr–Schild 光线追迹器，并把解析天空、视界和可见失败状态写入 scene-linear HDR；CPU `f64` reference 仍是独立比较路径，不与 GPU 共享离散实现。
+| 已进入主线                                                             | 尚未形成产品闭环                                  |
+| ---------------------------------------------------------------------- | ------------------------------------------------- |
+| validated Kerr–Newman domain、observer frame 与 viewport ray           | 物理吸积盘、频率比成像与辐射传输                  |
+| 独立 DP5(4) CPU reference、版本化 fixture 与误差报告                   | source-space 自适应重建与 temporal reuse          |
+| Cartesian Kerr–Schild GPU trace、保守加速与完整 KS fallback            | 科学导出、研究工作台与资产闭包                    |
+| 完整帧原子发布、shadow coverage 与 resize 生命周期                     | near-critical、Kerr–Newman 与未验证平台的更广证据 |
+| macOS HDR/EDR、Windows/Wayland display-state 接入与 typed SDR fallback | Windows 与 Wayland 的具名设备实机发布矩阵         |
 
-已经实现：
-
-- Rust 2024 Cargo workspace 与锁定依赖；
-- winit 原生生命周期和 egui overlay；
-- wgpu compute 写入 scene-linear `rgba16float`；完整候选帧原子发布，并经 typed HDR/scRGB 或 SDR display contract 输出；
-- AppKit EDR、Windows inbox WinRT 与 Wayland `color-management-v1` display-state 监听；可靠状态或精确 surface pair 缺失时保留原因并降级至 SDR；
-- resize、zero extent、suspend/resume 与 surface recovery；
-- 结构化 GPU 错误、提交后纹理释放和非阻塞 timestamp readback；
-- 覆盖能力选择、资源代际、显示变换和 GPU 合同的测试。
-- 私有字段、原子提交的 validated `Observation`、Observer Event/Frame 与 viewport 初始光线；
-- Cartesian Kerr–Schild `f64` Hamilton RHS、DP5(4) FSAL、自适应误差控制与 quartic dense output；
-- typed horizon/escape/equatorial/singularity/resource terminal、事件 bracket/残差、守恒量 drift 与 baseline/strict comparison report；
-- 严格 v1 TOML fixture seam、Schwarzschild 80 位 fixture 回归及保持输入顺序的专用 Rayon pool。
-- 显式 GPU trace ABI、checked `f64 → f32` Observation 打包与稳定 termination discriminant；
-- WGSL `f32` Kerr–Schild geometry/Hamilton RHS、负 affine RK4、事件定位、守恒量 drift 与 typed numerical failure；
-- headless trace/HDR readback、CPU/GPU 初始光线与 regular sample matrix 合同，以及非静默的 sky/horizon/failure 输出。
-
-尚未实现：吸积盘与辐射传输、频率比成像、自适应重建和研究工作台。CPU reference 与 GPU path 的当前证据范围分别见 [Reference 实现与证据](docs/reference-implementation.md)和 [GPU Renderer 实现与证据](docs/gpu-renderer.md)，不能从当前样本矩阵外推到 near-critical 或未验证平台。
-
-macOS 使用 Metal；Windows 与 Linux 使用 Vulkan。Windows/Linux 发布支持仍需在具名系统、adapter、driver 与 Wayland compositor 上补齐实机验证证据。
+当前画面使用解析方向天空验证几何、HDR 和失败可见性，不代表吸积盘或完整广义相对论辐射传输。已验证范围见 [Reference 证据](docs/reference-implementation.md)与 [GPU 证据](docs/gpu-renderer.md)。
 
 ## 快速开始
 
-需要 Rust 1.97，以及满足 WebGPU baseline、`TIMESTAMP_QUERY` 和项目 `rgba16float` usage 要求的非软件 GPU adapter。
+需要 Rust 1.97，以及满足项目 [GPU 基线](docs/platform.md#gpu-基线)的原生 Metal 或 Vulkan adapter。
 
 ```bash
 cargo run --locked
 ```
 
-执行一次完整 present 与 GPU timing readback 后自动退出：
+运行一次完整的 trace、publication、presentation 与 GPU timing readback 后退出：
 
 ```bash
 GRAVLUME_SMOKE_ONCE=1 cargo run --locked
 ```
 
-运行仓库检查：
+完整验证：
 
 ```bash
 cargo fmt --all -- --check
@@ -51,48 +38,47 @@ cargo test --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-原生 GPU 测试需要可用的 Metal 或 Vulkan adapter。依赖事实以 `Cargo.toml` 与 `Cargo.lock` 为准。
+原生 GPU 测试需要可用 adapter。依赖版本和 feature closure 始终以 `Cargo.toml` 与 `Cargo.lock` 为准。
 
-## 代码结构
+## 支持平台
 
-| 路径 | 职责 |
-|---|---|
-| `src/main.rs` | 日志初始化与桌面程序入口 |
-| `crates/gravlume-desktop` | winit/egui 生命周期、事件与重绘调度 |
-| `crates/gravlume-domain` | validated scene、observer/frame、image ray 与 Kerr–Schild `f64` 领域数学 |
-| `crates/gravlume-reference` | 独立 DP5(4) CPU oracle、dense events、fixture、并行 batch 与 comparison report |
-| `crates/gravlume-native-display` | AppKit/WinRT display-state、notification 与平台队列的 safe ownership boundary |
-| `crates/gravlume-render` | wgpu GPU trace、HDR/SDR 能力协商、frame resources、计时与错误语义 |
-| `crates/gravlume-render/src/shaders` | 运行时加载的已审查 WGSL |
-| `crates/gravlume-reference/fixtures/v1` | reference 所有的版本化科学输入 |
-| `docs` | 产品、物理、验证、架构、平台和实施合同 |
+| 平台             | 图形后端         | 状态                                                  |
+| ---------------- | ---------------- | ----------------------------------------------------- |
+| macOS            | Metal            | 当前开发与运行时验证平台                              |
+| Windows 11 22H2+ | Vulkan           | 已实现；仍需具名 adapter/driver 的 HDR 实机矩阵       |
+| Linux            | Vulkan + Wayland | 已实现；仍需具名 compositor/adapter/driver 的实机矩阵 |
 
-## 设计与验证原则
+D3D12、GLES、X11、浏览器 WebGPU 与 WebGL 不在支持合同内。HDR 不可用或状态不可靠时，应用带原因降级至 SDR；FP16 中间纹理本身不构成 HDR 输出。
 
-- 物理正确性由 termination、守恒量、频率比、源坐标等 machine-readable observable 判断，不以“画面像”替代。
-- CPU `f64` reference 与 GPU `f32` GPU path 保持独立，二者一致也不自动证明正确。
-- Physical、Appearance 与 Quality 策略分离；研究能力不能伪装成默认产品承诺。
-- 生命周期与 GPU 资源采用显式状态、代际和 typed error；生产路径不依赖 panic 恢复。
-- 性能结论必须记录 profile、平台、adapter、driver、extent 与统计口径。
+## 仓库结构
 
-## 路线图
+| 路径                             | 职责                                                           |
+| -------------------------------- | -------------------------------------------------------------- |
+| `src/main.rs`                    | 日志初始化与桌面入口                                           |
+| `crates/gravlume-domain`         | validated scene、时空、observer、view 与 `f64` 领域数学        |
+| `crates/gravlume-reference`      | 独立 CPU reference、event、fixture、batch 与 comparison        |
+| `crates/gravlume-native-display` | AppKit、WinRT 与 Wayland display-state 的窄安全边界            |
+| `crates/gravlume-render`         | wgpu trace、加速、frame publication、HDR/SDR 合成与 GPU timing |
+| `crates/gravlume-desktop`        | winit/egui 生命周期、调度与用户界面                            |
+| `docs`                           | 规范合同、当前证据、设计说明与研究决策                         |
 
-项目按可验证能力推进，而不让阶段编号渗入文件名、API 或产品文案。当前闭环覆盖领域模型、CPU reference、GPU geodesic tracing、原子发布和原生 HDR/SDR 输出；辐射传输、物理 source model 与更广 near-critical 证据仍是后续能力。完整退出条件见[能力路线](docs/roadmap.md)。
+## 设计原则
 
-## 文档
+- 以 termination、方向、event residual、travel time、频率比和 invariant drift 判断正确性，不以截图代替科学 observable。
+- Physical Scene、Appearance 与 Quality Policy 相互独立；外观设置不能改写物理结果。
+- accelerator 只在可检查的支持域内生效；任何不确定性回退已验证基线，不猜测确定结果。
+- GPU candidate 完成且 generation 匹配后才整体发布；用户不会看到 tile 扫描或低分辨率过渡帧。
+- 性能数字必须绑定 revision、平台、adapter、backend、场景、extent、profile 与统计口径。
 
-建议按以下顺序阅读：
+## 文档入口
 
-1. [产品范围](docs/product.md) — 能力、非目标与科学声明边界；
-2. [数学物理](docs/physics.md) — 坐标、时空、观察者与辐射约定；
-3. [验证合同](docs/validation.md) — reference policy、fixture 与误差预算；
-4. [GPU Renderer 实现与证据](docs/gpu-renderer.md) — GPU tracer、GPU ABI、比较预算与适用域；
-5. [架构合同](docs/architecture.md) — 模块接口、生命周期、GPU ABI 与资源换代；
-6. [渲染研究](docs/rendering.md) — solver、传输、重建和实验门槛；
-7. [平台合同](docs/platform.md) — Cargo 闭包、Metal/Vulkan 基线与能力协商；
-8. [文档总览](docs/README.md) — 证据标记与维护规则。
-
-贡献前请阅读 [AGENTS.md](AGENTS.md)。代码或行为改变必须同步维护受影响的规范性文档。
+- [文档总览](docs/README.md)：按规范、证据、设计和研究记录导航；
+- [产品范围](docs/product.md)：产品边界、非目标与科学声明；
+- [数学物理合同](docs/physics.md)：连续模型、符号和 observable；
+- [验证合同](docs/validation.md)：reference policy、fixture 与误差预算；
+- [架构合同](docs/architecture.md)：模块职责、生命周期、GPU ABI 与资源所有权；
+- [平台合同](docs/platform.md)：原生后端、HDR 状态与发布证据；
+- [能力路线](docs/roadmap.md)：下一项能力的退出条件。
 
 ## 致谢
 

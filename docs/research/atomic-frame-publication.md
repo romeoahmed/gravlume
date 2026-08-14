@@ -1,6 +1,6 @@
-# Atomic full-frame publication
+# 完整帧原子发布
 
-状态：**已采用。** GPU 只发布完整、当前 generation 的原生分辨率 scene。研究阶段尝试的低分辨率阶梯和可见 tile 扫描均已拒绝。
+> **状态：已采用。** GPU 只发布完整、当前 generation 的原生分辨率 scene。研究阶段尝试的低分辨率阶梯和可见 tile 扫描均已拒绝。
 
 ## 决策
 
@@ -28,7 +28,7 @@ trace batches -> shadow coverage -> timestamp -> generation check
 
 ## 资源与同步边界
 
-- normal active frame 包含 FP16 candidate、RGBA8 UI 与按 extent 计算的 direction-reconstruction/shadow scratch；完整 scene 只保留 FP16 view。
+- normal active frame 包含 FP16 candidate、RGBA8 UI 与按 extent 计算的 escape-map/shadow scratch；完整 scene 只保留 FP16 view。
 - transactional rebuild 在分配前计算 published、installed 与 replacement 的真实 typed footprint。不得以固定 bytes-per-pixel 隐藏 scratch 或 candidate 生命周期。
 - wgpu queue submission 保序；timestamp resolve/readback 位于最后的 refine 之后。CPU 不需要额外阻塞 wait 才能建立发布顺序。
 - `Surface::configure` 可能等待 GPU idle，故 live resize 必须合并，不能每个 `Resized` 事件立即重配。

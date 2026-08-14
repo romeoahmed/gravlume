@@ -1,17 +1,14 @@
-# Native GPU benchmark methodology
+# 原生 GPU 基准方法
 
-状态：当前仓库只保留一个针对**现行 production trace pipeline** 的固定原生 GPU benchmark。
-历史 shader 变体、配对 runner、CSV artifact generator 与 `wgpu-profiler` 集成已经完成决策使命，
-不再作为永久代码维护；实验结果归档在
-[frontier GPU geodesic tracing](gpu-geodesic-acceleration.md)。
+> **状态：当前方法。** 仓库只保留一个针对现行 production trace pipeline 的固定原生 GPU benchmark。历史 shader 变体、配对 runner、CSV artifact generator 与 `wgpu-profiler` 集成已经完成决策使命，不再作为永久代码维护；实验结果归档在 [GPU 测地线加速决策账本](gpu-geodesic-acceleration.md)。
 
 ## 1. 测量对象
 
-固定 workload 为默认 Kerr scene、`1280×720`、完整 production direction reconstruction、interval
+固定 workload 为默认 Kerr scene、`1280×720`、完整 production escape-direction map、interval
 capture、KS fallback 与 selective shadow coverage。资源、pipeline 和 scene 在 Criterion 计时
 闭包外创建；每次迭代重新编码并提交一张完整 candidate。
 
-benchmark 复用 renderer 自己的 `GpuTimings`：global-node pass 和 resolve pass 各写一对
+benchmark 复用 renderer 自己的 `GpuTimings`：escape-map pass 和 trace pass 各写一对
 timestamp，最后一个 resolve 同时包含 shadow classify/refine。两段 GPU duration 相加后通过
 Criterion `Bencher::iter_custom` 返回。命令编码、queue submit、等待和 readback 不计入该
 duration，因此这个指标用于比较 kernel throughput，不代表 resize-to-publish 或点击到像素的

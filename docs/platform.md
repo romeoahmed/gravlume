@@ -1,168 +1,119 @@
-# Native platform contract
+# 原生平台合同
 
-Gravlume is a native Rust 2024 desktop application. The supported presentation paths are Metal on
-macOS and Vulkan on Windows and Linux/Wayland. D3D12, GLES, X11, WebGPU-in-a-browser, and WebGL are
-outside this contract.
+本文定义 Gravlume 的支持 target、图形后端、HDR 状态来源、WGSL/GPU 基线与发布证据。版本和 feature closure 始终以 `Cargo.toml` 与 `Cargo.lock` 为准；本页不复制 patch 版本。
 
-This document describes the implementation that exists in the workspace. Experimental algorithms
-and unimplemented GPU variants belong under `docs/research/`, not in this contract.
+Gravlume 是原生 Rust 2024 桌面应用。支持 macOS/Metal、Windows/Vulkan 和 Linux/Wayland/Vulkan；D3D12、GLES、X11、浏览器 WebGPU 与 WebGL 不在合同内。
 
-## 1. Toolchain and dependency boundaries
+## Toolchain 与依赖边界
 
-The workspace uses Rust 1.97 and edition 2024. `Cargo.toml` and `Cargo.lock` are authoritative for
-the complete version and feature closure; the table records the direct technology boundaries.
+| 职责                 | 直接技术                                                 | 所有者                                           |
+| -------------------- | -------------------------------------------------------- | ------------------------------------------------ |
+| window/UI            | winit、egui、egui-winit、egui-wgpu                       | `gravlume-desktop`                               |
+| GPU                  | wgpu、WGSL                                               | `gravlume-render`                                |
+| native display state | objc2/AppKit、windows-rs/WinRT、wayland-client/protocols | `gravlume-native-display`                        |
+| domain/ABI           | glam、bytemuck、num-traits                               | domain math 与显式 GPU DTO 分离                  |
+| reference/fixtures   | serde、toml、rayon                                       | `gravlume-reference`                             |
+| errors/diagnostics   | thiserror、tracing、pollster                             | typed crate interfaces；root 安装唯一 subscriber |
+| verification         | proptest、optional Criterion                             | contract/property tests 与显式 GPU bench target  |
 
-| Responsibility | Direct crates | Boundary |
-|---|---|---|
-| window and UI | `winit 0.30`, `egui 0.36`, `egui-winit 0.36`, `egui-wgpu 0.36` | `gravlume-desktop` owns the event loop and UI; `gravlume-render` owns GPU rendering |
-| GPU | `wgpu 30.0` | WGSL pipelines, surface negotiation, resource ownership, and GPU timing |
-| native display state | `objc2`/`objc2-app-kit 0.3`, `windows 0.62`, `wayland-client 0.31`, `wayland-protocols 0.32` | private, audited platform modules behind `gravlume-native-display`'s safe API |
-| mathematics and ABI | `glam 0.33`, `bytemuck 1.25`, `num-traits 0.2` | `glam` is implementation math; GPU DTOs use explicit `#[repr(C)]` layouts rather than domain types |
-| fixtures and reference work | `serde 1.0`, `toml 1.1`, `rayon 1.12` | strict versioned fixture parsing and a bounded reference-computation pool |
-| errors and diagnostics | `thiserror 2.0`, `tracing 0.1`, `tracing-subscriber 0.3`, `pollster 1.0` | one subscriber in the executable; typed errors at crate boundaries |
-| verification | `proptest 1.11`, optional `criterion 0.8.2` | deterministic contract/property tests; Criterion is enabled only for the explicit GPU benchmark target |
+平台 Cargo features 只在对应 target 增量启用：macOS 只启用 Metal，Windows/Linux 只启用 Vulkan，Linux 只启用 Wayland。Dependency 必须属于直接消费者。修改依赖后运行 `cargo tree -e features`，确认 X11 和未授权 backend 没有进入闭包。
 
-Platform-specific Cargo features are additive overlays on the same workspace dependency: Metal is
-enabled only on macOS, Vulkan only on Windows/Linux, and winit's Wayland features only on Linux.
-Dependencies belong to their direct consumer. Changes to this graph require `cargo tree -e features`
-and confirmation that X11 and unintended GPU backends remain absent.
+## 支持矩阵
 
-## 2. Native desktop baseline
+| Target                  | Backend          | 最低发布证据                                                                                     |
+| ----------------------- | ---------------- | ------------------------------------------------------------------------------------------------ |
+| stable macOS            | Metal            | native surface、EDR state change、headless compute、lifecycle tests 与 smoke                     |
+| Windows 11 build 22621+ | Vulkan           | 具名 OS/adapter/driver、HDR toggle、跨屏、lifecycle tests 与 smoke                               |
+| Linux desktop           | Vulkan + Wayland | 具名 distribution/compositor/adapter/driver、color-management feedback、lifecycle tests 与 smoke |
 
-| Target | Backend | Release evidence |
-|---|---|---|
-| latest stable macOS | Metal | native surface, EDR state changes, headless compute, lifecycle tests, and smoke run |
-| Windows 11 build 22621 or newer | Vulkan | named OS/adapter/driver, HDR toggle, cross-monitor movement, lifecycle tests, and smoke run |
-| Linux desktop | Vulkan + Wayland | named distribution/compositor/adapter/driver, color-management-v1 feedback, lifecycle tests, and smoke run |
+macOS/Metal 是当前运行时验证平台。Windows 与 Wayland 已有 source/API review 和可获得的 target compile coverage；这些证据不能替代实机矩阵。
 
-A candidate adapter must be WebGPU-compliant, non-software, expose `TIMESTAMP_QUERY`, support the
-required `rgba16float` usages, and satisfy the project limits. Device creation requests exactly the
-features consumed by production; it never requests `Features::all()` or copies adapter-wide buffer
-maxima into the project allocation policy. The renderer currently requires only
-[`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY).
+## GPU 基线
 
-Failure to satisfy the baseline is an unsupported platform, not permission to change the physical
-model, precision, resource semantics, or validation thresholds.
+Adapter 必须：
 
-## 3. HDR state and presentation
+- 是非软件、WebGPU-compliant 的 wgpu adapter；
+- 支持 `TIMESTAMP_QUERY`；
+- 支持项目使用的 `rgba16float` sampled/storage usages；
+- 满足 texture、binding、dispatch 与项目资源政策。
 
-HDR is resolved from two independent facts:
+Device 只请求 production 实际消费的 features，不调用 `Features::all()`，也不把 adapter 最大 buffer limits 当成项目内存预算。缺失基线意味着平台不受支持，不能通过改变物理模型、精度、资源语义或 tolerance 绕过。
 
-1. **Transport capability:** `SurfaceCapabilities::format_capabilities` must advertise the exact
-   `Rgba16Float + ExtendedSrgbLinear` pair. The color space means native linear scRGB; wgpu does not
-   encode a non-sRGB render target for the application.
-2. **Live display state:** `gravlume-native-display` reports a typed `DynamicRange` snapshot and
-   change notification for the display currently carrying the window.
+当前唯一必需的可选 GPU feature 是 [`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY)。
 
-Only the intersection enables HDR. A missing pair, explicit SDR state, system suppression, invalid
-headroom, unsupported native integration, or a failed/unknown state query produces an SDR surface
-with a typed reason. This is a deliberate fail-closed product policy: wgpu's all-`None`
-`DisplayHdrInfo` means “unknown,” not “SDR,” so unknown native state is never silently reinterpreted
-as a positive HDR decision.
+## HDR 解析
 
-The scene remains linear in `Rgba16Float`. The final pass tone-maps scene radiance, maps the
-normalized scene/UI composite to the platform reference white in linear light, and writes either:
+HDR 需要两个独立事实同时成立：
 
-- linear values to `ExtendedSrgbLinear` HDR; or
-- the encoding expected by the selected SDR surface format.
+1. **传输能力：** surface 精确广告 `Rgba16Float + ExtendedSrgbLinear`；
+2. **实时显示状态：** 当前承载窗口的 display 提供可靠 HDR state、finite headroom 与 reference white。
 
-The surface format or an FP16 intermediate alone does not constitute end-to-end HDR.
+缺少 pair、明确 SDR、系统 suppression、无效亮度、原生接入不可用或查询未知都会产生带原因的 SDR contract。wgpu `DisplayHdrInfo` 全部为 `None` 表示未知，不能被重解释为 HDR active。
 
-### 3.1 macOS
+Scene 始终保持 extended-linear sRGB/scRGB，`1.0` 表示 SDR reference white。Final pass 在 linear light 中组合 scene 与 UI，并写入：
 
-The main-thread AppKit monitor reads the window's current `NSScreen`. A potential EDR component
-value above `1.0` establishes display capability; the current value supplies live tone-map headroom
-and may legitimately fall back to `1.0`. `NSWindowDidChangeScreenNotification`,
-`NSApplicationDidChangeScreenParametersNotification`, and begin/end HDR suppression notifications
-only mark output state dirty; the main thread then re-reads the screen.
+- `ExtendedSrgbLinear` HDR surface 的 linear values；或
+- 所选 SDR surface 需要的 encoding。
 
-This follows Apple's distinction between
-[`maximumPotentialExtendedDynamicRangeColorComponentValue`](https://developer.apple.com/documentation/appkit/nsscreen/maximumpotentialextendeddynamicrangecolorcomponentvalue)
-and the live
-[`maximumExtendedDynamicRangeColorComponentValue`](https://developer.apple.com/documentation/appkit/nsscreen/maximumextendeddynamicrangecolorcomponentvalue).
+FP16 intermediate 或 HDR-capable adapter 都不等于 end-to-end HDR。
 
-### 3.2 Windows
+## macOS
 
-Windows uses inbox WinRT `Windows.Graphics.Display.DisplayInformation`, not Windows App SDK and not
-an application-level DXGI display query. On Windows 11 build 22621+, a minimal private projection of
-`IDisplayInformationStaticsInterop::GetForWindow` creates and caches the object for the top-level
-HWND. The owning UI thread has a `Windows.System.DispatcherQueue`; the monitor subscribes to
-`AdvancedColorInfoChanged`, removes the token before window teardown, and lets dispatcher shutdown
-finish while the winit message loop is still alive.
+主线程 AppKit monitor 查询窗口当前 `NSScreen`：
 
-`CurrentAdvancedColorKind == HighDynamicRange` enables the native half of the HDR decision.
-`MaxLuminanceInNits / SdrWhiteLevelInNits` supplies headroom and
-`SdrWhiteLevelInNits / 80` supplies the linear scRGB UI-white scale. Microsoft requires caching the
-window-bound object and listening for changes as the window moves or display parameters change:
-[`GetForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.display.interop/nf-windows-graphics-display-interop-idisplayinformationstaticsinterop-getforwindow).
-The 80-nit scRGB unit and linear UI adjustment follow Microsoft's
-[Advanced Color guidance](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range).
+- potential EDR component value 大于 `1.0` 表示 display capability；
+- current value 提供实时 tone-map headroom，可合法回落到 `1.0`；
+- window change-screen、application screen-parameter 与 HDR suppression notifications 只标记状态 dirty，主线程随后重读 screen。
 
-### 3.3 Linux/Wayland
+依据：[potential EDR](https://developer.apple.com/documentation/appkit/nsscreen/maximumpotentialextendeddynamicrangecolorcomponentvalue)、[current EDR](https://developer.apple.com/documentation/appkit/nsscreen/maximumextendeddynamicrangecolorcomponentvalue)与 [Metal custom tone mapping](https://developer.apple.com/documentation/metal/performing-your-own-tone-mapping)。
 
-Linux builds Wayland only. The monitor creates a non-owning guest `wayland-client` connection from
-the winit raw handles, binds `wp_color_manager_v1` version 2–3, and obtains the surface's preferred
-parametric image description. It installs a new snapshot only after the description and information
-events complete. Missing protocol support, an old protocol version, a non-parametric description,
-incomplete luminance fields, or a dispatch failure remain typed unknown states and select SDR.
+## Windows
 
-The application creates only read-only surface feedback. Vulkan WSI continues to own the
-color-managed surface/presentation encoding. winit remains the sole socket reader; the guest queue
-only dispatches already-read events during `about_to_wait`, with a distant wake guard because winit
-0.30 can otherwise discard a wake that contains only guest-queue events.
+Windows 使用 inbox `Windows.Graphics.Display.DisplayInformation`，不引入 Windows App SDK runtime，也不在应用层用 DXGI 轮询 display state。
 
-The protocol contract is
-[`color-management-v1`](https://wayland.app/protocols/color-management-v1), including version-2
-`preferred_changed2` and `get_preferred_parametric` semantics.
+- Windows 11 build 22621+ 通过私有最小投影 `IDisplayInformationStaticsInterop::GetForWindow` 从 winit HWND 获取 window-bound 对象；
+- UI thread 拥有 `Windows.System.DispatcherQueue`；
+- monitor 缓存对象、订阅 `AdvancedColorInfoChanged`，并在 window teardown 前移除 token；
+- `CurrentAdvancedColorKind == HighDynamicRange` 才满足 native HDR state；
+- `MaxLuminanceInNits / SdrWhiteLevelInNits` 给出 headroom，`SdrWhiteLevelInNits / 80` 给出 scRGB reference-white scale。
 
-### 3.4 Verification status
+依据：[GetForWindow](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.display.interop/nf-windows-graphics-display-interop-idisplayinformationstaticsinterop-getforwindow)与 [Advanced Color/HDR](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range)。
 
-The macOS/Metal path has native runtime coverage in this workspace. Windows and Linux code paths
-have source/API review and target-specific compile coverage where available; those do not replace
-real HDR toggle, hotplug, cross-monitor, compositor, and driver testing on their target systems.
+## Linux/Wayland
 
-## 4. WGSL and GPU resource semantics
+Linux build 只启用 Wayland。Monitor 从 winit raw handles 创建不拥有 socket 的 guest connection，绑定 `wp_color_manager_v1` v2–3，并读取当前 surface 的 preferred parametric image description。
 
-The handwritten shader modules live beside their Rust consumers in
-`crates/gravlume-render/src/shaders/`. Rust assembles the production and diagnostic shader sources;
-wgpu's locked WGSL frontend validates them during pipeline creation, and GPU contract tests create
-and execute the relevant entry points. There is no WESL generator, checked-in generated shader, or
-direct Naga dependency in the workspace.
+- 只有 description 与 information events 完整后才安装 snapshot；
+- 缺协议、旧版本、非 parametric description、缺 luminance 或 dispatch failure 都保持 typed unknown 并选择 SDR；
+- 应用只读取 surface feedback；Vulkan WSI/wgpu 继续拥有 presentation color-space；
+- winit 是唯一 socket reader，guest queue 只 dispatch 已读取事件，并使用 distant wake guard 避免 guest-only wake 被丢弃。
 
-Shader behavior follows the [WGSL specification](https://www.w3.org/TR/WGSL/):
+协议依据：[Wayland `color-management-v1`](https://wayland.app/protocols/color-management-v1)。
 
-- core arithmetic is `f32`; code does not assume `f64`, implementation-specific subgroup behavior,
-  or stronger NaN/subnormal/fusion guarantees than WGSL provides;
-- workgroup barriers are reached in uniform control flow and synchronize only the workgroup scope;
-- storage atomics provide the queue/index operations that explicitly require atomicity;
-- resource access modes match the declared binding types and texture formats;
-- host DTO alignment, size, and field order match WGSL's memory-layout rules.
+## WGSL 与资源语义
 
-On the final trace batch, the selective shadow-coverage pipeline deliberately uses three dispatches
-in one compute pass: base trace, edge classification, and edge refinement. WebGPU defines each
-compute dispatch as a separate usage scope, so the candidate texture may be a sampled texture in
-classification and a write-only storage texture in refinement without an illegal same-dispatch
-alias. Classification uses an atomic counter and writes each accepted pixel index once; refinement
-writes each listed pixel once. It does not rely on a dispatch-wide barrier, because WGSL exposes no
-such primitive. See the official
-[WebGPU resource-usage and synchronization rules](https://gpuweb.github.io/gpuweb/#resource-usages).
+Handwritten WGSL 与 Rust consumer 同放在 `crates/gravlume-render/src/shaders/`。Rust 组合 production/capture source；wgpu 在 pipeline creation 时验证，GPU contracts 创建并执行相关 entry points。仓库没有 WESL generator、checked-in generated shader 或直接 Naga dependency。
 
-Rust domain types are not GPU ABI types. Uniform/storage DTOs have explicit `#[repr(C)]` layouts,
-fixed integer discriminants, checked narrowing from binary64 domain inputs, and contract tests for
-size/alignment and observable GPU behavior.
+Shader 必须遵循 [WGSL specification](https://www.w3.org/TR/WGSL/)：
 
-## 5. Release evidence
+- core 数学是 `f32`，不假定 `f64`、固定 subgroup width 或超出规范的 NaN/subnormal/fusion 行为；
+- workgroup barrier 只同步 workgroup scope，并位于 uniform control flow；
+- 需要原子性的 queue/index 操作使用 storage atomics；
+- binding access、texture format 与 host-shareable layout 必须精确匹配；
+- 不假定 dispatch-wide/global barrier。
 
-| Layer | Required evidence |
-|---|---|
-| dependency | committed lockfile; target backend/Wayland feature closure; no unintended protocol/GPU stack duplicates |
-| capability | required feature/limit/format usages and structured rejection reason |
-| shader | all production/diagnostic entry points create successfully; host/WGSL ABI contracts hold |
-| headless GPU | odd extents, workgroup boundaries, multi-batch execution, shadow refinement, resize, and readback |
-| numerical | termination/branch agreement and continuous observables within `docs/validation.md` budgets |
-| performance | fixed revision, OS, adapter, driver, power mode, scene, extent, warm-up, and raw GPU timestamps |
-| native output | HDR/SDR transitions, cross-display movement, surface recovery, and one complete presented generation |
+Final trace batch 的 base trace、shadow classification 和 refinement 是同一 command buffer 中的独立 dispatch。Classification 把 candidate 当 sampled texture，refinement 把它当 write-only storage texture；不同 dispatch 的 usage scope 与 wgpu resource transition 建立顺序。每个 edge index 只写一次，每个 listed pixel 只由一个 invocation 更新，不依赖 backend-specific race behavior。资源规则见 [WebGPU resource usages](https://gpuweb.github.io/gpuweb/#resource-usages)。
 
-One adapter probe is not a release matrix. A wgpu, winit, platform-binding, or protocol upgrade is a
-coordinated change: re-audit official API semantics, Cargo features, WGSL validation, native display
-lifecycle, and the three supported platform matrices.
+## 发布证据
+
+| 层            | 必须记录                                                                             |
+| ------------- | ------------------------------------------------------------------------------------ |
+| dependency    | committed lockfile、target feature closure、无 unintended backend/protocol duplicate |
+| capability    | feature/limit/format usages 与 structured rejection                                  |
+| shader        | production/capture entry points、host/WGSL ABI 与执行 contracts                      |
+| headless GPU  | odd extent、workgroup boundary、multi-batch、coverage、resize 与 readback            |
+| numerical     | termination/branch 和 continuous observables 满足 `validation.md`                    |
+| performance   | revision、OS、adapter、driver、power、scene、extent、warm-up 与 raw timestamps       |
+| native output | HDR/SDR transition、cross-display、surface recovery 与完整 generation presentation   |
+
+一个 adapter probe 不是发布矩阵。升级 wgpu、winit、平台 binding 或 Wayland protocol 时，必须一起重审 Cargo features、WGSL validation、native lifecycle、HDR transport 和三个目标平台的证据。

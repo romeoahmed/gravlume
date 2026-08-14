@@ -1,7 +1,7 @@
-@compute @workgroup_size(8, 8, 1)
+@compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
 fn write_invariant_gate_cases(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(scene_hdr);
-    let pixel = trace_dispatch.tile_region.xy * vec2<u32>(8u, 8u) + global_id.xy;
+    let pixel = trace_dispatch.tile_origin * vec2<u32>(8u, 8u) + global_id.xy;
     if any(pixel >= extent) {
         return;
     }

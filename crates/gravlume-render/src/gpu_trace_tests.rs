@@ -12,9 +12,9 @@ use proptest::prelude::*;
 
 use crate::{
     gpu_capture::{
-        capture_direction_reconstruction_trace, capture_direction_reconstruction_trace_in_batches,
-        capture_initial_rays, capture_invariant_gate_cases, capture_refined_edge_count,
-        capture_refined_trace, capture_trace,
+        capture_accelerated_trace, capture_accelerated_trace_in_batches, capture_initial_rays,
+        capture_invariant_gate_cases, capture_refined_edge_count, capture_refined_trace,
+        capture_trace,
     },
     ray_tracer::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
 };
@@ -269,10 +269,10 @@ fn repeated_refinement_in_one_submission_does_not_accumulate_edges() {
 }
 
 #[test]
-fn direction_reconstruction_batches_reuse_the_same_packed_stencil_contract() {
+fn accelerated_trace_batches_reuse_the_same_packed_stencil_contract() {
     let observation = default_observation(17, 9);
-    let single = capture_direction_reconstruction_trace(&observation);
-    let progressive = capture_direction_reconstruction_trace_in_batches(&observation, 2);
+    let single = capture_accelerated_trace(&observation);
+    let progressive = capture_accelerated_trace_in_batches(&observation, 2);
 
     assert_eq!(single.records.len(), progressive.records.len());
     for (pixel, (single, progressive)) in
@@ -412,17 +412,24 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
 }
 
 #[test]
-fn direction_reconstruction_preserves_full_trace_branches_and_escape_directions() {
+fn accelerated_trace_preserves_full_trace_branches_and_escape_directions() {
     let profiles = [
-        ("default", 0.8, 30.0, std::f64::consts::FRAC_PI_4),
-        ("near-extreme-wide", 0.99, 30.0, std::f64::consts::FRAC_PI_2),
-        ("negative-near", -0.8, 5.0, std::f64::consts::FRAC_PI_4),
+        ("default", 0.8, 0.0, 30.0, std::f64::consts::FRAC_PI_4),
+        (
+            "near-extreme-wide",
+            0.99,
+            0.0,
+            30.0,
+            std::f64::consts::FRAC_PI_2,
+        ),
+        ("negative-near", -0.8, 0.0, 5.0, std::f64::consts::FRAC_PI_4),
+        ("kerr-newman", 0.6, 0.5, 30.0, std::f64::consts::FRAC_PI_4),
     ];
 
-    for (label, spin, observer_radius, vertical_fov) in profiles {
-        let observation = transfer_profile(spin, observer_radius, vertical_fov);
+    for (label, spin, charge, observer_radius, vertical_fov) in profiles {
+        let observation = transfer_profile(spin, charge, observer_radius, vertical_fov);
         let full = capture_trace(&observation);
-        let transferred = capture_direction_reconstruction_trace(&observation);
+        let transferred = capture_accelerated_trace(&observation);
         let mut reconstructed_escape_pixels = 0;
 
         assert_eq!(transferred.records.len(), full.records.len());
@@ -461,7 +468,7 @@ fn direction_reconstruction_preserves_full_trace_branches_and_escape_directions(
         if observer_radius >= 30.0 {
             assert!(
                 reconstructed_escape_pixels > 0,
-                "{label}: far-field fixture did not exercise cooperative direction reconstruction"
+                "{label}: far-field fixture did not exercise the cooperative escape-direction map"
             );
         }
     }
@@ -543,18 +550,24 @@ fn default_observation(width: u32, height: u32) -> Observation {
     observation_at_scale(width, height, 1.0)
 }
 
-fn transfer_profile(spin: f64, observer_radius: f64, vertical_fov: f64) -> Observation {
-    transfer_profile_extent(spin, observer_radius, vertical_fov, 1_280, 720)
+fn transfer_profile(
+    spin: f64,
+    charge: f64,
+    observer_radius: f64,
+    vertical_fov: f64,
+) -> Observation {
+    transfer_profile_extent(spin, charge, observer_radius, vertical_fov, 1_280, 720)
 }
 
 fn transfer_profile_extent(
     spin: f64,
+    charge: f64,
     observer_radius: f64,
     vertical_fov: f64,
     width: u32,
     height: u32,
 ) -> Observation {
-    let spacetime = KerrNewmanSpacetime::new(1.0, spin, 0.0, KerrSchildChart::Outgoing)
+    let spacetime = KerrNewmanSpacetime::new(1.0, spin, charge, KerrSchildChart::Outgoing)
         .expect("transfer profile spacetime is valid");
     let observer_xyz =
         spacetime.oblate_to_cartesian(observer_radius, std::f64::consts::FRAC_PI_3, 0.0);
@@ -567,7 +580,7 @@ fn transfer_profile_extent(
     let scene = PhysicalScene::new(PhysicalSceneInput::new(
         1.0,
         spin,
-        0.0,
+        charge,
         KerrSchildChart::Outgoing,
         observer,
     ))

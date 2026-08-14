@@ -113,18 +113,18 @@ impl TraceGpuBenchmark {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("production trace benchmark encoder"),
             });
-        self.compute.encode_node_pass(
+        self.compute.encode_escape_map_pass(
             &self.queue,
             &mut encoder,
             &self.target,
             self.tiles,
-            Some(self.timings.node_writes()),
+            Some(self.timings.escape_map_writes()),
         );
-        self.compute.encode_resolve_pass(
+        self.compute.encode_trace_pass(
             &mut encoder,
             &self.target,
             self.tiles,
-            Some(self.timings.resolve_writes()),
+            Some(self.timings.trace_writes()),
             true,
         );
         self.timings.encode_resolve(&mut encoder);

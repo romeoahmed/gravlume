@@ -1,3 +1,5 @@
+// Selective four-sample coverage for pixels adjacent to a Horizon/Escape branch transition.
+
 struct ShadowClassifyControl {
     count: atomic<u32>,
     capacity: u32,
@@ -9,6 +11,20 @@ struct ShadowRefineControl {
     capacity: u32,
     padding: vec2<u32>,
 }
+
+const SHADOW_CLASSIFY_WORKGROUP_AXIS: u32 = 8u;
+const SHADOW_REFINE_WORKGROUP_WIDTH: u32 = 64u;
+const SHADOW_SAMPLE_COUNT: u32 = 4u;
+const SHADOW_SAMPLE_WEIGHT: f32 = 1.0 / f32(SHADOW_SAMPLE_COUNT);
+const SHADOW_SAMPLE_OFFSETS: array<vec2<f32>, SHADOW_SAMPLE_COUNT> = array<
+    vec2<f32>,
+    SHADOW_SAMPLE_COUNT,
+>(
+    vec2<f32>(0.375, 0.125),
+    vec2<f32>(0.875, 0.375),
+    vec2<f32>(0.625, 0.875),
+    vec2<f32>(0.125, 0.625),
+);
 
 @group(1) @binding(0)
 var shadow_source: texture_2d<f32>;
@@ -39,7 +55,11 @@ fn shadow_branch_at(pixel: vec2<i32>) -> i32 {
     return -1;
 }
 
-@compute @workgroup_size(8, 8, 1)
+@compute @workgroup_size(
+    SHADOW_CLASSIFY_WORKGROUP_AXIS,
+    SHADOW_CLASSIFY_WORKGROUP_AXIS,
+    1,
+)
 fn classify_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(shadow_source);
     let pixel = global_id.xy;
@@ -53,18 +73,19 @@ fn classify_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
+    let opposite = 1 - center;
     var is_edge = false;
     if pixel.x > 0u {
-        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(-1, 0)) == 1 - center;
+        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(-1, 0)) == opposite;
     }
     if pixel.x + 1u < extent.x {
-        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(1, 0)) == 1 - center;
+        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(1, 0)) == opposite;
     }
     if pixel.y > 0u {
-        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(0, -1)) == 1 - center;
+        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(0, -1)) == opposite;
     }
     if pixel.y + 1u < extent.y {
-        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(0, 1)) == 1 - center;
+        is_edge = is_edge || shadow_branch_at(pixel_i + vec2<i32>(0, 1)) == opposite;
     }
     if !is_edge {
         return;
@@ -76,7 +97,7 @@ fn classify_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     }
 }
 
-@compute @workgroup_size(64, 1, 1)
+@compute @workgroup_size(SHADOW_REFINE_WORKGROUP_WIDTH, 1, 1)
 fn refine_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let index = global_id.x;
     let count = shadow_refine_control.count;
@@ -88,19 +109,13 @@ fn refine_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(shadow_refined_scene);
     let linear_pixel = shadow_pixels_to_refine[index];
     let pixel = vec2<u32>(linear_pixel % extent.x, linear_pixel / extent.x);
-    let sample_offsets = array<vec2<f32>, 4>(
-        vec2<f32>(0.375, 0.125),
-        vec2<f32>(0.875, 0.375),
-        vec2<f32>(0.625, 0.875),
-        vec2<f32>(0.125, 0.625),
-    );
     var scene_linear = vec3<f32>(0.0);
     var escape_samples = 0u;
-    for (var sample_index = 0u; sample_index < 4u; sample_index += 1u) {
-        let result = trace_pixel_with_kerr_capture_at(
+    for (var sample_index = 0u; sample_index < SHADOW_SAMPLE_COUNT; sample_index += 1u) {
+        let result = trace_pixel_with_radial_capture_at(
             pixel,
             extent,
-            sample_offsets[sample_index],
+            SHADOW_SAMPLE_OFFSETS[sample_index],
         );
         if result.termination == TERMINATION_ESCAPE {
             scene_linear += analytic_sky(result.direction);
@@ -113,6 +128,9 @@ fn refine_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     textureStore(
         shadow_refined_scene,
         vec2<i32>(pixel),
-        vec4<f32>(scene_linear * 0.25, f32(escape_samples) * 0.25),
+        vec4<f32>(
+            scene_linear * SHADOW_SAMPLE_WEIGHT,
+            f32(escape_samples) * SHADOW_SAMPLE_WEIGHT,
+        ),
     );
 }

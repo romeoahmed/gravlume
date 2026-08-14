@@ -8,15 +8,15 @@
 
 reference 固定使用 Dormand–Prince 5(4) 的七次求值 FSAL pair。令 $k_i=f(\lambda+c_i h,y+h\sum_{j<i}a_{ij}k_j)$；tableau 为：
 
-| $c_i$ | 非零 $a_{ij}$ |
-|---:|---|
-| $0$ | — |
-| $1/5$ | $1/5$ |
-| $3/10$ | $3/40,9/40$ |
-| $4/5$ | $44/45,-56/15,32/9$ |
-| $8/9$ | $19372/6561,-25360/2187,64448/6561,-212/729$ |
-| $1$ | $9017/3168,-355/33,46732/5247,49/176,-5103/18656$ |
-| $1$ | $35/384,0,500/1113,125/192,-2187/6784,11/84$ |
+|  $c_i$ | 非零 $a_{ij}$                                     |
+| -----: | ------------------------------------------------- |
+|    $0$ | —                                                 |
+|  $1/5$ | $1/5$                                             |
+| $3/10$ | $3/40,9/40$                                       |
+|  $4/5$ | $44/45,-56/15,32/9$                               |
+|  $8/9$ | $19372/6561,-25360/2187,64448/6561,-212/729$      |
+|    $1$ | $9017/3168,-355/33,46732/5247,49/176,-5103/18656$ |
+|    $1$ | $35/384,0,500/1113,125/192,-2187/6784,11/84$      |
 
 第五阶与 embedded 第四阶 weights：
 
@@ -88,16 +88,16 @@ CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 
 ## 2. 最低 fixture 矩阵
 
-| 类别 | 必须覆盖 |
-|---|---|
-| algebra | radius quadratic、$l^2=0$、metric inverse、horizon roots、special limits |
-| observer | Minkowski tetrad、boost、ergoregion rejection、Fermi–Walker analytic cases |
-| Schwarzschild | weak deflection $4M/b$、photon sphere $3M$、shadow $\sqrt{27}M$、near-critical escape/capture pairs |
-| Kerr | prograde/retrograde equatorial paths、axis/pole、published trajectories、Carter drift |
-| Kerr–Newman | $q_e\to0$、RN、extremal/superextremal classification、exterior orbit samples |
-| events | escape/horizon/disk/singularity/step exhaustion、same-step competing event |
-| radiation | vacuum, pure absorption, constant slab, $g^3/g^4$, blackbody temperature shift |
-| polarization | orthonormal screen basis、gauge transform、parallel transport、EVPA |
+| 类别                   | 必须覆盖                                                                                                                                                       |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| algebra                | radius quadratic、$l^2=0$、metric inverse、horizon roots、special limits                                                                                       |
+| observer               | Minkowski tetrad、boost、ergoregion rejection、Fermi–Walker analytic cases                                                                                     |
+| Schwarzschild          | weak deflection $4M/b$、photon sphere $3M$、shadow $\sqrt{27}M$、near-critical escape/capture pairs                                                            |
+| Kerr                   | prograde/retrograde equatorial paths、axis/pole、published trajectories、Carter drift                                                                          |
+| Kerr–Newman            | $q_e\to0$、RN、extremal/superextremal classification、exterior orbit samples                                                                                   |
+| events                 | escape/horizon/disk/singularity/step exhaustion、same-step competing event                                                                                     |
+| radiation              | vacuum, pure absorption, constant slab, $g^3/g^4$, blackbody temperature shift                                                                                 |
+| polarization           | orthonormal screen basis、gauge transform、parallel transport、EVPA                                                                                            |
 | numerical conditioning | raw-radius 与 reciprocal-radius candidate reproducer：完整初值、step/update/event/termination、浮点模式、checkpoints、high-precision oracle 与 expected branch |
 
 每个 fixture 写明 schema、coordinate/chart、signature、mass normalization、initial observer/frame、photon orientation、solver/precision、expected observable、tolerance 和 source。没有这些 metadata 的图像不是科学 fixture。
@@ -106,20 +106,20 @@ CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 
 ## 3. `kerr-exterior-observation-v1`
 
-首个纵向闭环不依赖外部资产：geometry 阶段使用解析方向网格天空；transport 阶段增加一个规定发射率的薄表面。所有长度先以 $M$ 无量纲化。
+首个纵向闭环不依赖外部资产：geometry 阶段使用解析方向天空；transport 阶段增加一个规定发射率的薄表面。所有长度先以 $M$ 无量纲化。
 
-| 字段 | v1 值 |
-|---|---|
-| spacetime | ingoing Cartesian Kerr–Schild，$M=1,a=0.8,q_e=0$ |
-| extremality | subextremal，$r_+=1.6M$ |
-| observer event | $t=0$；oblate $(r,\theta,\phi)=(30M,\pi/3,0)$ |
-| observer state | stationary $u=\partial_t/\sqrt{-g_{tt}}$；仅因 $g_{tt}<0$ 有效 |
-| target/up | target 为原点；up hint 为 spin $+z$ |
-| viewport | perspective，$1280\times720$，vertical FOV $45^\circ$，左上原点 |
-| sample | pixel index + subpixel offset；无 jitter 时 $(\delta_x,\delta_y)=(0.5,0.5)$ |
-| photon scale | $\omega_{\rm obs}=1$ |
-| outer event | $R_{\rm esc}=200M$；finite-boundary 误差单独计入 |
-| display | scene-linear capture；有限且非负的 $x$ 在 exposure 0 后逐通道作 $x/(1+x)$ 与 SDR transfer |
+| 字段           | v1 值                                                                                     |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| spacetime      | ingoing Cartesian Kerr–Schild，$M=1,a=0.8,q_e=0$                                          |
+| extremality    | subextremal，$r_+=1.6M$                                                                   |
+| observer event | $t=0$；oblate $(r,\theta,\phi)=(30M,\pi/3,0)$                                             |
+| observer state | stationary $u=\partial_t/\sqrt{-g_{tt}}$；仅因 $g_{tt}<0$ 有效                            |
+| target/up      | target 为原点；up hint 为 spin $+z$                                                       |
+| viewport       | perspective，$1280\times720$，vertical FOV $45^\circ$，左上原点                           |
+| sample         | pixel index + subpixel offset；无 jitter 时 $(\delta_x,\delta_y)=(0.5,0.5)$               |
+| photon scale   | $\omega_{\rm obs}=1$                                                                      |
+| outer event    | $R_{\rm esc}=200M$；finite-boundary 误差单独计入                                          |
+| display        | scene-linear capture；有限且非负的 $x$ 在 exposure 0 后逐通道作 $x/(1+x)$ 与 SDR transfer |
 
 默认 ingoing oblate-to-Cartesian 变换得到
 
@@ -140,7 +140,7 @@ g_{tt}=-0.933345183078563810878066121578.
 
 ### 3.1 Geometry scene
 
-current GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱：经度/纬度主轴、六个 cubemap 方向和不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
+当前 GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱；方向主轴与不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
 
 ### 3.2 Transport add-on
 
@@ -157,24 +157,24 @@ future transport 增加 equatorial surface：
 
 `reference-regular-v1` 使用第 1 节的 DP5(4)，所有状态在 pack 前保持 `f64`。输入已经以 $M=\omega_{\rm obs}=1$ 归一化；直接尺度输入 $M$ 必须精确为 1，派生的 tetrad contraction $\omega_{\rm obs}$ 按具名浮点预算验证。
 
-| policy field | v1 值 |
-|---|---:|
-| position/time `rtol` | `2e-12` |
-| position/time `atol` | `2e-13` |
-| covariant momentum `rtol` | `2e-12` |
-| covariant momentum `atol` | `2e-13` |
-| scalar transport `rtol` | `1e-11` |
-| scalar transport `atol` | `1e-13` |
-| initial step magnitude | `1e-3 M` |
-| minimum step magnitude | $2^{-40}M$ |
-| maximum step magnitude | `0.5 M` |
-| safety / shrink / growth | `0.9 / 0.2 / 5.0` |
-| max accepted steps | `200000` |
-| max consecutive rejects | `64` |
-| dense-event affine tolerance | `2e-11 M` |
-| event tie tolerance | `5e-11 M` |
-| event arming band | `1.28e-9 M` for radius events |
-| singularity guard | $(r^4+a^2z^2)/M^4=2^{-40}$ |
+| policy field                 |                         v1 值 |
+| ---------------------------- | ----------------------------: |
+| position/time `rtol`         |                       `2e-12` |
+| position/time `atol`         |                       `2e-13` |
+| covariant momentum `rtol`    |                       `2e-12` |
+| covariant momentum `atol`    |                       `2e-13` |
+| scalar transport `rtol`      |                       `1e-11` |
+| scalar transport `atol`      |                       `1e-13` |
+| initial step magnitude       |                      `1e-3 M` |
+| minimum step magnitude       |                    $2^{-40}M$ |
+| maximum step magnitude       |                       `0.5 M` |
+| safety / shrink / growth     |             `0.9 / 0.2 / 5.0` |
+| max accepted steps           |                      `200000` |
+| max consecutive rejects      |                          `64` |
+| dense-event affine tolerance |                     `2e-11 M` |
+| event tie tolerance          |                     `5e-11 M` |
+| event arming band            | `1.28e-9 M` for radius events |
+| singularity guard            |    $(r^4+a^2z^2)/M^4=2^{-40}$ |
 
 `reference-strict-v1` 把所有 `rtol/atol` 除以 16、maximum step 降为 `0.25 M`、event tolerance 除以 4、step/reject 上限加倍。regular fixture 必须同时运行两个 policy；“baseline 成功”而 strict 改变 branch/termination 时，baseline 失败，不选择更好看的结果。
 
@@ -184,13 +184,13 @@ future transport 增加 equatorial surface：
 
 ### 5.1 Algebra 与初始数据
 
-| observable | CPU `f64` | WGSL `f32` |
-|---|---:|---:|
-| normalized radius polynomial residual | `2e-13` | `3e-5` |
-| normalized $l^2$ / metric-inverse max residual | `2e-12` | `5e-5` |
-| Observer Frame max Gram residual | `2e-12` | `8e-5` |
-| Viewport initial-ray angular CPU/GPU disagreement | — | `2e-6 rad` |
-| normalized initial null/frequency residual | `2e-12` | `8e-5` |
+| observable                                        | CPU `f64` | WGSL `f32` |
+| ------------------------------------------------- | --------: | ---------: |
+| normalized radius polynomial residual             |   `2e-13` |     `3e-5` |
+| normalized $l^2$ / metric-inverse max residual    |   `2e-12` |     `5e-5` |
+| Observer Frame max Gram residual                  |   `2e-12` |     `8e-5` |
+| Viewport initial-ray angular CPU/GPU disagreement |         — | `2e-6 rad` |
+| normalized initial null/frequency residual        |   `2e-12` |     `8e-5` |
 
 Residual 的 denominator 必须是量纲匹配的 term norm 与 `1` 的最大值，不以另一个可能同时错误的实现作归一化。exact axis、equator、horizon-near 和 far-field 分桶报告，不只给全局平均。
 
@@ -198,15 +198,15 @@ Residual 的 denominator 必须是量纲匹配的 term norm 与 `1` 的最大值
 
 regular fixture 的 baseline/strict comparison 必须满足：
 
-| observable | v1 gate |
-|---|---:|
-| termination / Image Branch | exact enum equality |
-| escape-direction angle | `2e-9 rad` |
-| localized event position | `2e-9 M` |
-| Frequency Ratio relative error | `2e-9` |
-| Source Anchor surface coordinate | `2e-9 M` |
-| travel-time absolute error | `2e-8 M` |
-| normalized null/$E$/$L_z$/$\mathcal Q$ drift | each `5e-9` |
+| observable                                   |             v1 gate |
+| -------------------------------------------- | ------------------: |
+| termination / Image Branch                   | exact enum equality |
+| escape-direction angle                       |          `2e-9 rad` |
+| localized event position                     |            `2e-9 M` |
+| Frequency Ratio relative error               |              `2e-9` |
+| Source Anchor surface coordinate             |            `2e-9 M` |
+| travel-time absolute error                   |            `2e-8 M` |
+| normalized null/$E$/$L_z$/$\mathcal Q$ drift |         each `5e-9` |
 
 escape direction 是 localized escape state 上 Hamilton RHS 空间分量按实际 affine traversal 符号取向后的单位 coordinate direction；它不是 terminal position 的径向单位向量。方向无法求值时 comparison 失败，不能省略该 gate。
 
@@ -214,20 +214,32 @@ near-critical fixture 不套一个全局 angle tolerance。它必须给成对的
 
 ### 5.3 GPU renderer agreement
 
-下列是 current GPU 的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
+下列是当前 GPU 实现的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
 
-| observable | v1 gate |
-|---|---:|
-| regular termination / branch | exact reference equality |
-| regular escape/source angular error | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
-| regular travel-time absolute error | `1e-3 M` |
-| recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift | each `0.05` |
-| Frequency Ratio relative error | `2e-3` |
-| surface event position | `5e-3 M` |
-| numerical failure on regular matrix | `0` |
-| stale history after generation/resize/cut | `0` accepted samples |
+| observable                                            |                                                v1 gate |
+| ----------------------------------------------------- | -----------------------------------------------------: |
+| regular termination / branch                          |                               exact reference equality |
+| regular escape/source angular error                   | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
+| regular travel-time absolute error                    |                                               `1e-3 M` |
+| recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift |                                            each `0.05` |
+| Frequency Ratio relative error                        |                                                 `2e-3` |
+| surface event position                                |                                               `5e-3 M` |
+| numerical failure on regular matrix                   |                                                    `0` |
+| stale history after generation/resize/cut             |                                   `0` accepted samples |
 
-落入 near-critical uncertainty band 的 sample 必须 refine；预算仍不足时输出 `NumericalFailure`/`Uncertain` diagnostic，不能给错误的确定 branch。null/Carter drift 是诊断与 classifier 输入，不可单独替代 observable agreement。
+GPU universal path 动态积分六个 canonical spatial variables，并把 per-ray $E=-p_t$ 作为构造上
+不变的常量；coordinate time 用同一 RK stages 的相对 increment 累计，因此共同平移 observer
+coordinate-time origin 不得改变任何 trace observable。GPU Carter drift 使用不借助 $H=0$ 的
+全域 Cartesian 形式，axis 不设 epsilon seam；CPU reference 故意保留完整八维 RHS、full null
+Jacobian 与独立 trigonometric Carter evaluator。两边不同计算图的一致性才构成验证，不能把同一
+优化公式复制到 oracle 后称为独立通过。
+
+event localization 保留 endpoint bracket 与 priority。只有 guard cubic 的三个 Bézier derivative
+control values 证明单调、且当前 derivative 高于 binary32 conditioning floor，才用固定六次
+safeguarded Newton；否则使用旧 chord fraction。测试 gate 比较 localized state 上重新求值的真实
+event residual，而不是只比较 cubic polynomial residual。
+
+落入 near-critical uncertainty band 的 sample 只有经过满足同一预算的 refine 才能输出确定 branch；没有这样的第二遍求解时必须保持 `Uncertain`，数值失败则输出 `NumericalFailure`。null/Carter drift 是诊断与 classifier 输入，不可单独替代 observable agreement。
 
 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过 travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入常规测试。
 
@@ -289,10 +301,10 @@ R(r)=r^4-b^2r^2+2b^2r.
 
 对 scattering ray，分别用 $r=r_{\rm turn}+s^2$ 与 $u=1/r=u_{\rm turn}-s^2$ 消除端点平方根奇性；两种 80 位积分的 $\Delta\phi$ 差为 $5.62\times10^{-41}$ 和 $9.05\times10^{-41}$。capture ray 的 direct-$r$/reciprocal-$u$ 积分相差 $2.90\times10^{-55}$。[N]
 
-| $b$ | route | $r_{\rm turn}/M$ | $\Delta\phi$ |
-|---:|---|---:|---:|
-| $6$ | $50M\to r_{\rm turn}\to50M$ | `4.453363193811354931623303616376185063746` | `4.620418726881239063416504280864374022974` |
+|                 $b$ | route                       |                            $r_{\rm turn}/M$ |                                $\Delta\phi$ |
+| ------------------: | --------------------------- | ------------------------------------------: | ------------------------------------------: |
+|                 $6$ | $50M\to r_{\rm turn}\to50M$ | `4.453363193811354931623303616376185063746` | `4.620418726881239063416504280864374022974` |
 | $\sqrt{27}+10^{-3}$ | $50M\to r_{\rm turn}\to50M$ | `3.034497655706080454343638050694227224458` | `11.08947404451632010196559671422843740259` |
-| $\sqrt{27}-10^{-3}$ | $50M\to r_+=2M$ | — | `9.875337813686692580530011972416581225191` |
+| $\sqrt{27}-10^{-3}$ | $50M\to r_+=2M$             |                                           — | `9.875337813686692580530011972416581225191` |
 
 对应 ingoing Cartesian Kerr–Schild 初始 covector 以 80 位十进制存档，并直接代入 $g^{\mu\nu}p_\mu p_\nu$；按文件中的实际十进制重算，absolute residual 依次为 $4.91\times10^{-81}$、$3.17\times10^{-81}$ 与 $3.66\times10^{-81}$。[fixture files](../crates/gravlume-reference/fixtures/v1/) 是独立、可复算的数据合同。[N]

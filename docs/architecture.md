@@ -1,8 +1,8 @@
 # 架构与实现合同
 
-本文只描述仓库中存在的模块、接口和生命周期不变量。未来算法放在[渲染设计](rendering.md)，实验过程放在 [`research/`](research/)；两者不能冒充当前 API。
+本文定义仓库现有模块的职责、接口语义和生命周期不变量。它不复制 public Rust 签名，也不收录未来算法：签名以源码/rustdoc 为准，候选设计见[渲染设计](rendering.md)，实验过程见[研究记录](research/)。
 
-## 1. 依赖方向
+## 依赖方向
 
 ```text
 gravlume (binary)
@@ -17,167 +17,161 @@ gravlume-reference
 └─ gravlume-domain
 ```
 
-- `domain`：validated `f64` 领域值、Kerr–Newman 几何、观察者与初始光线；不依赖 GPU/UI/serde。
-- `reference`：独立 CPU oracle、事件定位、fixture 和比较；不依赖 renderer。
-- `native-display`：AppKit、inbox WinRT 与 Wayland color-management 的窄安全边界；只导出值类型和监视器生命周期。
-- `render`：wgpu tracing、方向重建、阴影覆盖率、HDR/SDR 输出、资源与错误语义。
-- `desktop`：唯一拥有 winit/egui 生命周期的组合根。
+| crate                     | Interface responsibility                                            | 禁止反向渗透                          |
+| ------------------------- | ------------------------------------------------------------------- | ------------------------------------- |
+| `gravlume-domain`         | validated `f64` values、时空、observer、view 与 initial ray         | 不依赖 GPU、UI、serde 或 fixture      |
+| `gravlume-reference`      | 独立 CPU oracle、event、fixture、batch 与 comparison                | 不依赖 renderer 或 WGSL 实现          |
+| `gravlume-native-display` | safe `DynamicRange` snapshot 与 monitor lifecycle                   | 不配置 wgpu surface，不暴露原生对象   |
+| `gravlume-render`         | GPU trace、frame resources、publication、display、timing 与错误语义 | 不拥有 event loop，不导入平台原生接口 |
+| `gravlume-desktop`        | winit/egui 组合根、输入、调度与用户可见状态                         | 不实现物理或 GPU resource policy      |
+| root binary               | 日志与启动                                                          | 不承载业务模块                        |
 
-没有 `research` crate、通用 render graph、可替换 solver trait、WESL 生成层或 `xtask`。出现第二个真实消费者前不预建抽象。
+没有 `research` crate、通用 render graph、可替换 solver trait、WESL 生成层或 `xtask`。只有出现第二个真实消费者时才增加 seam。
 
-## 2. 领域接口
+## Domain 与 reference seams
 
-```rust
-pub struct PhysicalSceneInput { /* 未验证的调用输入 */ }
-pub struct PhysicalScene { /* validated scene */ }
-pub struct PerspectiveView { /* validated extent + vertical FOV */ }
-pub struct ImageSample { /* pixel + subpixel，无派生 sight state */ }
-pub struct Observation { /* PhysicalScene + PerspectiveView */ }
+`Input` 后缀表示未验证调用输入。构造成功后的领域值字段私有并持续满足不变量；fixture DTO 与领域类型分离，wire 字段和 schema version 不随内部重命名漂移。
 
-impl PhysicalScene {
-    pub fn new(input: PhysicalSceneInput) -> Result<Self, ValidationReport>;
-}
-
-impl PerspectiveView {
-    pub fn new(
-        width: NonZeroU32,
-        height: NonZeroU32,
-        vertical_fov: Angle,
-    ) -> Result<Self, ValidationReport>;
-}
-```
-
-`Input` 明确表示尚未验证的数据；成功构造后的领域值字段私有且始终满足不变量。`Observation::initial_ray` 会针对自己的 view 重新验证 `ImageSample`，建立 future-directed/null/frequency 合同。持久化 fixture DTO 与领域类型分离；fixture 字段名和 schema 版本不能随内部重命名漂移。
-
-`KerrSchildChart` 表示 ingoing/outgoing chart，不是“坐标数据”；`Extremality` 表示 subextremal/extremal/superextremal 分类，不再使用含义模糊的 `ParameterState`。
-
-## 3. Reference 接口
-
-Reference 分成两个有意不同的 seam：
-
-- `ObservationTracer + ObservationTrace`：从 validated `Observation` 发起规范化 backward trace；
-- `GeodesicTracer + GeodesicTrace`：fixture、收敛研究和批处理直接使用的低层 canonical-state tracer。
-
-```rust
-let request = ObservationTrace::new(id, &observation, sample, policy)?;
-let outcome = ObservationTracer::baseline_v1().trace(request)?;
-
-let tracer = GeodesicTracer::new(spacetime, policy, events)?;
-let outcome = tracer.trace(GeodesicTrace::new(id, state, direction));
-```
-
-数值失败、步数耗尽与 non-convergence 是 typed `ReferenceOutcome`，不是 panic。只有输入归一化或配置错误走 `Err`。CPU 与 WGSL 独立实现核心方程，避免同一符号错误同时污染 oracle 与被测对象。
-
-## 4. Renderer 接口与内部模块
-
-跨 crate 接口只保留桌面层实际消费的操作：
-
-```rust
-pub struct Renderer;
-
-impl Renderer {
-    pub async fn new(
-        window: Arc<Window>,
-        observation: &Observation,
-        dynamic_range: DynamicRange,
-    ) -> Result<Self, RendererInitError>;
-
-    pub fn resize(&mut self, width: u32, height: u32) -> Result<(), ResizeError>;
-    pub fn advance_trace(&mut self) -> Result<(), RendererError>;
-    pub fn poll(&mut self) -> Result<RendererUpdate, RendererError>;
-    pub fn present(/* egui output */) -> Result<PresentResult, RendererError>;
-}
-```
-
-`advance_trace` 自行判断是否可推进并安全 no-op；调用者不需要先查询 `trace_can_advance`，也不观察 Submitted/Idle 这类实现状态。`PresentResult` 只区分已提交与可恢复的 `PresentSkip`。`RendererUpdate` 汇总已发布 generation、已完成 presentation 与 device events。
-
-`gravlume-render/src` 的职责：
-
-| 模块 | 所有权 |
-|---|---|
-| `renderer.rs` | surface/device/queue、extent generation、submission、原子发布和 presentation |
-| `renderer/frame.rs` | frame bundle、trace batch、自适应预算和事务式资源准入 |
-| `ray_tracer.rs` | Observation→GPU DTO、主追迹与方向重建 pipeline、trace image |
-| `shadow_coverage.rs` | 边缘分类/refinement pipeline 与 scratch target |
-| `display.rs` | scene/UI 最终线性合成与 surface encoding |
-| `capabilities.rs` | adapter gate 与纯 surface-output resolver |
-| `timing.rs` | 有界 timestamp query/readback 状态 |
-| `error.rs` | error scopes、device callbacks 与 typed errors |
-| `extent.rs` | 非零 extent 与 generation 转移 |
-| `benchmark.rs` | 仅在 `gpu-benchmarks` feature 下暴露给 Cargo benchmark crate 的 seam |
-
-领域状态与稳健浮点算子分别位于 `domain/state.rs`、`domain/numerics.rs`；极值分类使用的精确 binary64 算术是 `domain/spacetime/exact_binary.rs` 的私有实现。Reference 的公共 fixture 接口保留在 `fixture.rs`，v1 wire DTO 和 profile 规则位于 `fixture/v1.rs`。这些子模块使用 Rust 2018+ 的 `module.rs + module/child.rs` 布局，不引入同名 `mod.rs`。[Rust 模块文件](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html)
-
-WGSL 与消费它的 renderer 放在 `src/shaders/`：`trace.wgsl` 是基线积分器，`direction_reconstruction.wgsl` 是保守 tile accelerator，`shadow_coverage.wgsl` 只解决 capture/escape 边界覆盖率，`display.wgsl` 负责输出。文件名描述数学职责，不使用 roadmap 阶段名。
-
-## 5. GPU 计算与发布
-
-每个新 extent generation 创建隐藏的 native-resolution candidate：
+核心 domain 流程：
 
 ```text
-direction stencil nodes
-  -> tile resolve (reconstruct or full KS fallback)
-  -> final-batch shadow edge classify/refine
+PhysicalSceneInput -> PhysicalScene
+                          + PerspectiveView -> Observation
+Observation + ImageSample -> InitialViewRay
+```
+
+`Observation::initial_ray` 针对自己的 view 验证 sample，并建立 future-directed、null 与 frequency 合同。`KerrSchildChart` 表示 chart convention；`Extremality` 表示 subextremal/extremal/superextremal 分类。
+
+Reference 保留两个有意不同的接口：
+
+- `ObservationTracer`：从 validated `Observation` 构造规范化 backward trace；
+- `GeodesicTracer`：fixture、收敛研究和批处理使用 canonical state。
+
+输入或配置错误返回 typed `Err`；数值失败、步数耗尽与 non-convergence 是 `ReferenceOutcome`，不是 panic。CPU 与 WGSL 保持独立计算图，避免同一个符号错误同时污染 oracle 和被测对象。
+
+## Renderer interface
+
+桌面层只需要：创建 renderer、提交最新 extent、推进隐藏 trace、非阻塞 poll、present、suspend/resume、更新 display state 与读取只读 diagnostics。调用者不观察内部 batch、query 或 pipeline 状态。
+
+接口语义：
+
+- `resize` 是事务式请求；失败时保留上一组可用资源；
+- `advance_trace` 自行判断是否可推进，不要求先查询内部状态；
+- `poll` 汇总 publication、presentation completion 与 device events；
+- `present` 只报告已提交或可恢复的 surface skip；
+- `suspend/resume` 幂等，并保留上一张完整 scene；
+- `update_output` 只换 display contract，不使 geometry generation 失效。
+
+## Renderer modules
+
+| 模块                 | 所有权                                                                                    |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
+| `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
+| `ray_tracer.rs`      | Observation→GPU DTO、escape-map/trace pipelines 与 candidate image                        |
+| `shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                            |
+| `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
+| `capabilities.rs`    | adapter baseline 与纯 surface-output resolver                                             |
+| `timing.rs`          | 有界 timestamp query、readback 与 submission lifecycle                                    |
+| `error.rs`           | error scopes、device callbacks 与 typed renderer errors                                   |
+| `extent.rs`          | non-zero extent、paused state 与 generation transition                                    |
+| `benchmark.rs`       | `gpu-benchmarks` feature 下供 Cargo bench target 使用的最小 seam                          |
+| `gpu_capture.rs`、`gpu_trace_tests.rs`、`test_device.rs` | `cfg(test)` 下的原生 GPU fixture、readback 与合同测试 |
+
+WGSL 位于 `src/shaders/`：
+
+| shader                       | 职责                                                      |
+| ---------------------------- | --------------------------------------------------------- |
+| `kerr_schild_trace.wgsl`     | 精确 Cartesian Kerr–Schild integration 与 observables     |
+| `geodesic_acceleration.wgsl` | interval capture、escape-direction map 与完整 KS fallback |
+| `lensing_preview.wgsl`       | termination/direction 到 scene-linear preview             |
+| `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
+| `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
+| `*_capture.wgsl`             | test-only scientific readback entry points                |
+
+文件名描述数学或渲染职责，不使用 roadmap 阶段名。Rust 负责组合生产与 capture shader source；仓库不维护生成的 WGSL 副本。
+
+## GPU trace 与 publication
+
+每个 active extent generation 拥有隐藏的原生分辨率 candidate：
+
+```text
+escape-map pass
+  -> trace pass (reconstruct or full KS fallback)
+  -> final-batch shadow classify/refine
   -> timestamp readback
   -> generation check
   -> promote candidate texture view
-  -> one redraw/present
+  -> request one presentation
 ```
 
-- direction reconstruction 用共享 4-pixel node grid 和每 tile `3×3` stencil；只有全部 Escape 且方向误差 gate 通过才重建，其余逐像素 Cartesian Kerr–Schild fallback。
-- pure-Kerr interval Bernstein certificate 只在严格支持域证明 capture 时跳过积分；任何不确定都 fallback。
-- shadow coverage 先从不可变 candidate alpha 读取 Horizon/Escape tag，再在独立 dispatch 写回四个 rotated-grid 子样本的线性平均；不在一个 dispatch 中制造邻域读写竞争。
-- incomplete candidate 永不进入 display bind group；过期 generation 的 completion 只能回收资源，不能发布。
+- escape-direction map 在共享 4-pixel node grid 上追踪；每个 `8×8` tile 读取 `3×3` stencil，只有 branch 一致且方向误差通过才重建；
+- interval Bernstein certificate 只在严格支持域证明 capture，无结论时执行完整 KS；
+- shadow classification 从不可变 candidate 读取 alpha tag，refinement 在后续 dispatch 写回真实 subpixel 平均；
+- incomplete candidate 永不进入 display bind group；stale completion 只能回收资源；
+- candidate 完成后直接提升 texture view，不做同尺寸 publication copy。
 
-上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present；因此不会把隐藏的空间批次“扫描”给用户。
+上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present，因此隐藏批次不会以扫描或低分辨率过渡暴露给用户。
 
-## 6. Surface 与事件循环
+## Event loop 与 surface
 
-桌面层遵循 winit 0.30 `ApplicationHandler`：首次 `resumed` 创建 window/renderer，重复 resume/suspend 必须幂等；所有窗口事件先交给 egui；`RedrawRequested` 才 present；`about_to_wait` 只做非阻塞 GPU poll、合并 resize 和安排 deadline。[winit `ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)
+桌面层使用 winit 0.30 `ApplicationHandler`：
 
-wgpu surface 不变量：
+- `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
+- window event 先交给 egui，再处理应用语义；
+- 只有 `RedrawRequested` 执行 presentation；
+- `about_to_wait` 做非阻塞 GPU/native-display poll、合并 resize 和安排下一 deadline。
 
-- zero extent 不 configure/acquire；
+Surface 不变量：
+
+- zero extent 不 configure 或 acquire；
 - acquired texture 在 present/drop 前不重配；
-- `Suboptimal` 完成本帧后重配，`Outdated` 重配，`Lost` 重建，`Timeout/Occluded` 跳过；
-- `Surface::configure` 在已配置 surface 上等待 GPU idle，因此 live resize 必须合并，不能为每个原始事件同步重建。[wgpu `Surface`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Surface.html)
+- `Suboptimal` 完成本帧后重配，`Outdated` 强制重配，`Lost` 重建；`Timeout`/`Occluded` 跳过并等待恢复信号；
+- live resize 合并最新 physical extent，避免为每个原始事件同步等待 GPU idle；
+- suspend 期间不分配 replacement；恢复 surface 后读取一次最新 inner size。
 
-egui 顺序为 `on_window_event → take_egui_input → Context::run → handle_platform_output`。纹理先安装，render 编码后、submit 前后按 egui-wgpu 合同释放；scene 与 UI 分开渲染，最终在线性空间合成。[egui-winit `State`](https://docs.rs/egui-winit/0.36.1/egui_winit/struct.State.html)
+这些语义来自 [`ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)与 [`Surface::configure`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Surface.html#method.configure)。
 
-## 7. HDR 与平台边界
+## HDR 与 native display seam
 
-`native-display::DynamicRange` 是平台状态的唯一 DTO；renderer 直接消费它，不再维护同构映射类型。只有可靠 HDR 状态、有限且有效的 headroom/reference-white，以及 surface 广告的精确 `Rgba16Float + ExtendedSrgbLinear` pair 同时满足时启用 HDR。其余情况带 `SdrReason` fail-closed 到 SDR。
+`gravlume-native-display::DynamicRange` 是平台状态的唯一跨 crate DTO。Renderer 只在以下事实同时成立时选择 HDR：
 
-原生对象与 unsafe 只存在于三个带审核说明的 `native-display/platform/*.rs` 模块。render 不导入 AppKit、WinRT、Wayland 或 backend-private wgpu 类型。native-only 支持域是 macOS、Windows 和 Wayland Linux；其他 target 在编译期拒绝，不提供无消费者的兼容垫片。
+1. native monitor 给出可靠 HDR 状态与有效 headroom/reference white；
+2. surface 广告精确的 `Rgba16Float + ExtendedSrgbLinear` pair。
 
-## 8. GPU ABI 与错误
+否则 resolver 选择 SDR 并保留 `SdrReason`。native object 与 `unsafe` 只存在于三个 `native-display/src/platform/*.rs` 模块；renderer 不导入 AppKit、WinRT、Wayland 或 backend-private wgpu 类型。完整平台语义见[平台合同](platform.md)。
 
-GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`；领域类型和 `glam` 不直接上传。WGSL binding、access、format、enum discriminant 与 Rust size/offset 由 Naga/contract tests 验证。当前没有上传 `glam` 类型，因此不启用 `glam/bytemuck`。
+## GPU ABI 与错误
+
+GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。领域类型和 `glam` 不直接上传；因此当前不启用 `glam/bytemuck`。Host/WGSL size、offset、binding、access、format 与 discriminant 由 ABI/GPU contracts 验证。
 
 错误按处理者分类：
 
-- `ValidationReport`：调用者可修正的领域输入；
-- `ResizeError`：事务式 rebuild 拒绝或资源失败；
-- `PresentSkip`：可恢复的 surface 状态；
-- `DeviceEvent`：异步 validation/OOM/lost/internal；
-- `RendererInitError` / `RendererError`：不能在当前操作内恢复的 renderer 错误。
+| 类型                                  | 处理者                                          |
+| ------------------------------------- | ----------------------------------------------- |
+| `ValidationReport`                    | 修正领域输入                                    |
+| `GpuTraceInputError`                  | 修正不可表示或不满足 GPU profile 的 Observation |
+| `ResizeError`                         | 处理事务式 rebuild 拒绝或资源失败               |
+| `PresentSkip`                         | 等待可恢复 surface 状态                         |
+| `DeviceEvent`                         | 展示异步 validation/OOM/lost/internal 诊断      |
+| `RendererInitError` / `RendererError` | 终止当前无法恢复的 renderer 操作                |
 
-production 路径不使用 `unwrap/expect`，错误保留 typed source chain；UI/日志边界才转文本。
+Production 不使用 `unwrap/expect` 恢复错误；typed source chain 只在 UI/日志接口转换为文本。
 
-## 9. 内存、benchmark 与验证
+## 内存与资源预算
 
-production 不常驻每像素科学 records。candidate 为 `8 B/pixel` HDR、UI 为 `4 B/pixel`，另加按 extent 精确计算的 direction reconstruction 与 shadow scratch；published scene 单独为 `8 B/pixel`。三份 `16 B/pixel` record plane 只在 small-extent GPU contract capture 中创建。
+Production 不常驻每像素科学 records：
 
-4K worst transactional plan 在分配前按 published + installed + replacement 逐项计算，并受 256 MiB core gate 与 3840×2160 pixel policy 约束。surface images、driver heap/alignment 不在该逻辑账本内，不能把 gate 冒充实测显存峰值。
+- candidate HDR：`8 B/pixel`；
+- UI target：`4 B/pixel`；
+- published scene：`8 B/pixel`；
+- escape map 与 shadow scratch：按 extent 精确计算；
+- 三个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
 
-Criterion benchmark 位于 Cargo 独立 `benches/` crate；Cargo 官方规定它只能调用 library public API，因此 feature-gated `gravlume_render::benchmark::register` 是有意且最小的 benchmark seam，不使用 `#[doc(hidden)]` 假装私有。[Cargo benchmark targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#benchmarks)
+分配 replacement 前，renderer 计算 published + installed + replacement 的完整 core plan，并同时执行 3840×2160 pixel policy 与 256 MiB core-resource gate。Surface images、driver heap 和 alignment 不在该逻辑账本内；这项 gate 不是实测显存峰值。
 
-合并门槛：
+## 验证与 benchmark
 
-```bash
-cargo fmt --all -- --check
-cargo test --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-```
+测试保护 observable、生命周期、数值预算、ABI 与 GPU resource semantics；不冻结错误文案、private helper、pass 数量或未经证明的性能阈值。当前覆盖见 [GPU 证据](gpu-renderer.md)。
 
-测试保护 observable、生命周期、数值预算与 GPU 资源语义；不冻结错误文案、私有 helper、pass 数量或未经证实的性能阈值。性能结论必须记录 target/OS/adapter/backend/profile/scene/extent/样本与统计方法。
+Cargo `benches/` target 只能使用 library public interface，因此 feature-gated `gravlume_render::benchmark::register` 是一个有真实第二消费者的窄 seam。[Cargo benchmark targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#benchmarks) Benchmark 方法与历史数据只在[研究记录](research/gpu-benchmark-methodology.md)维护。
