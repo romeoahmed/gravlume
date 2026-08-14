@@ -1,6 +1,6 @@
 [package]
 name = "gravlume-render"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -13,8 +13,8 @@ bytemuck.workspace = true
 criterion = { workspace = true, optional = true }
 egui.workspace = true
 egui-wgpu.workspace = true
-gravlume-domain = { path = "../gravlume-domain" }
-gravlume-native-display = { path = "../gravlume-native-display" }
+gravlume-domain.workspace = true
+gravlume-native-display.workspace = true
 num-traits.workspace = true
 pollster.workspace = true
 thiserror.workspace = true
@@ -23,7 +23,7 @@ wgpu.workspace = true
 winit.workspace = true
 
 [dev-dependencies]
-gravlume-reference = { path = "../gravlume-reference" }
+gravlume-reference.workspace = true
 proptest.workspace = true
 
 [[bench]]

@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 //! Narrow, safe ownership boundary for native display-state notifications.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]

@@ -1,23 +1,19 @@
 [package]
 name = "gravlume"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.97"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "A scientific black-hole visualization instrument"
-publish = false
+publish.workspace = true
 
 [workspace]
 members = [
-  ".",
-  "crates/gravlume-desktop",
-  "crates/gravlume-domain",
-  "crates/gravlume-native-display",
-  "crates/gravlume-reference",
-  "crates/gravlume-render",
+  "crates/*",
 ]
 resolver = "3"
 
 [workspace.package]
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
@@ -32,6 +28,11 @@ egui = "0.36"
 egui-wgpu = { version = "0.36", default-features = false }
 egui-winit = { version = "0.36", default-features = false }
 glam = { version = "0.33", default-features = false, features = ["f64", "std"] }
+gravlume-desktop = { path = "crates/gravlume-desktop" }
+gravlume-domain = { path = "crates/gravlume-domain" }
+gravlume-native-display = { path = "crates/gravlume-native-display" }
+gravlume-reference = { path = "crates/gravlume-reference" }
+gravlume-render = { path = "crates/gravlume-render" }
 num-traits = "0.2"
 objc2 = { version = "0.6", default-features = false }
 objc2-app-kit = { version = "0.3", default-features = false }
@@ -68,7 +69,8 @@ windows-future = "0.3"
 winit = { version = "0.30", default-features = false, features = ["rwh_06"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "forbid"
 unused_must_use = "deny"
 
 [workspace.lints.rustdoc]
@@ -80,7 +82,7 @@ pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 
 [dependencies]
-gravlume-desktop = { path = "crates/gravlume-desktop" }
+gravlume-desktop.workspace = true
 tracing-subscriber.workspace = true
 
 [lints]
