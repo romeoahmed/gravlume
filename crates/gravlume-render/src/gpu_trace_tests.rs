@@ -8,6 +8,7 @@ use gravlume_reference::{
     ObservationTrace, ObservationTracer, ReferencePolicy, Termination, TraceInputId,
 };
 use num_traits::ToPrimitive as _;
+use proptest::prelude::*;
 
 use crate::{
     gpu_capture::{
@@ -33,14 +34,25 @@ fn trace_termination_discriminants_are_stable_and_checked() {
         assert_eq!(u32::from(expected), raw);
         assert_eq!(TraceTermination::try_from(raw), Ok(expected));
     }
-    assert_eq!(
-        TraceTermination::try_from(0),
-        Err(UnknownTraceTermination(0))
-    );
-    assert_eq!(
-        TraceTermination::try_from(u32::MAX),
-        Err(UnknownTraceTermination(u32::MAX))
-    );
+
+    for raw in [0, 7, u32::MAX] {
+        assert_eq!(
+            TraceTermination::try_from(raw),
+            Err(UnknownTraceTermination(raw)),
+        );
+    }
+}
+
+proptest! {
+    #[test]
+    fn non_boundary_unknown_trace_termination_discriminants_are_rejected(
+        raw in 8_u32..u32::MAX,
+    ) {
+        prop_assert_eq!(
+            TraceTermination::try_from(raw),
+            Err(UnknownTraceTermination(raw)),
+        );
+    }
 }
 
 #[test]

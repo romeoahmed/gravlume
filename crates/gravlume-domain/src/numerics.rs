@@ -170,3 +170,34 @@ pub fn binary_power(exponent: i32) -> f64 {
         f64::from_bits(stored_exponent << 52)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::{binary_power, binary64_magnitude};
+
+    fn positive_finite_binary64() -> impl Strategy<Value = f64> {
+        (1_u64..=0x7fef_ffff_ffff_ffff).prop_map(f64::from_bits)
+    }
+
+    fn binary64_significand_as_f64(significand: u64) -> f64 {
+        let upper = u32::try_from(significand >> 32)
+            .expect("a binary64 significand contains at most 53 bits");
+        let lower = u32::try_from(significand & u64::from(u32::MAX))
+            .expect("the lower half contains exactly 32 bits");
+        f64::from(upper).mul_add(4_294_967_296.0, f64::from(lower))
+    }
+
+    proptest! {
+        #[test]
+        fn binary_magnitude_round_trips_every_positive_finite_value(
+            value in positive_finite_binary64(),
+        ) {
+            let (significand, exponent) = binary64_magnitude(value);
+            let reconstructed = binary64_significand_as_f64(significand) * binary_power(exponent);
+
+            prop_assert_eq!(reconstructed.to_bits(), value.to_bits());
+        }
+    }
+}

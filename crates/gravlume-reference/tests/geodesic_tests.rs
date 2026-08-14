@@ -3,51 +3,59 @@ use gravlume_reference::{
     AffineDirection, EventConfiguration, GeodesicConfigurationError, GeodesicTrace, GeodesicTracer,
     ReferencePolicy, Termination, TraceInputId,
 };
+use proptest::prelude::*;
+
+fn assert_same_binary64(actual: f64, expected: f64) {
+    assert_eq!(actual.to_bits(), expected.to_bits());
+}
 
 #[test]
-fn reference_policy_ids_are_stable_and_strict_refines_every_bound() {
+fn reference_policy_ids_and_refinement_rules_are_versioned() {
     let regular = ReferencePolicy::regular_v1();
     let strict = ReferencePolicy::strict_v1();
 
     assert_eq!(regular.id(), "reference-regular-v1");
     assert_eq!(strict.id(), "reference-strict-v1");
-
-    for (regular_tolerance, strict_tolerance) in [
-        (
-            regular.position_relative_tolerance(),
-            strict.position_relative_tolerance(),
-        ),
-        (
-            regular.position_absolute_tolerance(),
-            strict.position_absolute_tolerance(),
-        ),
-        (
-            regular.momentum_relative_tolerance(),
-            strict.momentum_relative_tolerance(),
-        ),
-        (
-            regular.momentum_absolute_tolerance(),
-            strict.momentum_absolute_tolerance(),
-        ),
-        (
-            regular.event_affine_tolerance_m(),
-            strict.event_affine_tolerance_m(),
-        ),
-        (
-            regular.event_tie_tolerance_m(),
-            strict.event_tie_tolerance_m(),
-        ),
-    ] {
-        assert!(strict_tolerance < regular_tolerance);
-    }
-    assert!(strict.maximum_step_m() < regular.maximum_step_m());
-    assert!(strict.maximum_accepted_steps() > regular.maximum_accepted_steps());
-    assert!(strict.maximum_consecutive_rejects() > regular.maximum_consecutive_rejects());
+    assert_same_binary64(
+        strict.position_relative_tolerance(),
+        regular.position_relative_tolerance() / 16.0,
+    );
+    assert_same_binary64(
+        strict.position_absolute_tolerance(),
+        regular.position_absolute_tolerance() / 16.0,
+    );
+    assert_same_binary64(
+        strict.momentum_relative_tolerance(),
+        regular.momentum_relative_tolerance() / 16.0,
+    );
+    assert_same_binary64(
+        strict.momentum_absolute_tolerance(),
+        regular.momentum_absolute_tolerance() / 16.0,
+    );
+    assert_same_binary64(strict.maximum_step_m(), 0.25);
+    assert_eq!(
+        strict.maximum_accepted_steps(),
+        regular.maximum_accepted_steps() * 2
+    );
+    assert_eq!(
+        strict.maximum_consecutive_rejects(),
+        regular.maximum_consecutive_rejects() * 2
+    );
+    assert_same_binary64(
+        strict.event_affine_tolerance_m(),
+        regular.event_affine_tolerance_m() / 4.0,
+    );
+    assert_same_binary64(
+        strict.event_tie_tolerance_m(),
+        regular.event_tie_tolerance_m() / 4.0,
+    );
 }
 
-#[test]
-fn v1_reference_seam_rejects_a_non_normalized_mass_scale() {
-    for mass_m in [2.0, 1.0_f64.next_up()] {
+proptest! {
+    #[test]
+    fn v1_reference_seam_rejects_every_non_normalized_mass_scale(
+        mass_m in prop_oneof![0.25_f64..1.0, 1.0_f64.next_up()..=4.0],
+    ) {
         let spacetime = KerrNewmanSpacetime::new(mass_m, 0.0, 0.0, KerrSchildChart::Ingoing)
             .expect("spacetime is valid");
         let error = GeodesicTracer::new(

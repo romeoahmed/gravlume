@@ -130,19 +130,25 @@ fn near_critical_fixture_rejects_incomplete_or_contradictory_applicability() {
 }
 
 #[test]
-fn regular_schwarzschild_fixture_matches_the_independent_observables() {
+fn regular_schwarzschild_fixture_and_strict_refinement_meet_the_oracle() {
     let fixture = geodesic_fixture(SCATTER_B6);
-    let tracer = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1());
-    let outcome = tracer.trace(fixture.trace_request());
+    let regular = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
+        .trace(fixture.trace_request());
 
-    assert_eq!(outcome.termination(), Termination::Escape);
-    assert!(outcome.event().is_some_and(|event| {
+    assert_eq!(regular.termination(), Termination::Escape);
+    assert!(regular.event().is_some_and(|event| {
         event.bracket_width_m() <= ReferencePolicy::regular_v1().event_affine_tolerance_m()
             && event.normalized_residual() <= 5.0e-12
             && !event.is_ambiguous()
     }));
-    assert!(fixture.expected().accepts(&outcome));
-    assert!(outcome.diagnostics().maximum_null_residual() < 5.0e-9);
+    assert!(fixture.expected().accepts(&regular));
+    assert!(regular.diagnostics().maximum_null_residual() < 5.0e-9);
+    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
+        .trace(fixture.trace_request());
+    let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
+        .expect("policy roles and input identity match");
+
+    assert!(comparison.is_accepted(), "{:?}", comparison.issues());
 }
 
 #[test]
@@ -158,19 +164,6 @@ fn fixture_oracle_rejects_an_outcome_with_a_different_input_identity() {
     );
 
     assert!(!fixture.expected().accepts(&outcome));
-}
-
-#[test]
-fn regular_and_strict_outcomes_produce_a_passing_named_comparison_report() {
-    let fixture = geodesic_fixture(SCATTER_B6);
-    let regular = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::regular_v1())
-        .trace(fixture.trace_request());
-    let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
-        .trace(fixture.trace_request());
-    let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
-        .expect("policy roles and input identity match");
-
-    assert!(comparison.is_accepted(), "{:?}", comparison.issues());
 }
 
 #[test]
