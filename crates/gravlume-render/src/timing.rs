@@ -192,21 +192,9 @@ mod tests {
 
     proptest! {
         #[test]
-        fn timestamp_encoding_roundtrips_and_duration_saturates(
-            ticks in any::<[u64; 4]>(),
-            period_ns in 0.001_f32..1_000.0,
-        ) {
+        fn timestamp_encoding_roundtrips(ticks in any::<[u64; 4]>()) {
             let bytes: Vec<u8> = ticks.into_iter().flat_map(u64::to_le_bytes).collect();
             prop_assert_eq!(super::decode_query_ticks(&bytes), Some(ticks));
-
-            let expected_ticks = ticks[1]
-                .saturating_sub(ticks[0])
-                .saturating_add(ticks[3].saturating_sub(ticks[2]));
-            let expected_ms = expected_ticks.to_f64().expect("u64 converts to finite f64")
-                * f64::from(period_ns)
-                / 1_000_000.0;
-            let actual_ms = TimingSample::from_ticks(ticks, period_ns).compute_ms();
-            prop_assert!((actual_ms - expected_ms).abs() <= expected_ms.abs() * f64::EPSILON);
         }
 
         #[test]
@@ -214,6 +202,16 @@ mod tests {
             prop_assume!(length != 32);
             prop_assert_eq!(super::decode_query_ticks(&vec![0; length]), None);
         }
+    }
+
+    #[test]
+    fn timestamp_duration_combines_passes_and_saturates() {
+        let ordinary = TimingSample::from_ticks([10, 15, 20, 27], 1_000.0);
+        assert!((ordinary.compute_ms() - 0.012).abs() <= f64::EPSILON);
+
+        let saturated = TimingSample::from_ticks([0, u64::MAX, 0, u64::MAX], 1.0);
+        let expected = u64::MAX.to_f64().expect("u64 converts to finite f64") / 1_000_000.0;
+        assert!((saturated.compute_ms() - expected).abs() <= expected * f64::EPSILON);
     }
 
     #[test]

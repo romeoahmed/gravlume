@@ -13,6 +13,6 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_env_filter(filter)
         .try_init()?;
 
-    gravlume_desktop::run(gravlume_desktop::Launch::default())?;
+    gravlume_desktop::run()?;
     Ok(())
 }
