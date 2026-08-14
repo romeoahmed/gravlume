@@ -1,6 +1,7 @@
 use crate::{
     ReferenceOutcome, Termination, TraceInputId,
     policy::{REGULAR_V1_ID, STRICT_V1_ID},
+    surface::wrapped_angle_difference,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -34,9 +35,8 @@ pub enum ComparisonIssue {
     EscapeDirectionUnavailable,
     EscapeDirectionBudgetExceeded,
     TravelTimeBudgetExceeded,
-    SourceAnchorUnavailable,
+    SurfaceObservableUnavailable,
     SourceAnchorBudgetExceeded,
-    FrequencyRatioUnavailable,
     FrequencyRatioBudgetExceeded,
     NullDriftBudgetExceeded,
     EnergyDriftBudgetExceeded,
@@ -196,33 +196,35 @@ fn compare_diagnostics(
 ) {
     let baseline = baseline.diagnostics();
     let candidate = candidate.diagnostics();
-    if baseline
-        .maximum_null_residual()
-        .max(candidate.maximum_null_residual())
-        > 5.0e-9
-    {
-        issues.push(ComparisonIssue::NullDriftBudgetExceeded);
-    }
-    if baseline
-        .maximum_energy_drift()
-        .max(candidate.maximum_energy_drift())
-        > 5.0e-9
-    {
-        issues.push(ComparisonIssue::EnergyDriftBudgetExceeded);
-    }
-    if baseline
-        .maximum_angular_momentum_z_drift()
-        .max(candidate.maximum_angular_momentum_z_drift())
-        > 5.0e-9
-    {
-        issues.push(ComparisonIssue::AngularMomentumZDriftBudgetExceeded);
-    }
-    if baseline
-        .maximum_carter_drift()
-        .max(candidate.maximum_carter_drift())
-        > 5.0e-9
-    {
-        issues.push(ComparisonIssue::CarterDriftBudgetExceeded);
+    for (maximum_drift, issue) in [
+        (
+            baseline
+                .maximum_null_residual()
+                .max(candidate.maximum_null_residual()),
+            ComparisonIssue::NullDriftBudgetExceeded,
+        ),
+        (
+            baseline
+                .maximum_energy_drift()
+                .max(candidate.maximum_energy_drift()),
+            ComparisonIssue::EnergyDriftBudgetExceeded,
+        ),
+        (
+            baseline
+                .maximum_angular_momentum_z_drift()
+                .max(candidate.maximum_angular_momentum_z_drift()),
+            ComparisonIssue::AngularMomentumZDriftBudgetExceeded,
+        ),
+        (
+            baseline
+                .maximum_carter_drift()
+                .max(candidate.maximum_carter_drift()),
+            ComparisonIssue::CarterDriftBudgetExceeded,
+        ),
+    ] {
+        if maximum_drift > 5.0e-9 {
+            issues.push(issue);
+        }
     }
 }
 
@@ -231,50 +233,37 @@ fn compare_surface_observables(
     candidate: &ReferenceOutcome,
     issues: &mut Vec<ComparisonIssue>,
 ) -> (Option<f64>, Option<f64>) {
-    let Some(baseline_observable) = baseline.surface_observable() else {
-        issues.push(ComparisonIssue::SourceAnchorUnavailable);
-        issues.push(ComparisonIssue::FrequencyRatioUnavailable);
-        return (None, None);
-    };
-    let Some(candidate_observable) = candidate.surface_observable() else {
-        issues.push(ComparisonIssue::SourceAnchorUnavailable);
-        issues.push(ComparisonIssue::FrequencyRatioUnavailable);
+    let (Some(baseline_observable), Some(candidate_observable)) = (
+        baseline.surface_observable(),
+        candidate.surface_observable(),
+    ) else {
+        issues.push(ComparisonIssue::SurfaceObservableUnavailable);
         return (None, None);
     };
 
-    let source_anchor_distance_m = baseline_observable
-        .source_anchor()
-        .as_equatorial_surface()
-        .zip(candidate_observable.source_anchor().as_equatorial_surface())
-        .map(|(baseline, candidate)| {
-            let radial_difference = baseline.radius_m() - candidate.radius_m();
-            let azimuth_difference =
-                wrapped_angle_difference(baseline.azimuth_rad(), candidate.azimuth_rad());
-            let mean_radius = 0.5 * (baseline.radius_m() + candidate.radius_m());
-            radial_difference.hypot(mean_radius * azimuth_difference)
-        });
-    match source_anchor_distance_m {
-        Some(distance) if distance > 2.0e-9 => {
-            issues.push(ComparisonIssue::SourceAnchorBudgetExceeded);
-        }
-        None => issues.push(ComparisonIssue::SourceAnchorUnavailable),
-        Some(_) => {}
+    let baseline_anchor = baseline_observable.source_anchor();
+    let candidate_anchor = candidate_observable.source_anchor();
+    let radial_difference = baseline_anchor.radius_m() - candidate_anchor.radius_m();
+    let azimuth_difference = wrapped_angle_difference(
+        baseline_anchor.azimuth_rad(),
+        candidate_anchor.azimuth_rad(),
+    );
+    let mean_radius = 0.5 * (baseline_anchor.radius_m() + candidate_anchor.radius_m());
+    let source_anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
+    if source_anchor_distance_m > 2.0e-9 {
+        issues.push(ComparisonIssue::SourceAnchorBudgetExceeded);
     }
 
     let baseline_ratio = baseline_observable.frequency_ratio().value();
     let candidate_ratio = candidate_observable.frequency_ratio().value();
-    let frequency_ratio_relative_error =
-        Some((baseline_ratio - candidate_ratio).abs() / baseline_ratio);
-    if frequency_ratio_relative_error.is_some_and(|error| error > 2.0e-9) {
+    let frequency_ratio_relative_error = (baseline_ratio - candidate_ratio).abs() / baseline_ratio;
+    if frequency_ratio_relative_error > 2.0e-9 {
         issues.push(ComparisonIssue::FrequencyRatioBudgetExceeded);
     }
-    (source_anchor_distance_m, frequency_ratio_relative_error)
-}
-
-fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
-    use std::f64::consts::PI;
-
-    (left - right + PI).rem_euclid(2.0 * PI) - PI
+    (
+        Some(source_anchor_distance_m),
+        Some(frequency_ratio_relative_error),
+    )
 }
 
 const fn is_unsuccessful(termination: Termination) -> bool {
@@ -368,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_convergence_requires_source_and_frequency_observables() {
+    fn surface_convergence_requires_the_atomic_surface_observable() {
         let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
         baseline.termination = Termination::EquatorialSurface;
         baseline.escape_direction_xyz = None;
@@ -382,12 +371,7 @@ mod tests {
         assert!(
             comparison
                 .issues()
-                .contains(&ComparisonIssue::SourceAnchorUnavailable)
-        );
-        assert!(
-            comparison
-                .issues()
-                .contains(&ComparisonIssue::FrequencyRatioUnavailable)
+                .contains(&ComparisonIssue::SurfaceObservableUnavailable)
         );
     }
 

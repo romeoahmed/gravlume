@@ -30,13 +30,27 @@ impl ObservationTrace {
         policy: ReferencePolicy,
     ) -> Result<Self, ValidationReport> {
         let initial_ray = observation.initial_ray(sample)?;
-        Ok(Self {
+        Ok(Self::from_initial_ray(
             input_id,
-            spacetime: *observation.scene().spacetime(),
+            *observation.scene().spacetime(),
+            initial_ray,
+            policy,
+        ))
+    }
+
+    pub(crate) const fn from_initial_ray(
+        input_id: TraceInputId,
+        spacetime: KerrNewmanSpacetime,
+        initial_ray: InitialViewRay,
+        policy: ReferencePolicy,
+    ) -> Self {
+        Self {
+            input_id,
+            spacetime,
             initial_ray,
             policy,
             equatorial_circular_surface: None,
-        })
+        }
     }
 
     /// Requests the physical observables of the first hit on a prograde circular surface.

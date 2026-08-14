@@ -1,14 +1,15 @@
 mod v1;
 mod v2;
 
-use gravlume_domain::{
-    GeodesicState, ImageSample, KerrNewmanSpacetime, Observation, ValidationReport,
-};
-use serde::Deserialize;
+use std::fmt;
+
+use gravlume_domain::{GeodesicState, InitialViewRay, KerrNewmanSpacetime, Observation};
+use serde::{Deserialize, Deserializer, de};
 
 use crate::{
     AffineDirection, EquatorialCircularSurface, EventConfiguration, GeodesicTrace,
     ObservationTrace, ReferenceOutcome, ReferencePolicy, Termination, TraceInputId,
+    surface::wrapped_angle_difference,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
@@ -48,7 +49,7 @@ impl FixtureDocument {
     pub fn into_geodesic(self) -> Option<GeodesicFixture> {
         match self {
             Self::Geodesic(fixture) => Some(fixture),
-            Self::Observation(_) | Self::SurfaceObservation(_) => None,
+            _ => None,
         }
     }
 
@@ -56,7 +57,7 @@ impl FixtureDocument {
     pub fn into_observation(self) -> Option<ObservationFixture> {
         match self {
             Self::Observation(fixture) => Some(fixture),
-            Self::Geodesic(_) | Self::SurfaceObservation(_) => None,
+            _ => None,
         }
     }
 
@@ -64,7 +65,7 @@ impl FixtureDocument {
     pub fn into_surface_observation(self) -> Option<SurfaceObservationFixture> {
         match self {
             Self::SurfaceObservation(fixture) => Some(fixture),
-            Self::Observation(_) | Self::Geodesic(_) => None,
+            _ => None,
         }
     }
 }
@@ -72,6 +73,34 @@ impl FixtureDocument {
 #[derive(Deserialize)]
 struct FixtureVersion {
     schema_version: u32,
+}
+
+#[derive(PartialEq)]
+struct DecimalString {
+    source: String,
+    value: f64,
+}
+
+impl<'de> Deserialize<'de> for DecimalString {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let source = String::deserialize(deserializer)?;
+        let value = source
+            .parse::<f64>()
+            .map_err(|_| de::Error::custom("decimal string is not representable as f64"))?;
+        if !value.is_finite() || (value == 0.0 && source.trim_start().starts_with('-')) {
+            return Err(de::Error::custom(
+                "decimal string must be finite and must not encode negative zero",
+            ));
+        }
+        Ok(Self { source, value })
+    }
+}
+
+fn invalid_physical_data(error: impl fmt::Display) -> FixtureError {
+    FixtureError::InvalidPhysicalData(error.to_string())
 }
 
 #[derive(Clone, Debug)]
@@ -95,8 +124,8 @@ impl ObservationFixture {
 #[derive(Clone, Debug)]
 pub struct SurfaceObservationFixture {
     input_id: TraceInputId,
-    observation: Observation,
-    sample: ImageSample,
+    spacetime: KerrNewmanSpacetime,
+    initial_ray: InitialViewRay,
     surface: EquatorialCircularSurface,
     expected: ExpectedSurfaceOutcome,
 }
@@ -107,27 +136,23 @@ impl SurfaceObservationFixture {
         &self.input_id
     }
 
-    /// Builds the same physical trace under the selected numerical policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns a validation report if the stored sample no longer belongs to its observation.
-    pub fn trace_request(
-        &self,
-        policy: ReferencePolicy,
-    ) -> Result<ObservationTrace, ValidationReport> {
-        ObservationTrace::new(
+    /// Builds the same validated physical trace under the selected numerical policy.
+    #[must_use]
+    pub fn trace_request(&self, policy: ReferencePolicy) -> ObservationTrace {
+        ObservationTrace::from_initial_ray(
             self.input_id.clone(),
-            &self.observation,
-            self.sample,
+            self.spacetime,
+            self.initial_ray,
             policy,
         )
-        .map(|request| request.with_equatorial_circular_surface(self.surface))
+        .with_equatorial_circular_surface(self.surface)
     }
 
     #[must_use]
-    pub const fn expected(&self) -> &ExpectedSurfaceOutcome {
-        &self.expected
+    pub fn accepts(&self, outcome: &ReferenceOutcome) -> bool {
+        outcome.input_id() == &self.input_id
+            && outcome.termination() == Termination::EquatorialSurface
+            && self.expected.accepts(outcome)
     }
 }
 
@@ -219,9 +244,7 @@ impl ExpectedOutcome {
 }
 
 #[derive(Clone, Debug)]
-pub struct ExpectedSurfaceOutcome {
-    input_id: TraceInputId,
-    termination: Termination,
+struct ExpectedSurfaceOutcome {
     source_radius_m: f64,
     source_azimuth_rad: f64,
     frequency_ratio: f64,
@@ -237,21 +260,16 @@ pub struct ExpectedSurfaceOutcome {
 }
 
 impl ExpectedSurfaceOutcome {
-    #[must_use]
-    pub fn accepts(&self, outcome: &ReferenceOutcome) -> bool {
-        if outcome.input_id() != &self.input_id
-            || outcome.termination() != self.termination
-            || (outcome.travel_time_m() - self.travel_time_m).abs()
-                > self.travel_time_absolute_tolerance_m
+    fn accepts(&self, outcome: &ReferenceOutcome) -> bool {
+        if (outcome.travel_time_m() - self.travel_time_m).abs()
+            > self.travel_time_absolute_tolerance_m
         {
             return false;
         }
         let Some(observable) = outcome.surface_observable() else {
             return false;
         };
-        let Some(anchor) = observable.source_anchor().as_equatorial_surface() else {
-            return false;
-        };
+        let anchor = observable.source_anchor();
         let azimuth_error =
             wrapped_angle_difference(anchor.azimuth_rad(), self.source_azimuth_rad).abs();
         let ratio = observable.frequency_ratio().value();
@@ -263,7 +281,7 @@ impl ExpectedSurfaceOutcome {
         {
             return false;
         }
-        let emitted = self.intensity_at_six_m * (anchor.radius_m() / 6.0).powi(-3);
+        let emitted = inverse_cube_intensity(self.intensity_at_six_m, anchor.radius_m());
         let Ok(observed) = observable.vacuum_observed_bolometric_intensity(emitted) else {
             return false;
         };
@@ -274,10 +292,9 @@ impl ExpectedSurfaceOutcome {
     }
 }
 
-fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
-    use std::f64::consts::PI;
-
-    (left - right + PI).rem_euclid(2.0 * PI) - PI
+fn inverse_cube_intensity(intensity_at_six_m: f64, radius_m: f64) -> f64 {
+    let radius_ratio = radius_m / 6.0;
+    intensity_at_six_m / radius_ratio / radius_ratio / radius_ratio
 }
 
 #[derive(Debug, thiserror::Error)]

@@ -1,25 +1,24 @@
-use std::fmt;
+use serde::Deserialize;
 
-use serde::{Deserialize, Deserializer, de};
+use crate::{AffineDirection, EquatorialCircularSurface, EventConfiguration, TraceInputId};
 
-use crate::{
-    AffineDirection, EquatorialCircularSurface, EventConfiguration, Termination, TraceInputId,
+use super::{
+    DecimalString, ExpectedSurfaceOutcome, FixtureDocument, FixtureError,
+    SurfaceObservationFixture, invalid_physical_data, inverse_cube_intensity, v1,
 };
-
-use super::{ExpectedSurfaceOutcome, FixtureDocument, FixtureError, SurfaceObservationFixture, v1};
 
 const BASE_OBSERVATION: &str = include_str!("../../fixtures/v1/default-kerr-observation.toml");
 const SURFACE_OBSERVABLE: &str = include_str!("../../fixtures/v2/kerr-surface-observable.toml");
 
 pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     let raw: RawSurfaceFixture = toml::from_str(source)?;
+    validate_envelope(&raw)?;
     let canonical: RawSurfaceFixture = toml::from_str(SURFACE_OBSERVABLE)?;
     if raw != canonical {
         return Err(FixtureError::PresetMismatch {
             field: "surface artifact",
         });
     }
-    validate_envelope(&raw)?;
 
     let FixtureDocument::Observation(base) = v1::parse(BASE_OBSERVATION)? else {
         return Err(FixtureError::PresetMismatch {
@@ -49,18 +48,17 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     let initial_ray = observation
         .initial_ray(sample)
         .map_err(invalid_physical_data)?;
+    let spacetime = *observation.scene().spacetime();
     let events = EventConfiguration::observation_baseline_v1()
         .with_equatorial_surface(surface.inner_radius_m(), surface.outer_radius_m())
         .map_err(invalid_physical_data)?;
     let input_id = TraceInputId::new(raw.id).bind(
-        *observation.scene().spacetime(),
+        spacetime,
         initial_ray.state(),
         AffineDirection::Negative,
         events,
     );
     let expected = ExpectedSurfaceOutcome {
-        input_id: input_id.clone(),
-        termination: Termination::EquatorialSurface,
         source_radius_m: raw.expected.source_radius_m.value,
         source_azimuth_rad: raw.expected.source_azimuth_rad.value,
         frequency_ratio: raw.expected.frequency_ratio.value,
@@ -77,8 +75,8 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     Ok(FixtureDocument::SurfaceObservation(
         SurfaceObservationFixture {
             input_id,
-            observation,
-            sample,
+            spacetime,
+            initial_ray,
             surface,
             expected,
         },
@@ -92,17 +90,7 @@ fn validate_envelope(raw: &RawSurfaceFixture) -> Result<(), FixtureError> {
     if raw.profile != "surface-observable-v1" {
         return Err(FixtureError::UnsupportedProfile(raw.profile.clone()));
     }
-    if !matches!(raw.kind, FixtureKind::SurfaceObservation)
-        || !matches!(raw.evidence, Evidence::ReferenceConvergence)
-        || raw.producer.precision_bits != 53
-        || raw.producer.method.trim().is_empty()
-        || !matches!(raw.surface.rotation, Rotation::ProgradeCircular)
-        || !matches!(raw.emission.model, EmissionModel::InverseCubeBolometricV1)
-        || !matches!(
-            raw.expected.termination,
-            ExpectedTermination::EquatorialSurface
-        )
-    {
+    if raw.producer.precision_bits != 53 || raw.producer.method.trim().is_empty() {
         return Err(FixtureError::InconsistentApplicability);
     }
     Ok(())
@@ -114,7 +102,7 @@ fn validate_expected(
 ) -> Result<(), FixtureError> {
     let expected = &raw.expected;
     let tolerance = &raw.tolerance;
-    let values_are_positive = raw.emission.intensity_at_6m.value > 0.0
+    let values_are_in_domain = raw.emission.intensity_at_6m.value > 0.0
         && expected.frequency_ratio.value > 0.0
         && expected.travel_time_m.value > 0.0
         && expected.emitted_bolometric_intensity.value >= 0.0
@@ -124,15 +112,20 @@ fn validate_expected(
         && tolerance.frequency_ratio_rel.value > 0.0
         && tolerance.travel_time_abs_m.value > 0.0
         && tolerance.bolometric_intensity_abs.value > 0.0;
-    if !values_are_positive
+    if !values_are_in_domain
         || !(surface.inner_radius_m()..=surface.outer_radius_m())
             .contains(&expected.source_radius_m.value)
     {
         return Err(FixtureError::InconsistentExpectedObservables);
     }
-    let emitted =
-        raw.emission.intensity_at_6m.value * (expected.source_radius_m.value / 6.0).powi(-3);
-    let observed = expected.frequency_ratio.value.powi(4) * emitted;
+    let emitted = inverse_cube_intensity(
+        raw.emission.intensity_at_6m.value,
+        expected.source_radius_m.value,
+    );
+    let mut observed = emitted;
+    for _ in 0..4 {
+        observed *= expected.frequency_ratio.value;
+    }
     if (emitted - expected.emitted_bolometric_intensity.value).abs()
         > tolerance.bolometric_intensity_abs.value
         || (observed - expected.observed_bolometric_intensity.value).abs()
@@ -141,10 +134,6 @@ fn validate_expected(
         return Err(FixtureError::InconsistentExpectedObservables);
     }
     Ok(())
-}
-
-fn invalid_physical_data(error: impl fmt::Display) -> FixtureError {
-    FixtureError::InvalidPhysicalData(error.to_string())
 }
 
 #[derive(Deserialize, PartialEq)]
@@ -244,28 +233,4 @@ enum EmissionModel {
 #[serde(rename_all = "kebab-case")]
 enum ExpectedTermination {
     EquatorialSurface,
-}
-
-#[derive(Clone, PartialEq)]
-struct DecimalString {
-    source: String,
-    value: f64,
-}
-
-impl<'de> Deserialize<'de> for DecimalString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let source = String::deserialize(deserializer)?;
-        let value = source
-            .parse::<f64>()
-            .map_err(|_| de::Error::custom("decimal string is not representable as f64"))?;
-        if !value.is_finite() || (value == 0.0 && source.trim_start().starts_with('-')) {
-            return Err(de::Error::custom(
-                "decimal string must be finite and must not encode negative zero",
-            ));
-        }
-        Ok(Self { source, value })
-    }
 }

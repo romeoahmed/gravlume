@@ -1,4 +1,4 @@
-use std::f64::consts::PI;
+use std::f64::consts::{PI, TAU};
 
 use gravlume_domain::{GeodesicState, GeometryError, KerrNewmanSpacetime, KerrSchildChart};
 
@@ -55,26 +55,29 @@ impl EquatorialCircularSurface {
             return Err(SurfaceObservableError::HitOutsideConfiguredSurface);
         }
 
-        let charge_squared = spacetime.charge_m() * spacetime.charge_m();
-        let circular_root_squared = spacetime.mass_m().mul_add(radius_m, -charge_squared);
+        let mass_m = spacetime.mass_m();
+        let spin_m = spacetime.spin_m();
+        let charge_m = spacetime.charge_m();
+        let charge_squared = charge_m * charge_m;
+        let circular_root_squared = mass_m.mul_add(radius_m, -charge_squared);
         if !circular_root_squared.is_finite() || circular_root_squared < 0.0 {
             return Err(SurfaceObservableError::CircularOrbitUnavailable);
         }
         let circular_root = circular_root_squared.sqrt();
-        let branch_sign = if spacetime.spin_m() < 0.0 { -1.0 } else { 1.0 };
+        let branch_sign = if spin_m < 0.0 { -1.0 } else { 1.0 };
         let radius_squared = radius_m * radius_m;
         let angular_velocity_denominator =
-            (branch_sign * spacetime.spin_m()).mul_add(circular_root, radius_squared);
+            (branch_sign * spin_m).mul_add(circular_root, radius_squared);
         if !angular_velocity_denominator.is_finite() || angular_velocity_denominator <= 0.0 {
             return Err(SurfaceObservableError::CircularOrbitUnavailable);
         }
         let angular_velocity = branch_sign * circular_root / angular_velocity_denominator;
 
-        let radial_numerator = (2.0 * spacetime.mass_m()).mul_add(radius_m, -charge_squared);
-        let spin_squared = spacetime.spin_m() * spacetime.spin_m();
-        let timelike_discriminant = (-3.0 * spacetime.mass_m()).mul_add(
+        let radial_numerator = (2.0 * mass_m).mul_add(radius_m, -charge_squared);
+        let spin_squared = spin_m * spin_m;
+        let timelike_discriminant = (-3.0 * mass_m).mul_add(
             radius_m,
-            (2.0 * branch_sign * spacetime.spin_m()).mul_add(
+            (2.0 * branch_sign * spin_m).mul_add(
                 circular_root,
                 2.0_f64.mul_add(charge_squared, radius_squared),
             ),
@@ -84,10 +87,10 @@ impl EquatorialCircularSurface {
         }
         let delta = radius_squared.mul_add(
             1.0,
-            (2.0 * spacetime.mass_m()).mul_add(-radius_m, spin_squared + charge_squared),
+            (2.0 * mass_m).mul_add(-radius_m, spin_squared + charge_squared),
         );
         let g_tt = -1.0 + radial_numerator / radius_squared;
-        let g_t_phi = -radial_numerator * spacetime.spin_m() / radius_squared;
+        let g_t_phi = -radial_numerator * spin_m / radius_squared;
         let radial_factor = radius_squared + spin_squared;
         let g_phi_phi =
             radial_factor.mul_add(radial_factor, -spin_squared * delta) / radius_squared;
@@ -114,22 +117,18 @@ impl EquatorialCircularSurface {
             return Err(SurfaceObservableError::NonRepresentableFrequencyRatio);
         }
 
-        let event = state.event().to_txyz();
+        let [_, x, y, _] = state.event().to_txyz();
         let chart_spin = match spacetime.chart() {
-            KerrSchildChart::Ingoing => spacetime.spin_m(),
-            KerrSchildChart::Outgoing => -spacetime.spin_m(),
+            KerrSchildChart::Ingoing => spin_m,
+            KerrSchildChart::Outgoing => -spin_m,
         };
-        let cartesian_azimuth = event[2].atan2(event[1]);
-        let azimuth_rad = wrap_angle(cartesian_azimuth - chart_spin.atan2(radius_m));
-        if !azimuth_rad.is_finite() {
-            return Err(SurfaceObservableError::NonRepresentableSourceAnchor);
-        }
+        let azimuth_rad = wrapped_angle_difference(y.atan2(x), chart_spin.atan2(radius_m));
 
         Ok(SurfaceObservable {
-            source_anchor: SourceAnchor::EquatorialSurface(EquatorialSurfaceAnchor {
+            source_anchor: SourceAnchor {
                 radius_m,
                 azimuth_rad,
-            }),
+            },
             frequency_ratio: FrequencyRatio(frequency_ratio),
         })
     }
@@ -142,27 +141,12 @@ pub enum SurfaceConfigurationError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum SourceAnchor {
-    EquatorialSurface(EquatorialSurfaceAnchor),
-}
-
-impl SourceAnchor {
-    #[must_use]
-    pub const fn as_equatorial_surface(self) -> Option<EquatorialSurfaceAnchor> {
-        match self {
-            Self::EquatorialSurface(anchor) => Some(anchor),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct EquatorialSurfaceAnchor {
+pub struct SourceAnchor {
     radius_m: f64,
     azimuth_rad: f64,
 }
 
-impl EquatorialSurfaceAnchor {
+impl SourceAnchor {
     #[must_use]
     pub const fn radius_m(self) -> f64 {
         self.radius_m
@@ -210,9 +194,9 @@ impl SurfaceObservable {
     pub fn vacuum_observed_bolometric_intensity(
         self,
         emitted_bolometric_intensity: f64,
-    ) -> Result<f64, SurfaceObservableError> {
+    ) -> Result<f64, BolometricTransportError> {
         if !emitted_bolometric_intensity.is_finite() || emitted_bolometric_intensity < 0.0 {
-            return Err(SurfaceObservableError::InvalidEmittedBolometricIntensity);
+            return Err(BolometricTransportError::InvalidEmittedIntensity);
         }
         // Starting from intensity avoids an out-of-range g^4 when the final product is finite.
         let mut observed = emitted_bolometric_intensity;
@@ -222,9 +206,17 @@ impl SurfaceObservable {
         if observed.is_finite() && observed >= 0.0 {
             Ok(observed)
         } else {
-            Err(SurfaceObservableError::NonRepresentableObservedIntensity)
+            Err(BolometricTransportError::NonRepresentableObservedIntensity)
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum BolometricTransportError {
+    #[error("emitted bolometric intensity must be finite and non-negative")]
+    InvalidEmittedIntensity,
+    #[error("observed bolometric intensity is not representable")]
+    NonRepresentableObservedIntensity,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -243,16 +235,10 @@ pub enum SurfaceObservableError {
     InvalidObserverFrequency,
     #[error("the observer-to-emitter frequency ratio is not representable")]
     NonRepresentableFrequencyRatio,
-    #[error("the source anchor is not representable")]
-    NonRepresentableSourceAnchor,
-    #[error("emitted bolometric intensity must be finite and non-negative")]
-    InvalidEmittedBolometricIntensity,
-    #[error("observed bolometric intensity is not representable")]
-    NonRepresentableObservedIntensity,
 }
 
-fn wrap_angle(angle: f64) -> f64 {
-    (angle + PI).rem_euclid(2.0 * PI) - PI
+pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
+    (left - right + PI).rem_euclid(TAU) - PI
 }
 
 #[cfg(test)]
@@ -260,8 +246,8 @@ mod tests {
     use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 
     use super::{
-        EquatorialCircularSurface, EquatorialSurfaceAnchor, FrequencyRatio, SourceAnchor,
-        SurfaceObservable, SurfaceObservableError, wrap_angle,
+        EquatorialCircularSurface, FrequencyRatio, SourceAnchor, SurfaceObservable,
+        SurfaceObservableError, wrapped_angle_difference,
     };
 
     #[test]
@@ -297,14 +283,12 @@ mod tests {
                 .expect("surface is valid")
                 .observable_at(spacetime, state, 1.0)
                 .expect("the source orbit is timelike");
-            let anchor = observable
-                .source_anchor()
-                .as_equatorial_surface()
-                .expect("source is equatorial");
+            let anchor = observable.source_anchor();
 
             assert!((anchor.radius_m() - radius_m).abs() <= 8.0 * f64::EPSILON);
             assert!(
-                wrap_angle(anchor.azimuth_rad() - expected_azimuth).abs() <= 8.0 * f64::EPSILON
+                wrapped_angle_difference(anchor.azimuth_rad(), expected_azimuth).abs()
+                    <= 8.0 * f64::EPSILON
             );
         }
     }
@@ -331,10 +315,10 @@ mod tests {
             (1.0e100, 0.0, 0.0),
         ] {
             let observable = SurfaceObservable {
-                source_anchor: SourceAnchor::EquatorialSurface(EquatorialSurfaceAnchor {
+                source_anchor: SourceAnchor {
                     radius_m: 6.0,
                     azimuth_rad: 0.0,
-                }),
+                },
                 frequency_ratio: FrequencyRatio(frequency_ratio),
             };
 
