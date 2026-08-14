@@ -5,6 +5,7 @@
 ## 已建立的基础
 
 - validated domain 与独立 CPU `f64` reference；
+- CPU equatorial circular surface 的 Source Anchor、Frequency Ratio 与 vacuum bolometric fixture；
 - native winit/egui/wgpu 生命周期；
 - Metal/Vulkan Cartesian Kerr–Schild GPU trace；
 - escape-direction map、interval radial capture 与完整 KS fallback；

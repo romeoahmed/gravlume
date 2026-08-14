@@ -496,7 +496,21 @@ I_{\rm out}=I_{\rm in}e^{-\Delta\tau}
 {r^2\pm a\sqrt{Mr-q_e^2}}.
 \]
 
-必要条件 $Mr\ge q_e^2$，但还必须验证轨道存在、timelike 且位于所选 branch。对
+prograde branch 定义 $s_p=+1$（$a\ge0$）或 $s_p=-1$（$a<0$）；$a=0$ 选择正方位约定。实现使用
+
+\[
+\Omega_p=
+\frac{s_p\sqrt{Mr-q_e^2}}
+{r^2+s_p a\sqrt{Mr-q_e^2}}.
+\]
+
+必要条件 $Mr\ge q_e^2$，但还必须验证轨道存在、timelike 且位于所选 branch。先检查
+
+\[
+D_p=r^2-3Mr+2q_e^2+2s_p a\sqrt{Mr-q_e^2}>0,
+\]
+
+再独立检查四速度归一化；$D_p=0$ 是 null circular limit，不能因浮点消减留下微小负 norm 而误接受。对
 
 \[
 u^\mu=u^t(\partial_t+\Omega\partial_\phi),
@@ -510,6 +524,15 @@ u^t=\left[-(g_{tt}+2\Omega g_{t\phi}
 \]
 
 根式非正时必须返回“不存在该 timelike orbit”，不能 clamp 后继续当物理解。
+
+静态 equatorial source 的 canonical Source Anchor 是所选 Kerr–Schild chart 的 $(r,\phi_s)$。按第 2.2 节的 map，
+
+\[
+\phi_s=\operatorname{wrap}_{[-\pi,\pi)}
+\left[\operatorname{atan2}(y,x)-\operatorname{atan2}(s\,a,r)\right],
+\]
+
+其中 $s=+1$ 为 ingoing、$s=-1$ 为 outgoing。terminal Cartesian event 仍保留；anchor 不以 $\operatorname{atan2}(y,x)$ 冒充 oblate azimuth。
 
 dimensionless $x=r/M,\alpha=a/M,q=q_e/M$ 的一个 circular specific-energy branch：
 

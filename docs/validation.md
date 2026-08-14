@@ -142,9 +142,9 @@ g_{tt}=-0.933345183078563810878066121578.
 
 当前 GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱；方向主轴与不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
 
-### 3.2 Transport add-on
+### 3.2 Surface-observable add-on
 
-future transport 增加 equatorial surface：
+reference surface fixture 增加 equatorial surface：
 
 - $r\in[6M,20M]$，prograde circular emitter；
 - comoving bolometric intensity $I_{\rm em}(r)=I_0(r/6M)^{-3}$；
@@ -152,6 +152,8 @@ future transport 增加 equatorial surface：
 - observed bolometric intensity $I_{\rm obs}=g^4I_{\rm em}$。
 
 这是规定的 surface-radiance fixture，不声称 Novikov–Thorne/Page–Thorne accretion physics。blackbody/spectral LUT 是另一 fixture；不得为让默认图更漂亮而改变这一合同。
+
+版本化 artifact 位于 [`fixtures/v2/kerr-surface-observable.toml`](../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)，引用 v1 canonical Observation 而不复制 scene 参数。它固定 source request、image sample、emission profile、strict expected observable 与 tolerance；v1 schema/profile 不原地扩展。当前该 artifact 只证明 CPU regular/strict reference 闭环，不能当作 GPU transport 已实现的证据。
 
 ## 4. Reference Policy
 
@@ -209,6 +211,14 @@ regular fixture 的 baseline/strict comparison 必须满足：
 | normalized null/$E$/$L_z$/$\mathcal Q$ drift |         each `5e-9` |
 
 escape direction 是 localized escape state 上 Hamilton RHS 空间分量按实际 affine traversal 符号取向后的单位 coordinate direction；它不是 terminal position 的径向单位向量。方向无法求值时 comparison 失败，不能省略该 gate。
+
+equatorial Source Anchor 以数学物理合同定义的 $(r,\phi_s)$ 比较。surface-coordinate distance 固定为
+
+\[
+\operatorname{hypot}\!\left(\Delta r,\frac{r_1+r_2}{2}\operatorname{wrap}(\Delta\phi_s)\right),
+\]
+
+并使用上表的 `2e-9 M` gate；任一 surface outcome 缺少 anchor 或 Frequency Ratio 时 comparison 失败，不能把 `None/None` 当作一致。
 
 near-critical fixture 不套一个全局 angle tolerance。它必须给成对的 escape/capture 或两侧 branch 样本、distance-to-critical 标签和独立高精度 observable；discrete classification 必须正确，continuous tolerance 由 fixture 自身给出。
 

@@ -34,6 +34,10 @@ pub enum ComparisonIssue {
     EscapeDirectionUnavailable,
     EscapeDirectionBudgetExceeded,
     TravelTimeBudgetExceeded,
+    SourceAnchorUnavailable,
+    SourceAnchorBudgetExceeded,
+    FrequencyRatioUnavailable,
+    FrequencyRatioBudgetExceeded,
     NullDriftBudgetExceeded,
     EnergyDriftBudgetExceeded,
     AngularMomentumZDriftBudgetExceeded,
@@ -47,6 +51,8 @@ pub struct ReferenceComparison {
     event_position_distance_m: Option<f64>,
     escape_direction_angle_rad: Option<f64>,
     travel_time_difference_m: f64,
+    source_anchor_distance_m: Option<f64>,
+    frequency_ratio_relative_error: Option<f64>,
     issues: Vec<ComparisonIssue>,
 }
 
@@ -116,42 +122,23 @@ impl ReferenceComparison {
         if travel_time_difference_m > 2.0e-8 {
             issues.push(ComparisonIssue::TravelTimeBudgetExceeded);
         }
-        let baseline_diagnostics = baseline.diagnostics();
-        let candidate_diagnostics = candidate.diagnostics();
-        if baseline_diagnostics
-            .maximum_null_residual()
-            .max(candidate_diagnostics.maximum_null_residual())
-            > 5.0e-9
+        let (source_anchor_distance_m, frequency_ratio_relative_error) = if baseline.termination()
+            == Termination::EquatorialSurface
+            && candidate.termination() == Termination::EquatorialSurface
         {
-            issues.push(ComparisonIssue::NullDriftBudgetExceeded);
-        }
-        if baseline_diagnostics
-            .maximum_energy_drift()
-            .max(candidate_diagnostics.maximum_energy_drift())
-            > 5.0e-9
-        {
-            issues.push(ComparisonIssue::EnergyDriftBudgetExceeded);
-        }
-        if baseline_diagnostics
-            .maximum_angular_momentum_z_drift()
-            .max(candidate_diagnostics.maximum_angular_momentum_z_drift())
-            > 5.0e-9
-        {
-            issues.push(ComparisonIssue::AngularMomentumZDriftBudgetExceeded);
-        }
-        if baseline_diagnostics
-            .maximum_carter_drift()
-            .max(candidate_diagnostics.maximum_carter_drift())
-            > 5.0e-9
-        {
-            issues.push(ComparisonIssue::CarterDriftBudgetExceeded);
-        }
+            compare_surface_observables(baseline, candidate, &mut issues)
+        } else {
+            (None, None)
+        };
+        compare_diagnostics(baseline, candidate, &mut issues);
         Ok(Self {
             baseline_policy: baseline.policy_id(),
             candidate_policy: candidate.policy_id(),
             event_position_distance_m,
             escape_direction_angle_rad,
             travel_time_difference_m,
+            source_anchor_distance_m,
+            frequency_ratio_relative_error,
             issues,
         })
     }
@@ -182,6 +169,16 @@ impl ReferenceComparison {
     }
 
     #[must_use]
+    pub const fn source_anchor_distance_m(&self) -> Option<f64> {
+        self.source_anchor_distance_m
+    }
+
+    #[must_use]
+    pub const fn frequency_ratio_relative_error(&self) -> Option<f64> {
+        self.frequency_ratio_relative_error
+    }
+
+    #[must_use]
     pub fn issues(&self) -> &[ComparisonIssue] {
         &self.issues
     }
@@ -190,6 +187,94 @@ impl ReferenceComparison {
     pub const fn is_accepted(&self) -> bool {
         self.issues.is_empty()
     }
+}
+
+fn compare_diagnostics(
+    baseline: &ReferenceOutcome,
+    candidate: &ReferenceOutcome,
+    issues: &mut Vec<ComparisonIssue>,
+) {
+    let baseline = baseline.diagnostics();
+    let candidate = candidate.diagnostics();
+    if baseline
+        .maximum_null_residual()
+        .max(candidate.maximum_null_residual())
+        > 5.0e-9
+    {
+        issues.push(ComparisonIssue::NullDriftBudgetExceeded);
+    }
+    if baseline
+        .maximum_energy_drift()
+        .max(candidate.maximum_energy_drift())
+        > 5.0e-9
+    {
+        issues.push(ComparisonIssue::EnergyDriftBudgetExceeded);
+    }
+    if baseline
+        .maximum_angular_momentum_z_drift()
+        .max(candidate.maximum_angular_momentum_z_drift())
+        > 5.0e-9
+    {
+        issues.push(ComparisonIssue::AngularMomentumZDriftBudgetExceeded);
+    }
+    if baseline
+        .maximum_carter_drift()
+        .max(candidate.maximum_carter_drift())
+        > 5.0e-9
+    {
+        issues.push(ComparisonIssue::CarterDriftBudgetExceeded);
+    }
+}
+
+fn compare_surface_observables(
+    baseline: &ReferenceOutcome,
+    candidate: &ReferenceOutcome,
+    issues: &mut Vec<ComparisonIssue>,
+) -> (Option<f64>, Option<f64>) {
+    let Some(baseline_observable) = baseline.surface_observable() else {
+        issues.push(ComparisonIssue::SourceAnchorUnavailable);
+        issues.push(ComparisonIssue::FrequencyRatioUnavailable);
+        return (None, None);
+    };
+    let Some(candidate_observable) = candidate.surface_observable() else {
+        issues.push(ComparisonIssue::SourceAnchorUnavailable);
+        issues.push(ComparisonIssue::FrequencyRatioUnavailable);
+        return (None, None);
+    };
+
+    let source_anchor_distance_m = baseline_observable
+        .source_anchor()
+        .as_equatorial_surface()
+        .zip(candidate_observable.source_anchor().as_equatorial_surface())
+        .map(|(baseline, candidate)| {
+            let radial_difference = baseline.radius_m() - candidate.radius_m();
+            let azimuth_difference =
+                wrapped_angle_difference(baseline.azimuth_rad(), candidate.azimuth_rad());
+            let mean_radius = 0.5 * (baseline.radius_m() + candidate.radius_m());
+            radial_difference.hypot(mean_radius * azimuth_difference)
+        });
+    match source_anchor_distance_m {
+        Some(distance) if distance > 2.0e-9 => {
+            issues.push(ComparisonIssue::SourceAnchorBudgetExceeded);
+        }
+        None => issues.push(ComparisonIssue::SourceAnchorUnavailable),
+        Some(_) => {}
+    }
+
+    let baseline_ratio = baseline_observable.frequency_ratio().value();
+    let candidate_ratio = candidate_observable.frequency_ratio().value();
+    let frequency_ratio_relative_error =
+        Some((baseline_ratio - candidate_ratio).abs() / baseline_ratio);
+    if frequency_ratio_relative_error.is_some_and(|error| error > 2.0e-9) {
+        issues.push(ComparisonIssue::FrequencyRatioBudgetExceeded);
+    }
+    (source_anchor_distance_m, frequency_ratio_relative_error)
+}
+
+fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
+    use std::f64::consts::PI;
+
+    (left - right + PI).rem_euclid(2.0 * PI) - PI
 }
 
 const fn is_unsuccessful(termination: Termination) -> bool {
@@ -282,6 +367,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn surface_convergence_requires_source_and_frequency_observables() {
+        let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
+        baseline.termination = Termination::EquatorialSurface;
+        baseline.escape_direction_xyz = None;
+        let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
+        candidate.termination = Termination::EquatorialSurface;
+        candidate.escape_direction_xyz = None;
+
+        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+            .expect("policy roles and input identity match");
+
+        assert!(
+            comparison
+                .issues()
+                .contains(&ComparisonIssue::SourceAnchorUnavailable)
+        );
+        assert!(
+            comparison
+                .issues()
+                .contains(&ComparisonIssue::FrequencyRatioUnavailable)
+        );
+    }
+
     fn escape_outcome(policy_id: &'static str, spatial_momentum: [f64; 3]) -> ReferenceOutcome {
         ReferenceOutcome {
             input_id: TraceInputId::new("same-input"),
@@ -303,6 +412,7 @@ mod tests {
             turning_radius_m: None,
             azimuth_advance_rad: 0.0,
             travel_time_m: 1.0,
+            surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: 1,
                 rejected_steps: 0,

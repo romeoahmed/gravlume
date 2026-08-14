@@ -411,6 +411,7 @@ impl<'tracer> TraceExecution<'tracer> {
             azimuth_advance_rad: self.azimuth_advance_rad,
             travel_time_m: self.request.affine_direction.sign()
                 * self.coordinate_time_delta_m.total(),
+            surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: self.accepted_steps,
                 rejected_steps: self.rejected_steps,

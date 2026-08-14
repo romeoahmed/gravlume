@@ -44,10 +44,12 @@ Observation + ImageSample -> InitialViewRay
 
 Reference 保留两个有意不同的接口：
 
-- `ObservationTracer`：从 validated `Observation` 构造规范化 backward trace；
+- `ObservationTracer`：从 validated `Observation` 构造规范化 backward trace；`ObservationTrace::with_equatorial_circular_surface` 显式请求第一个 surface hit 的 Source Anchor、Frequency Ratio 与 vacuum bolometric observable；
 - `GeodesicTracer`：fixture、收敛研究和批处理使用 canonical state。
 
-输入或配置错误返回 typed `Err`；数值失败、步数耗尽与 non-convergence 是 `ReferenceOutcome`，不是 panic。CPU 与 WGSL 保持独立计算图，避免同一个符号错误同时污染 oracle 和被测对象。
+`GeodesicTracer` 不猜测 canonical state 的 observer frequency，也不把所有 equatorial event 解释成 emitter。source request 只在能够证明 $M=\omega_{\rm obs}=1$ 的 Observation seam 安装；未请求 surface 时现有 sky outcome 不携带 source observable。
+
+输入或配置错误、无 timelike circular emitter 与非法 radiance 返回 typed `Err`；数值失败、步数耗尽与 non-convergence 是 `ReferenceOutcome`，不是 panic。CPU 与 WGSL 保持独立计算图，避免同一个符号错误同时污染 oracle 和被测对象。
 
 ## Renderer interface
 

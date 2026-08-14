@@ -11,12 +11,14 @@ mod integrator;
 mod observation;
 mod outcome;
 mod policy;
+mod surface;
 
 pub use batch::{GeodesicBatch, GeodesicBatchError};
 pub use comparison::{ComparisonError, ComparisonIssue, ReferenceComparison};
 pub use events::{EventConfiguration, EventConfigurationError, EventKind};
 pub use fixture::{
-    ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture,
+    ExpectedOutcome, ExpectedSurfaceOutcome, FixtureDocument, FixtureError, GeodesicFixture,
+    ObservationFixture, SurfaceObservationFixture,
 };
 pub use geodesic::{GeodesicConfigurationError, GeodesicTracer};
 pub use observation::{ObservationTrace, ObservationTraceError, ObservationTracer};
@@ -25,3 +27,7 @@ pub use outcome::{
     Termination, TraceDiagnostics, TraceInputId,
 };
 pub use policy::ReferencePolicy;
+pub use surface::{
+    EquatorialCircularSurface, EquatorialSurfaceAnchor, FrequencyRatio, SourceAnchor,
+    SurfaceConfigurationError, SurfaceObservable, SurfaceObservableError,
+};

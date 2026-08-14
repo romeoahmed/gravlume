@@ -12,9 +12,9 @@
 | parameters  | 对实际 binary64 bit pattern 精确判定 extremality；axis geometry 使用解析极限                                                  |
 | integration | 七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差                                                  |
 | events      | accepted-step quartic dense output；只在 bracket 内定位 horizon、escape、equatorial surface 与 singularity guard              |
-| outcomes    | typed terminal、counters、step range、event bracket/residual、invariant drift、turning radius、travel time 与 azimuth advance |
-| fixtures    | 严格 v1 TOML、1 MiB 上限、unknown-field rejection、版本化 identity/profile 与高精度十进制字符串                               |
-| comparison  | 先验证 input/profile identity，再比较 regular/strict observable；配置错误与数值 issue 分离                                    |
+| outcomes    | typed terminal、event/invariant diagnostics、turning/travel/azimuth；surface request 另含 typed Source Anchor 与 Frequency Ratio |
+| fixtures    | 严格 v1/v2 TOML、1 MiB 上限、unknown-field rejection、版本化 identity/profile 与十进制字符串                                 |
+| comparison  | 先验证 input/profile identity，再比较 regular/strict terminal、event、source、frequency、time 与 invariant observable         |
 | batch       | 有界专用 Rayon pool；单轨迹顺序确定，输出保持 input order                                                                     |
 
 Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinate duration 从 dense/local step increment 累计，不由两个绝对时间相减。step/reject exhaustion 和 numerical failure 不伪装成物理 terminal。
@@ -30,8 +30,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - regular/strict identity、termination、event position、escape direction、travel time 与 invariant drift gates；
 - horizon、escape、equatorial surface、singularity guard、step exhaustion 与 same-step ambiguity；
 - 默认 Kerr Observation 的非临界收敛、negative-affine turning localization 与 batch ordering。
+- v2 equatorial prograde circular source 的 KS chart anchor 逆变换、timelike allowed domain、regular/strict Frequency Ratio、travel time 与 $g^4I_{\rm em}$。
 
-这些测试不需要 GPU。fixture producer、80 位 observable 和 tolerance 由 [`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/) 保存。
+这些测试不需要 GPU。几何/Observation 基线由 [`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/) 保存；surface-observable convergence artifact 由 [`fixtures/v2`](../crates/gravlume-reference/fixtures/v2/) 保存，且不修改 v1 schema 含义。
 
 ## 适用域
 
@@ -39,7 +40,8 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - published Kerr/Kerr–Newman trajectory、独立 chart/state representation、near-axis Killing-tensor overlap 与更广参数扫描尚未闭合；
 - finite escape sphere 是数值边界，不能解释为无穷远精确 observable；
 - renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
-- near-critical GPU agreement、source anchor、frequency ratio 与 transport 仍属于后续证据。
+- CPU surface 证据目前只有一个默认 Kerr image sample；更广 Kerr–Newman 参数、retrograde、multi-crossing 与独立高精度 trajectory oracle 尚未闭合；
+- near-critical GPU agreement、GPU source anchor/frequency ratio 与 production transport 仍属于后续证据。
 
 历史 raw-radius/reciprocal-radius `f32` 条件性实验已移入[研究记录](research/mino-step-selection.md)，不属于 reference fixture 合同。
 

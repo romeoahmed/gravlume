@@ -3,8 +3,9 @@ use gravlume_domain::{
 };
 
 use crate::{
-    AffineDirection, EventConfiguration, GeodesicTrace, GeodesicTracer, ReferenceOutcome,
-    ReferencePolicy, TraceInputId,
+    AffineDirection, EquatorialCircularSurface, EventConfiguration, EventConfigurationError,
+    GeodesicTrace, GeodesicTracer, ReferenceOutcome, ReferencePolicy, SurfaceObservableError,
+    Termination, TraceInputId,
 };
 
 #[derive(Clone, Debug)]
@@ -13,6 +14,7 @@ pub struct ObservationTrace {
     spacetime: KerrNewmanSpacetime,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
+    equatorial_circular_surface: Option<EquatorialCircularSurface>,
 }
 
 impl ObservationTrace {
@@ -33,7 +35,18 @@ impl ObservationTrace {
             spacetime: *observation.scene().spacetime(),
             initial_ray,
             policy,
+            equatorial_circular_surface: None,
         })
+    }
+
+    /// Requests the physical observables of the first hit on a prograde circular surface.
+    #[must_use]
+    pub const fn with_equatorial_circular_surface(
+        mut self,
+        surface: EquatorialCircularSurface,
+    ) -> Self {
+        self.equatorial_circular_surface = Some(surface);
+        self
     }
 }
 
@@ -63,21 +76,31 @@ impl ObservationTracer {
             spacetime,
             initial_ray,
             policy,
+            equatorial_circular_surface,
         } = request;
         if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
             return Err(ObservationTraceError::NonNormalizedReferenceInput);
         }
-        let tracer = GeodesicTracer::new(
-            spacetime,
-            policy,
-            EventConfiguration::observation_baseline_v1(),
-        )
-        .map_err(|_| ObservationTraceError::NonNormalizedReferenceInput)?;
-        Ok(tracer.trace(GeodesicTrace::new(
+        let mut events = EventConfiguration::observation_baseline_v1();
+        if let Some(surface) = equatorial_circular_surface {
+            events = events
+                .with_equatorial_surface(surface.inner_radius_m(), surface.outer_radius_m())?;
+        }
+        let tracer = GeodesicTracer::new(spacetime, policy, events)
+            .map_err(|_| ObservationTraceError::NonNormalizedReferenceInput)?;
+        let observer_frequency = initial_ray.observer_frequency();
+        let mut outcome = tracer.trace(GeodesicTrace::new(
             input_id,
             initial_ray.state(),
             AffineDirection::Negative,
-        )))
+        ));
+        if let Some(surface) = equatorial_circular_surface
+            && outcome.termination() == Termination::EquatorialSurface
+        {
+            outcome.surface_observable =
+                Some(surface.observable_at(spacetime, outcome.state(), observer_frequency)?);
+        }
+        Ok(outcome)
     }
 }
 
@@ -85,4 +108,8 @@ impl ObservationTracer {
 pub enum ObservationTraceError {
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
+    #[error(transparent)]
+    EventConfiguration(#[from] EventConfigurationError),
+    #[error(transparent)]
+    SurfaceObservable(#[from] SurfaceObservableError),
 }

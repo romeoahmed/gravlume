@@ -1,0 +1,40 @@
+schema_version = 2
+profile = "surface-observable-v1"
+id = "kerr-equatorial-surface-observable-v1"
+kind = "surface-observation"
+evidence = "reference-convergence"
+base_observation_id = "kerr-exterior-observation-v1"
+
+[producer]
+method = "reference-strict-v1 with independent closed-form circular-emitter observables"
+precision_bits = 53
+
+[sample]
+x = 640
+y = 16
+subpixel = ["0.5", "0.5"]
+
+[surface]
+inner_radius_m = "6"
+outer_radius_m = "20"
+rotation = "prograde-circular"
+
+[emission]
+model = "inverse-cube-bolometric-v1"
+intensity_at_6m = "1"
+
+[expected]
+termination = "equatorial-surface"
+source_radius_m = "19.6506789846041094"
+source_azimuth_rad = "3.08715626242367058"
+frequency_ratio = "0.953264138194626409"
+travel_time_m = "54.9024742476313605"
+emitted_bolometric_intensity = "0.0284656475672362998"
+observed_bolometric_intensity = "0.0235057486961945464"
+
+[tolerance]
+source_coordinate_abs_m = "2e-9"
+source_azimuth_abs_rad = "1e-10"
+frequency_ratio_rel = "2e-9"
+travel_time_abs_m = "2e-8"
+bolometric_intensity_abs = "1e-12"
