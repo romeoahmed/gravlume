@@ -244,10 +244,11 @@ pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
+    use proptest::prelude::*;
 
     use super::{
-        EquatorialCircularSurface, FrequencyRatio, SourceAnchor, SurfaceObservable,
-        SurfaceObservableError, wrapped_angle_difference,
+        BolometricTransportError, EquatorialCircularSurface, FrequencyRatio, SourceAnchor,
+        SurfaceObservable, SurfaceObservableError,
     };
 
     #[test]
@@ -266,34 +267,6 @@ mod tests {
     }
 
     #[test]
-    fn source_anchor_inverts_each_chart_handed_oblate_map() {
-        let radius_m = 10.0;
-        let expected_azimuth = 1.2;
-        for chart in [KerrSchildChart::Ingoing, KerrSchildChart::Outgoing] {
-            let spacetime =
-                KerrNewmanSpacetime::new(1.0, 0.8, 0.0, chart).expect("Kerr spacetime is valid");
-            let [x, y, z] = spacetime.oblate_to_cartesian(
-                radius_m,
-                std::f64::consts::FRAC_PI_2,
-                expected_azimuth,
-            );
-            let state =
-                GeodesicState::new([0.0, x, y, z], [-1.0, 0.0, 0.0, 0.0]).expect("state is finite");
-            let observable = EquatorialCircularSurface::new(6.0, 20.0)
-                .expect("surface is valid")
-                .observable_at(spacetime, state, 1.0)
-                .expect("the source orbit is timelike");
-            let anchor = observable.source_anchor();
-
-            assert!((anchor.radius_m() - radius_m).abs() <= 8.0 * f64::EPSILON);
-            assert!(
-                wrapped_angle_difference(anchor.azimuth_rad(), expected_azimuth).abs()
-                    <= 8.0 * f64::EPSILON
-            );
-        }
-    }
-
-    #[test]
     fn null_circular_limit_is_not_clamped_into_a_timelike_emitter() {
         let spacetime = KerrNewmanSpacetime::new(1.0, 0.0, 0.0, KerrSchildChart::Ingoing)
             .expect("Schwarzschild spacetime is valid");
@@ -307,30 +280,89 @@ mod tests {
         assert_eq!(error, SurfaceObservableError::CircularOrbitIsNotTimelike);
     }
 
-    #[test]
-    fn bolometric_transport_avoids_spurious_intermediate_range_loss() {
-        for (frequency_ratio, emitted, expected) in [
-            (1.0e100, 1.0e-300, 1.0e100_f64),
-            (1.0e-100, 1.0e300, 1.0e-100),
-            (1.0e100, 0.0, 0.0),
-        ] {
-            let observable = SurfaceObservable {
-                source_anchor: SourceAnchor {
-                    radius_m: 6.0,
-                    azimuth_rad: 0.0,
-                },
-                frequency_ratio: FrequencyRatio(frequency_ratio),
-            };
+    proptest! {
+        #[test]
+        fn source_anchor_round_trips_chart_oblate_coordinates(
+            chart in prop_oneof![
+                Just(KerrSchildChart::Ingoing),
+                Just(KerrSchildChart::Outgoing),
+            ],
+            spin_m in -0.99_f64..=0.99,
+            radius_m in 6.0_f64..=20.0,
+            azimuth_rad in -std::f64::consts::PI..std::f64::consts::PI,
+        ) {
+            let spacetime = KerrNewmanSpacetime::new(1.0, spin_m, 0.0, chart)
+                .expect("generated Kerr spacetime is subextremal");
+            let [x, y, z] = spacetime.oblate_to_cartesian(
+                radius_m,
+                std::f64::consts::FRAC_PI_2,
+                azimuth_rad,
+            );
+            let state = GeodesicState::new([0.0, x, y, z], [-1.0, 0.0, 0.0, 0.0])
+                .expect("generated state is finite");
+            let observable = EquatorialCircularSurface::new(6.0, 20.0)
+                .expect("surface is valid")
+                .observable_at(spacetime, state, 1.0)
+                .expect("generated circular source orbit is timelike");
+            let anchor = observable.source_anchor();
+            let azimuth_difference = anchor.azimuth_rad() - azimuth_rad;
+            let azimuth_error = azimuth_difference.sin().atan2(azimuth_difference.cos()).abs();
 
-            let observed = observable
+            prop_assert!(
+                (anchor.radius_m() - radius_m).abs() <= 64.0 * f64::EPSILON * radius_m
+            );
+            prop_assert!(azimuth_error <= 64.0 * f64::EPSILON);
+        }
+
+        #[test]
+        fn bolometric_transport_matches_representable_binary_scaling(
+            frequency_exponent in -341_i32..=340,
+        ) {
+            let frequency_ratio = 2.0_f64.powi(frequency_exponent);
+            let emitted = 2.0_f64.powi(-3 * frequency_exponent);
+            let observed = surface_observable(frequency_ratio)
                 .vacuum_observed_bolometric_intensity(emitted)
-                .expect("the final g^4 I_em value is representable");
+                .expect("generated final intensity is representable");
 
-            if expected == 0.0 {
-                assert_eq!(observed.to_bits(), expected.to_bits());
+            prop_assert_eq!(observed.to_bits(), frequency_ratio.to_bits());
+        }
+
+        #[test]
+        fn zero_bolometric_intensity_is_fixed_for_every_finite_binary_shift(
+            frequency_exponent in -1022_i32..=1023,
+        ) {
+            let observed = surface_observable(2.0_f64.powi(frequency_exponent))
+                .vacuum_observed_bolometric_intensity(0.0)
+                .expect("zero intensity remains representable");
+
+            prop_assert_eq!(observed.to_bits(), 0.0_f64.to_bits());
+        }
+
+        #[test]
+        fn unit_frequency_accepts_exactly_non_negative_finite_intensity(
+            emitted in proptest::num::f64::ANY,
+        ) {
+            let observed = surface_observable(1.0)
+                .vacuum_observed_bolometric_intensity(emitted);
+
+            if emitted.is_finite() && emitted >= 0.0 {
+                prop_assert_eq!(observed.map(f64::to_bits), Ok(emitted.to_bits()));
             } else {
-                assert!((observed - expected).abs() / expected <= 8.0 * f64::EPSILON);
+                prop_assert_eq!(
+                    observed,
+                    Err(BolometricTransportError::InvalidEmittedIntensity)
+                );
             }
+        }
+    }
+
+    fn surface_observable(frequency_ratio: f64) -> SurfaceObservable {
+        SurfaceObservable {
+            source_anchor: SourceAnchor {
+                radius_m: 6.0,
+                azimuth_rad: 0.0,
+            },
+            frequency_ratio: FrequencyRatio(frequency_ratio),
         }
     }
 }

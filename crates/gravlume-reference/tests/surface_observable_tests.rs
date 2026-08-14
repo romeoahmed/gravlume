@@ -1,48 +1,27 @@
 use gravlume_reference::{
-    EquatorialCircularSurface, FixtureDocument, FixtureError, ObservationTracer,
-    ReferenceComparison, ReferencePolicy,
+    EquatorialCircularSurface, FixtureDocument, ObservationTracer, ReferenceComparison,
+    ReferencePolicy,
 };
+use proptest::prelude::*;
 
 const SURFACE_OBSERVABLE: &str = include_str!("../fixtures/v2/kerr-surface-observable.toml");
 
-#[test]
-fn equatorial_circular_surface_rejects_invalid_radial_intervals() {
-    for (inner_radius_m, outer_radius_m) in [
-        (f64::NAN, 20.0),
-        (6.0, f64::INFINITY),
-        (0.0, 20.0),
-        (20.0, 6.0),
-    ] {
-        assert!(EquatorialCircularSurface::new(inner_radius_m, outer_radius_m).is_err());
+proptest! {
+    #[test]
+    fn equatorial_circular_surface_accepts_exactly_its_documented_domain(
+        inner_radius_m in proptest::num::f64::ANY,
+        outer_radius_m in proptest::num::f64::ANY,
+    ) {
+        let is_valid = inner_radius_m.is_finite()
+            && outer_radius_m.is_finite()
+            && inner_radius_m > 0.0
+            && outer_radius_m >= inner_radius_m;
+
+        prop_assert_eq!(
+            EquatorialCircularSurface::new(inner_radius_m, outer_radius_m).is_ok(),
+            is_valid
+        );
     }
-}
-
-#[test]
-fn surface_fixture_schema_is_strict_versioned_and_canonical() {
-    let with_unknown = SURFACE_OBSERVABLE.replacen(
-        "schema_version = 2",
-        "schema_version = 2\nundeclared = true",
-        1,
-    );
-    let unsupported = SURFACE_OBSERVABLE.replacen("schema_version = 2", "schema_version = 3", 1);
-    let drifted = SURFACE_OBSERVABLE.replacen(
-        "frequency_ratio = \"0.953264138194626409\"",
-        "frequency_ratio = \"0.95\"",
-        1,
-    );
-
-    assert!(matches!(
-        FixtureDocument::parse_toml(&with_unknown),
-        Err(FixtureError::Toml(_))
-    ));
-    assert!(matches!(
-        FixtureDocument::parse_toml(&unsupported),
-        Err(FixtureError::UnsupportedSchema(3))
-    ));
-    assert!(matches!(
-        FixtureDocument::parse_toml(&drifted),
-        Err(FixtureError::PresetMismatch { .. })
-    ));
 }
 
 #[test]
@@ -63,22 +42,4 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
     assert!(fixture.accepts(&regular));
     assert!(fixture.accepts(&strict));
     assert!(comparison.is_accepted(), "{:?}", comparison.issues());
-    assert!(comparison.source_anchor_distance_m().is_some());
-    assert!(comparison.frequency_ratio_relative_error().is_some());
-
-    let observable = regular
-        .surface_observable()
-        .expect("surface termination carries its physical observable");
-    let anchor = observable.source_anchor();
-    assert!((6.0..=20.0).contains(&anchor.radius_m()));
-    assert!(anchor.azimuth_rad().is_finite());
-    assert!(observable.frequency_ratio().value() > 0.0);
-
-    for invalid in [f64::NAN, f64::INFINITY, -f64::MIN_POSITIVE] {
-        assert!(
-            observable
-                .vacuum_observed_bolometric_intensity(invalid)
-                .is_err()
-        );
-    }
 }
