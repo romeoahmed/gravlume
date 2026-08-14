@@ -10,53 +10,54 @@ from __future__ import annotations
 import platform
 import random
 from dataclasses import dataclass
+from enum import IntEnum
 
 import sympy as sp
+from sympy_checks import (
+    evaluate_real,
+    maximum_relative_residual,
+    rational_form,
+    require_equal,
+    require_matrix_equal,
+    require_zero,
+    trigonometric_rational_form,
+)
 
 SEED = 0x4B534D53  # ASCII-ish "KSMS"
 PRECISION_DIGITS = 180
-BOUNDARY_TOLERANCE = sp.Float("1e-80", PRECISION_DIGITS)
+BOUNDARY_TOLERANCE = sp.Rational(1, 10**80)
 
 
-def canonical(expr: sp.Expr) -> sp.Expr:
-    """Normalize the rational/trigonometric expressions used in this proof."""
-
-    return sp.cancel(sp.trigsimp(sp.factor(expr)))
-
-
-def require_zero(expr: sp.Expr, label: str) -> None:
-    reduced = canonical(expr)
-    if reduced != 0:
-        raise AssertionError(f"{label} is nonzero: {reduced}")
+class Chart(IntEnum):
+    INGOING = 1
+    OUTGOING = -1
 
 
-def require_zero_matrix(matrix: sp.Matrix, label: str) -> None:
-    for row in range(matrix.rows):
-        for column in range(matrix.cols):
-            require_zero(matrix[row, column], f"{label}[{row},{column}]")
+@dataclass(frozen=True)
+class BoundaryCase:
+    name: str
+    spin: sp.Expr
+    radius: sp.Expr
+    sin_theta_squared: sp.Expr
 
 
-def max_normalized_residual(
-    left: sp.Matrix | list[sp.Expr],
-    right: sp.Matrix | list[sp.Expr],
-    substitutions: dict[sp.Symbol, sp.Expr],
-) -> sp.Expr:
-    """Evaluate two independently-built expressions before subtracting them."""
+@dataclass(frozen=True)
+class BoundaryProbe:
+    state_symbols: tuple[sp.Symbol, ...]
+    duality_left: tuple[sp.Expr, ...]
+    duality_right: tuple[sp.Expr, ...]
+    affine_mino_left: tuple[sp.Expr, ...]
+    affine_mino_right: tuple[sp.Expr, ...]
 
-    left_values = list(left) if isinstance(left, sp.MatrixBase) else left
-    right_values = list(right) if isinstance(right, sp.MatrixBase) else right
-    if len(left_values) != len(right_values):
-        raise AssertionError("residual operands have different lengths")
 
-    worst = sp.Float(0, PRECISION_DIGITS)
-    one = sp.Float(1, PRECISION_DIGITS)
-    for lhs, rhs in zip(left_values, right_values, strict=True):
-        lhs_value = sp.N(lhs.subs(substitutions), PRECISION_DIGITS)
-        rhs_value = sp.N(rhs.subs(substitutions), PRECISION_DIGITS)
-        scale = max(one, abs(lhs_value), abs(rhs_value))
-        residual = sp.N(abs(lhs_value - rhs_value) / scale, PRECISION_DIGITS)
-        worst = max(worst, residual)
-    return worst
+@dataclass(frozen=True)
+class BoundaryResult:
+    sin_theta_squared: sp.Expr
+    absolute_delta: sp.Expr
+    extremality_gap: sp.Expr
+    metric_residual: sp.Expr
+    duality_residual: sp.Expr
+    mino_residual: sp.Expr
 
 
 @dataclass(frozen=True)
@@ -67,24 +68,38 @@ class Geometry:
     sin_theta_squared: sp.Symbol
     sigma: sp.Expr
     delta: sp.Expr
-    ks_metric: dict[int, sp.Matrix]
-    bl_metric: dict[int, sp.Matrix]
-    jacobian: dict[int, sp.Matrix]
-    pullback: dict[int, sp.Matrix]
-    legacy_outgoing_pullback: sp.Matrix
+    ks_metrics: dict[Chart, sp.MatrixBase]
+    bl_metric: sp.MatrixBase
+    jacobians: dict[Chart, sp.MatrixBase]
+    pullbacks: dict[Chart, sp.MatrixBase]
+    legacy_outgoing_pullback: sp.MatrixBase
 
 
 def build_geometry() -> Geometry:
-    mass, radius, spin, sin_theta_squared = sp.symbols(
-        "M r a u", real=True, nonzero=True
-    )
+    mass, radius = sp.symbols("M r", positive=True)
+    spin = sp.symbols("a", real=True)
+    sin_theta_squared = sp.symbols("u", positive=True)
     sigma = radius**2 + spin**2 * (1 - sin_theta_squared)
     delta = radius**2 - 2 * mass * radius + spin**2
-    ks_metric: dict[int, sp.Matrix] = {}
-    bl_metric: dict[int, sp.Matrix] = {}
-    jacobian: dict[int, sp.Matrix] = {}
-    pullback: dict[int, sp.Matrix] = {}
-    for branch in (1, -1):
+
+    bl_metric = sp.zeros(4)
+    bl_metric[0, 0] = -1 + 2 * mass * radius / sigma
+    bl_metric[0, 3] = bl_metric[3, 0] = (
+        -2 * mass * radius * spin * sin_theta_squared / sigma
+    )
+    bl_metric[1, 1] = sigma / delta
+    bl_metric[2, 2] = sigma
+    bl_metric[3, 3] = (
+        sin_theta_squared
+        * ((radius**2 + spin**2) ** 2 - spin**2 * delta * sin_theta_squared)
+        / sigma
+    )
+
+    ks_metrics: dict[Chart, sp.MatrixBase] = {}
+    jacobians: dict[Chart, sp.MatrixBase] = {}
+    pullbacks: dict[Chart, sp.MatrixBase] = {}
+    for chart in Chart:
+        branch = int(chart)
         # a is always the physical BL spin. The oblate spatial twist is s*a.
         flat_metric = sp.Matrix(
             [
@@ -100,25 +115,13 @@ def build_geometry() -> Geometry:
             ]
         )
         principal_covector = sp.Matrix([1, branch, 0, -spin * sin_theta_squared])
-        ks_metric[branch] = (
+        ks_metric = (
             flat_metric
             + (2 * mass * radius / sigma) * principal_covector * principal_covector.T
         )
 
-        bl = sp.zeros(4)
-        bl[0, 0] = -1 + 2 * mass * radius / sigma
-        bl[0, 3] = bl[3, 0] = -2 * mass * radius * spin * sin_theta_squared / sigma
-        bl[1, 1] = sigma / delta
-        bl[2, 2] = sigma
-        bl[3, 3] = (
-            sin_theta_squared
-            * ((radius**2 + spin**2) ** 2 - spin**2 * delta * sin_theta_squared)
-            / sigma
-        )
-        bl_metric[branch] = bl
-
         # q_s = (t_s, r, theta, phi_s), q_B = (t_B, r, theta, phi_B).
-        jacobian[branch] = sp.Matrix(
+        jacobian = sp.Matrix(
             [
                 [1, branch * 2 * mass * radius / delta, 0, 0],
                 [0, 1, 0, 0],
@@ -126,7 +129,9 @@ def build_geometry() -> Geometry:
                 [0, branch * spin / delta, 0, 1],
             ]
         )
-        pullback[branch] = jacobian[branch].T * ks_metric[branch] * jacobian[branch]
+        ks_metrics[chart] = ks_metric
+        jacobians[chart] = jacobian
+        pullbacks[chart] = jacobian.T * ks_metric * jacobian
 
     # Legacy outgoing used the ingoing spatial twist (+a) while reversing the
     # whole principal spatial covector. Its pullback is kept only as a RED
@@ -165,19 +170,20 @@ def build_geometry() -> Geometry:
         sin_theta_squared=sin_theta_squared,
         sigma=sigma,
         delta=delta,
-        ks_metric=ks_metric,
-        bl_metric=bl_metric,
-        jacobian=jacobian,
-        pullback=pullback,
+        ks_metrics=ks_metrics,
+        bl_metric=bl_metric.as_immutable(),
+        jacobians=jacobians,
+        pullbacks=pullbacks,
         legacy_outgoing_pullback=(legacy_jacobian.T * legacy_metric * legacy_jacobian),
     )
 
 
 def verify_metric_pullback(geometry: Geometry) -> None:
-    for branch in (1, -1):
-        require_zero_matrix(
-            geometry.pullback[branch] - geometry.bl_metric[branch],
-            f"metric pullback, branch={branch}",
+    for chart in Chart:
+        require_matrix_equal(
+            geometry.pullbacks[chart],
+            geometry.bl_metric,
+            f"metric pullback, chart={chart.name.lower()}",
         )
 
 
@@ -190,12 +196,13 @@ def verify_legacy_same_spin_outgoing_mismatch(geometry: Geometry) -> sp.Expr:
     mismatch = 4 * mass * radius * spin * u / sigma
     expected = sp.zeros(4)
     expected[0, 3] = expected[3, 0] = mismatch
-    require_zero_matrix(
-        geometry.legacy_outgoing_pullback - geometry.bl_metric[-1] - expected,
+    require_matrix_equal(
+        geometry.legacy_outgoing_pullback - geometry.bl_metric,
+        expected,
         "legacy same-spin outgoing mismatch support",
     )
 
-    sample = canonical(
+    sample = rational_form(
         mismatch.subs(
             {
                 mass: sp.Integer(1),
@@ -223,7 +230,8 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
     cartesian_covector = sp.Matrix([px, py, pz])
     spheroidal_tangent = sp.Matrix([vr, vtheta, vazimuth])
 
-    for branch in (1, -1):
+    for chart in Chart:
+        branch = int(chart)
         chart_spin = branch * spin
         x = (radius * cos_phi - chart_spin * sin_phi) * sin_theta
         y = (radius * sin_phi + chart_spin * cos_phi) * sin_theta
@@ -242,9 +250,11 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
                 ],
             ]
         )
-        require_zero_matrix(
-            basis.T * basis - expected_flat_spatial,
-            f"Cartesian oblate flat metric, branch={branch}",
+        require_matrix_equal(
+            basis.T * basis,
+            expected_flat_spatial,
+            f"Cartesian oblate flat metric, chart={chart.name.lower()}",
+            reduce=trigonometric_rational_form,
         )
 
         principal_cartesian = sp.Matrix(
@@ -254,10 +264,11 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
                 branch * z / radius,
             ]
         )
-        require_zero_matrix(
-            basis.T * principal_cartesian
-            - sp.Matrix([branch, 0, -spin * sin_theta**2]),
-            f"Cartesian principal covector, branch={branch}",
+        require_matrix_equal(
+            basis.T * principal_cartesian,
+            sp.Matrix([branch, 0, -spin * sin_theta**2]),
+            f"Cartesian principal covector, chart={chart.name.lower()}",
+            reduce=trigonometric_rational_form,
         )
 
         spheroidal_covector = basis.T * cartesian_covector
@@ -268,9 +279,11 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
                 x * py - y * px,
             ]
         )
-        require_zero_matrix(
-            spheroidal_covector - expected_covector,
-            f"Cartesian to oblate covector, branch={branch}",
+        require_matrix_equal(
+            spheroidal_covector,
+            expected_covector,
+            f"Cartesian to oblate covector, chart={chart.name.lower()}",
+            reduce=trigonometric_rational_form,
         )
 
         rho_squared = x**2 + y**2
@@ -293,16 +306,19 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
             + chart_spin / (radius**2 + spin**2) * grad_radius
         )
         inverse_basis = sp.Matrix.vstack(grad_radius.T, grad_theta.T, grad_azimuth.T)
-        require_zero_matrix(
-            inverse_basis * basis - sp.eye(3),
-            f"oblate gradients, branch={branch}",
+        require_matrix_equal(
+            inverse_basis * basis,
+            sp.eye(3),
+            f"oblate gradients, chart={chart.name.lower()}",
+            reduce=trigonometric_rational_form,
         )
 
         cartesian_tangent = basis * spheroidal_tangent
         require_zero(
             (cartesian_covector.T * cartesian_tangent)[0]
             - (spheroidal_covector.T * spheroidal_tangent)[0],
-            f"Cartesian/oblate tangent-covector pairing, branch={branch}",
+            f"Cartesian/oblate tangent-covector pairing, chart={chart.name.lower()}",
+            reduce=trigonometric_rational_form,
         )
 
 
@@ -312,18 +328,19 @@ def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
     tangent_bl = sp.Matrix([kt, kr, ktheta, kphi])
     covector_ks = sp.Matrix([pt, pr, ptheta, pphi])
 
-    for branch in (1, -1):
-        jacobian = geometry.jacobian[branch]
+    for chart in Chart:
+        branch = int(chart)
+        jacobian = geometry.jacobians[chart]
         tangent_ks = jacobian * tangent_bl
         covector_bl = jacobian.T * covector_ks
         require_zero(
             (covector_ks.T * tangent_ks)[0] - (covector_bl.T * tangent_bl)[0],
-            f"BL/KS dual pairing, branch={branch}",
+            f"BL/KS dual pairing, chart={chart.name.lower()}",
         )
-        require_zero_matrix(
-            tangent_ks.T * geometry.ks_metric[branch] * tangent_ks
-            - tangent_bl.T * geometry.bl_metric[branch] * tangent_bl,
-            f"BL/KS tangent norm, branch={branch}",
+        require_matrix_equal(
+            tangent_ks.T * geometry.ks_metrics[chart] * tangent_ks,
+            tangent_bl.T * geometry.bl_metric * tangent_bl,
+            f"BL/KS tangent norm, chart={chart.name.lower()}",
         )
 
         expected_covector_bl = sp.Matrix(
@@ -336,17 +353,20 @@ def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
                 pphi,
             ]
         )
-        require_zero_matrix(
-            covector_bl - expected_covector_bl,
-            f"BL covector formula, branch={branch}",
+        require_matrix_equal(
+            covector_bl,
+            expected_covector_bl,
+            f"BL covector formula, chart={chart.name.lower()}",
         )
-        require_zero_matrix(
-            jacobian.inv() * tangent_ks - tangent_bl,
-            f"BL tangent round trip, branch={branch}",
+        require_matrix_equal(
+            jacobian.inv() * tangent_ks,
+            tangent_bl,
+            f"BL tangent round trip, chart={chart.name.lower()}",
         )
-        require_zero_matrix(
-            jacobian.T.inv() * covector_bl - covector_ks,
-            f"BL covector round trip, branch={branch}",
+        require_matrix_equal(
+            jacobian.T.inv() * covector_bl,
+            covector_ks,
+            f"BL covector round trip, chart={chart.name.lower()}",
         )
 
 
@@ -358,12 +378,12 @@ class MinoSystem:
     mu: sp.Symbol
     radial_velocity: sp.Symbol
     polar_velocity: sp.Symbol
-    bl_inverse_metric: dict[int, sp.Matrix]
-    covector: dict[int, sp.Matrix]
-    radial_potential: dict[int, sp.Expr]
-    polar_potential: dict[int, sp.Expr]
-    hamiltonian_identity_left: dict[int, sp.Expr]
-    hamiltonian_identity_right: dict[int, sp.Expr]
+    bl_inverse_metric: sp.MatrixBase
+    covector: sp.MatrixBase
+    radial_potential: sp.Expr
+    polar_potential: sp.Expr
+    hamiltonian_identity_left: sp.Expr
+    hamiltonian_identity_right: sp.Expr
 
 
 def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
@@ -374,81 +394,64 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
     sin_squared = 1 - mu**2
     delta = geometry.delta
 
-    inverse_metrics: dict[int, sp.Matrix] = {}
-    covectors: dict[int, sp.Matrix] = {}
-    radial_potentials: dict[int, sp.Expr] = {}
-    polar_potentials: dict[int, sp.Expr] = {}
-    identity_left: dict[int, sp.Expr] = {}
-    identity_right: dict[int, sp.Expr] = {}
+    sigma = radius**2 + spin**2 * mu**2
+    inverse = sp.zeros(4)
+    inverse[0, 0] = -((radius**2 + spin**2) ** 2 - spin**2 * delta * sin_squared) / (
+        sigma * delta
+    )
+    inverse[0, 3] = inverse[3, 0] = -2 * mass * spin * radius / (sigma * delta)
+    inverse[1, 1] = delta / sigma
+    inverse[2, 2] = 1 / sigma
+    inverse[3, 3] = (delta - spin**2 * sin_squared) / (sigma * delta * sin_squared)
 
-    for branch in (1, -1):
-        bl_spin = spin
-        sigma = radius**2 + bl_spin**2 * mu**2
-        inverse = sp.zeros(4)
-        inverse[0, 0] = -(
-            (radius**2 + bl_spin**2) ** 2 - bl_spin**2 * delta * sin_squared
-        ) / (sigma * delta)
-        inverse[0, 3] = inverse[3, 0] = -2 * mass * bl_spin * radius / (sigma * delta)
-        inverse[1, 1] = delta / sigma
-        inverse[2, 2] = 1 / sigma
-        inverse[3, 3] = (delta - bl_spin**2 * sin_squared) / (
-            sigma * delta * sin_squared
-        )
-        inverse_metrics[branch] = inverse
+    momentum = sp.Matrix(
+        [
+            -energy,
+            energy * radial_velocity / delta,
+            -energy * polar_velocity / sp.sqrt(sin_squared),
+            energy * impact,
+        ]
+    )
+    radial_factor = radius**2 + spin**2 - spin * impact
+    separation = (impact - spin) ** 2 + carter
+    radial_potential = radial_factor**2 - delta * separation
+    polar_potential = carter + (spin**2 - carter - impact**2) * mu**2 - spin**2 * mu**4
 
-        momentum = sp.Matrix(
-            [
-                -energy,
-                energy * radial_velocity / delta,
-                -energy * polar_velocity / sp.sqrt(sin_squared),
-                energy * impact,
-            ]
-        )
-        covectors[branch] = momentum
+    hamiltonian = (momentum.T * inverse * momentum)[0] / 2
+    separated_hamiltonian = (radial_velocity**2 - radial_potential) / delta + (
+        polar_velocity**2 - polar_potential
+    ) / sin_squared
+    hamiltonian_identity = 2 * sigma * hamiltonian / energy**2
+    require_equal(
+        hamiltonian_identity,
+        separated_hamiltonian,
+        "separated null Hamiltonian",
+    )
 
-        p_function = radius**2 + bl_spin**2 - bl_spin * impact
-        a_function = (impact - bl_spin) ** 2 + carter
-        radial_potential = p_function**2 - delta * a_function
-        polar_potential = (
-            carter + (bl_spin**2 - carter - impact**2) * mu**2 - bl_spin**2 * mu**4
-        )
-        radial_potentials[branch] = radial_potential
-        polar_potentials[branch] = polar_potential
-
-        hamiltonian = (momentum.T * inverse * momentum)[0] / 2
-        separated = (radial_velocity**2 - radial_potential) / delta + (
-            polar_velocity**2 - polar_potential
-        ) / sin_squared
-        identity_left[branch] = 2 * sigma * hamiltonian / energy**2
-        identity_right[branch] = separated
-        require_zero(
-            identity_left[branch] - identity_right[branch],
-            f"separated null Hamiltonian, branch={branch}",
-        )
-
-        # d/dtau = (Sigma/E) d/dsigma.  The canonical BL equations give
-        # dr/dsigma = Delta p_r/Sigma and dmu/dsigma =
-        # -sin(theta) p_theta/Sigma.
-        affine_r = inverse[1, 1] * momentum[1]
-        affine_mu = -sp.sqrt(sin_squared) * inverse[2, 2] * momentum[2]
-        require_zero(
-            sigma / energy * affine_r - radial_velocity,
-            f"affine/Mino radial scale, branch={branch}",
-        )
-        require_zero(
-            sigma / energy * affine_mu - polar_velocity,
-            f"affine/Mino polar scale, branch={branch}",
-        )
-        require_zero(
-            sp.diff(radial_potential, radius) / 2
-            - (2 * radius * p_function - (radius - mass) * a_function),
-            f"Mino radial acceleration, branch={branch}",
-        )
-        require_zero(
-            sp.diff(polar_potential, mu) / 2
-            - ((bl_spin**2 - carter - impact**2) * mu - 2 * bl_spin**2 * mu**3),
-            f"Mino polar acceleration, branch={branch}",
-        )
+    # d/dtau = (Sigma/E) d/dsigma. The canonical BL equations give
+    # dr/dsigma = Delta p_r/Sigma and dmu/dsigma = -sin(theta) p_theta/Sigma.
+    affine_r = inverse[1, 1] * momentum[1]
+    affine_mu = -sp.sqrt(sin_squared) * inverse[2, 2] * momentum[2]
+    require_equal(
+        sigma / energy * affine_r,
+        radial_velocity,
+        "affine/Mino radial scale",
+    )
+    require_equal(
+        sigma / energy * affine_mu,
+        polar_velocity,
+        "affine/Mino polar scale",
+    )
+    require_equal(
+        sp.diff(radial_potential, radius) / 2,
+        2 * radius * radial_factor - (radius - mass) * separation,
+        "Mino radial acceleration",
+    )
+    require_equal(
+        sp.diff(polar_potential, mu) / 2,
+        (spin**2 - carter - impact**2) * mu - 2 * spin**2 * mu**3,
+        "Mino polar acceleration",
+    )
 
     return MinoSystem(
         energy=energy,
@@ -457,167 +460,201 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
         mu=mu,
         radial_velocity=radial_velocity,
         polar_velocity=polar_velocity,
-        bl_inverse_metric=inverse_metrics,
-        covector=covectors,
-        radial_potential=radial_potentials,
-        polar_potential=polar_potentials,
-        hamiltonian_identity_left=identity_left,
-        hamiltonian_identity_right=identity_right,
+        bl_inverse_metric=inverse.as_immutable(),
+        covector=momentum.as_immutable(),
+        radial_potential=radial_potential,
+        polar_potential=polar_potential,
+        hamiltonian_identity_left=hamiltonian_identity,
+        hamiltonian_identity_right=separated_hamiltonian,
     )
 
 
-def random_float(rng: random.Random, low: float, high: float) -> sp.Float:
+def random_rational(rng: random.Random, low: float, high: float) -> sp.Rational:
     value = low + (high - low) * rng.random()
-    return sp.Float(f"{value:.17g}", PRECISION_DIGITS)
+    return sp.Rational(f"{value:.17g}")
 
 
-def verify_boundary_substitutions(
-    geometry: Geometry, mino: MinoSystem
-) -> dict[str, tuple[sp.Expr, sp.Expr, sp.Expr, sp.Expr, sp.Expr, sp.Expr]]:
-    """Stress outgoing expressions at defined points near three chart seams."""
-
-    rng = random.Random(SEED)
-    mass_value = sp.Float("1", PRECISION_DIGITS)
+def build_boundary_cases(rng: random.Random) -> tuple[BoundaryCase, ...]:
     ten = sp.Integer(10)
 
-    axis_spin = random_float(rng, 0.65, 0.85)
-    axis_radius = random_float(rng, 3.0, 9.0)
-    axis_u = (1 + random_float(rng, 0.0, 1.0)) / ten**70
+    axis_spin = random_rational(rng, 0.65, 0.85)
+    axis_radius = random_rational(rng, 3.0, 9.0)
+    axis_u = (1 + random_rational(rng, 0.0, 1.0)) / ten**70
 
-    horizon_spin = random_float(rng, 0.65, 0.85)
-    horizon_plus = mass_value + sp.sqrt(mass_value**2 - horizon_spin**2)
-    horizon_radius = horizon_plus + (1 + random_float(rng, 0.0, 1.0)) / ten**60
-    horizon_u = random_float(rng, 0.2, 0.8)
+    horizon_spin = random_rational(rng, 0.65, 0.85)
+    horizon_plus = 1 + sp.sqrt(1 - horizon_spin**2)
+    horizon_radius = horizon_plus + (1 + random_rational(rng, 0.0, 1.0)) / ten**60
+    horizon_u = random_rational(rng, 0.2, 0.8)
 
-    extremal_spin = mass_value - (1 + random_float(rng, 0.0, 1.0)) / ten**60
-    extremal_plus = mass_value + sp.sqrt(mass_value**2 - extremal_spin**2)
-    extremal_radius = extremal_plus + (1 + random_float(rng, 0.0, 1.0)) / ten**50
-    extremal_u = random_float(rng, 0.2, 0.8)
+    extremal_spin = 1 - (1 + random_rational(rng, 0.0, 1.0)) / ten**60
+    extremal_plus = 1 + sp.sqrt(1 - extremal_spin**2)
+    extremal_radius = extremal_plus + (1 + random_rational(rng, 0.0, 1.0)) / ten**50
+    extremal_u = random_rational(rng, 0.2, 0.8)
 
-    cases = {
-        "near_axis": (axis_spin, axis_radius, axis_u),
-        "near_horizon": (horizon_spin, horizon_radius, horizon_u),
-        "near_extremality": (extremal_spin, extremal_radius, extremal_u),
-    }
+    return (
+        BoundaryCase("near_axis", axis_spin, axis_radius, axis_u),
+        BoundaryCase("near_horizon", horizon_spin, horizon_radius, horizon_u),
+        BoundaryCase(
+            "near_extremality",
+            extremal_spin,
+            extremal_radius,
+            extremal_u,
+        ),
+    )
 
+
+def build_boundary_probe(geometry: Geometry, mino: MinoSystem) -> BoundaryProbe:
     kt, kr, ktheta, kphi = sp.symbols("k_t k_r k_theta k_phi", real=True)
     pt, pr, ptheta, pphi = sp.symbols("p_t p_r p_theta p_phi", real=True)
     tangent_bl = sp.Matrix([kt, kr, ktheta, kphi])
     covector_ks = sp.Matrix([pt, pr, ptheta, pphi])
-    outgoing_jacobian = geometry.jacobian[-1]
+    outgoing_jacobian = geometry.jacobians[Chart.OUTGOING]
     tangent_ks = outgoing_jacobian * tangent_bl
     covector_bl = outgoing_jacobian.T * covector_ks
-    dual_left = [(covector_ks.T * tangent_ks)[0]]
-    dual_right = [(covector_bl.T * tangent_bl)[0]]
-
-    results: dict[str, tuple[sp.Expr, sp.Expr, sp.Expr, sp.Expr, sp.Expr, sp.Expr]] = {}
-    for name, (spin_value, radius_value, u_value) in cases.items():
-        geometry_substitutions = {
-            geometry.mass: mass_value,
-            geometry.spin: spin_value,
-            geometry.radius: radius_value,
-            geometry.sin_theta_squared: u_value,
-        }
-        sigma_value = sp.N(
-            geometry.sigma.subs(geometry_substitutions), PRECISION_DIGITS
-        )
-        delta_value = sp.N(
-            geometry.delta.subs(geometry_substitutions), PRECISION_DIGITS
-        )
-        denominators = (
-            sigma_value,
-            delta_value,
-            u_value,
-            radius_value,
-            radius_value**2 + spin_value**2,
-            (radius_value**2 + spin_value**2) * u_value,
-        )
-        if any(value == 0 for value in denominators):
-            raise AssertionError(f"{name}: substitution hit a coordinate denominator")
-
-        metric_residual = max_normalized_residual(
-            geometry.pullback[-1],
-            geometry.bl_metric[-1],
-            geometry_substitutions,
-        )
-
-        state_substitutions = dict(geometry_substitutions)
-        for symbol in (kt, kr, ktheta, kphi, pt, pr, ptheta, pphi):
-            state_substitutions[symbol] = random_float(rng, -2.0, 2.0)
-        dual_residual = max_normalized_residual(
-            dual_left, dual_right, state_substitutions
-        )
-
-        mu_value = sp.sqrt(1 - u_value)
-        energy_value = random_float(rng, 0.8, 1.8)
-        impact_value = sp.Float("0", PRECISION_DIGITS)
-        carter_value = random_float(rng, 0.5, 2.0)
-        potential_substitutions = {
-            **geometry_substitutions,
-            mino.energy: energy_value,
-            mino.impact: impact_value,
-            mino.carter: carter_value,
-            mino.mu: mu_value,
-        }
-        radial_potential_value = sp.N(
-            mino.radial_potential[-1].subs(potential_substitutions),
-            PRECISION_DIGITS,
-        )
-        polar_potential_value = sp.N(
-            mino.polar_potential[-1].subs(potential_substitutions),
-            PRECISION_DIGITS,
-        )
-        if radial_potential_value <= 0 or polar_potential_value <= 0:
-            raise AssertionError(f"{name}: seeded Mino point is outside R,U >= 0")
-        potential_substitutions[mino.radial_velocity] = sp.sqrt(radial_potential_value)
-        potential_substitutions[mino.polar_velocity] = -sp.sqrt(polar_potential_value)
-        hamiltonian_residual = max_normalized_residual(
-            [mino.hamiltonian_identity_left[-1]],
-            [mino.hamiltonian_identity_right[-1]],
-            potential_substitutions,
-        )
-        sin_squared = 1 - mino.mu**2
-        sigma = geometry.radius**2 + geometry.spin**2 * mino.mu**2
-        momentum = mino.covector[-1]
-        inverse = mino.bl_inverse_metric[-1]
-        affine_mino_left = [
+    sin_squared = 1 - mino.mu**2
+    sigma = geometry.radius**2 + geometry.spin**2 * mino.mu**2
+    momentum = mino.covector
+    inverse = mino.bl_inverse_metric
+    return BoundaryProbe(
+        state_symbols=(kt, kr, ktheta, kphi, pt, pr, ptheta, pphi),
+        duality_left=((covector_ks.T * tangent_ks)[0],),
+        duality_right=((covector_bl.T * tangent_bl)[0],),
+        affine_mino_left=(
             sigma / mino.energy * inverse[1, 1] * momentum[1],
             sigma / mino.energy * (-sp.sqrt(sin_squared) * inverse[2, 2] * momentum[2]),
-        ]
-        affine_mino_right = [mino.radial_velocity, mino.polar_velocity]
-        affine_residual = max_normalized_residual(
-            affine_mino_left,
-            affine_mino_right,
-            potential_substitutions,
-        )
-        mino_residual = max(hamiltonian_residual, affine_residual)
+        ),
+        affine_mino_right=(mino.radial_velocity, mino.polar_velocity),
+    )
 
-        for label, residual in (
-            ("metric", metric_residual),
-            ("duality", dual_residual),
-            ("Mino", mino_residual),
-        ):
-            if residual >= BOUNDARY_TOLERANCE:
-                raise AssertionError(
-                    f"{name}: {label} residual {residual} >= {BOUNDARY_TOLERANCE}"
-                )
-        extremality_gap = sp.N(mass_value**2 - spin_value**2, PRECISION_DIGITS)
-        results[name] = (
-            u_value,
-            abs(delta_value),
-            abs(extremality_gap),
-            metric_residual,
-            dual_residual,
-            mino_residual,
-        )
 
-    return results
+def require_boundary_tolerance(name: str, result: BoundaryResult) -> None:
+    for label, residual in (
+        ("metric", result.metric_residual),
+        ("duality", result.duality_residual),
+        ("Mino", result.mino_residual),
+    ):
+        if residual >= BOUNDARY_TOLERANCE:
+            raise AssertionError(
+                f"{name}: {label} residual {residual} >= {BOUNDARY_TOLERANCE}"
+            )
+
+
+def evaluate_boundary_case(
+    geometry: Geometry,
+    mino: MinoSystem,
+    probe: BoundaryProbe,
+    rng: random.Random,
+    case: BoundaryCase,
+) -> BoundaryResult:
+    name = case.name
+    mass_value = sp.Integer(1)
+    spin_value = case.spin
+    radius_value = case.radius
+    u_value = case.sin_theta_squared
+    geometry_substitutions = {
+        geometry.mass: mass_value,
+        geometry.spin: spin_value,
+        geometry.radius: radius_value,
+        geometry.sin_theta_squared: u_value,
+    }
+    sigma_value = evaluate_real(
+        geometry.sigma, geometry_substitutions, PRECISION_DIGITS
+    )
+    delta_value = evaluate_real(
+        geometry.delta, geometry_substitutions, PRECISION_DIGITS
+    )
+    denominators = (
+        sigma_value,
+        delta_value,
+        u_value,
+        radius_value,
+        radius_value**2 + spin_value**2,
+        (radius_value**2 + spin_value**2) * u_value,
+    )
+    if any(value == 0 for value in denominators):
+        raise AssertionError(f"{name}: substitution hit a coordinate denominator")
+
+    metric_residual = maximum_relative_residual(
+        geometry.pullbacks[Chart.OUTGOING],
+        geometry.bl_metric,
+        geometry_substitutions,
+        PRECISION_DIGITS,
+    )
+
+    state_substitutions = dict(geometry_substitutions)
+    for symbol in probe.state_symbols:
+        state_substitutions[symbol] = random_rational(rng, -2.0, 2.0)
+    duality_residual = maximum_relative_residual(
+        probe.duality_left,
+        probe.duality_right,
+        state_substitutions,
+        PRECISION_DIGITS,
+    )
+
+    potential_substitutions = {
+        **geometry_substitutions,
+        mino.energy: random_rational(rng, 0.8, 1.8),
+        mino.impact: sp.Integer(0),
+        mino.carter: random_rational(rng, 0.5, 2.0),
+        mino.mu: sp.sqrt(1 - u_value),
+    }
+    radial_potential = mino.radial_potential.xreplace(potential_substitutions)
+    polar_potential = mino.polar_potential.xreplace(potential_substitutions)
+    radial_potential_value = evaluate_real(
+        radial_potential,
+        {},
+        PRECISION_DIGITS,
+    )
+    polar_potential_value = evaluate_real(
+        polar_potential,
+        {},
+        PRECISION_DIGITS,
+    )
+    if radial_potential_value <= 0 or polar_potential_value <= 0:
+        raise AssertionError(f"{name}: seeded Mino point is outside R,U >= 0")
+    potential_substitutions[mino.radial_velocity] = sp.sqrt(radial_potential)
+    potential_substitutions[mino.polar_velocity] = -sp.sqrt(polar_potential)
+    hamiltonian_residual = maximum_relative_residual(
+        (mino.hamiltonian_identity_left,),
+        (mino.hamiltonian_identity_right,),
+        potential_substitutions,
+        PRECISION_DIGITS,
+    )
+    affine_residual = maximum_relative_residual(
+        probe.affine_mino_left,
+        probe.affine_mino_right,
+        potential_substitutions,
+        PRECISION_DIGITS,
+    )
+    result = BoundaryResult(
+        sin_theta_squared=u_value,
+        absolute_delta=abs(delta_value),
+        extremality_gap=abs((mass_value**2 - spin_value**2).evalf(PRECISION_DIGITS)),
+        metric_residual=metric_residual,
+        duality_residual=duality_residual,
+        mino_residual=max(hamiltonian_residual, affine_residual),
+    )
+    require_boundary_tolerance(name, result)
+    return result
+
+
+def verify_boundary_substitutions(
+    geometry: Geometry, mino: MinoSystem
+) -> dict[str, BoundaryResult]:
+    """Stress outgoing expressions at defined points near three chart seams."""
+
+    rng = random.Random(SEED)
+    probe = build_boundary_probe(geometry, mino)
+    return {
+        case.name: evaluate_boundary_case(geometry, mino, probe, rng, case)
+        for case in build_boundary_cases(rng)
+    }
 
 
 def short_scientific(value: sp.Expr) -> str:
     if value == 0:
         return "0"
-    return str(sp.N(value, 8))
+    return str(value.evalf(8))
 
 
 def main() -> None:
@@ -634,27 +671,20 @@ def main() -> None:
     print("symbolic.metric_pullback=PASS branches=ingoing,outgoing")
     print("symbolic.cartesian_oblate_map=PASS")
     print("symbolic.tangent_covector_duality=PASS")
-    print("symbolic.affine_mino=PASS branches=ingoing,outgoing")
+    print("symbolic.affine_mino=PASS")
     print("symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing")
     print(f"symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch={mismatch}")
     print("symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591")
     print(f"boundary.seed=0x{SEED:08X} precision_digits={PRECISION_DIGITS}")
-    for name, (
-        u_value,
-        abs_delta,
-        extremality_gap,
-        metric,
-        duality,
-        mino_residual,
-    ) in boundary_results.items():
+    for name, result in boundary_results.items():
         print(
             f"boundary.{name}=PASS "
-            f"u={short_scientific(u_value)} "
-            f"abs_delta={short_scientific(abs_delta)} "
-            f"M2_minus_a2={short_scientific(extremality_gap)} "
-            f"metric={short_scientific(metric)} "
-            f"duality={short_scientific(duality)} "
-            f"mino={short_scientific(mino_residual)}"
+            f"u={short_scientific(result.sin_theta_squared)} "
+            f"abs_delta={short_scientific(result.absolute_delta)} "
+            f"M2_minus_a2={short_scientific(result.extremality_gap)} "
+            f"metric={short_scientific(result.metric_residual)} "
+            f"duality={short_scientific(result.duality_residual)} "
+            f"mino={short_scientific(result.mino_residual)}"
         )
     print("RESULT=PASS")
 

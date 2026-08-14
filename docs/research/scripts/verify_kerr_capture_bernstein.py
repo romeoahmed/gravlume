@@ -1,10 +1,12 @@
 """Reproduce the algebra and primitive interval model of the Kerr capture path.
 
-The exact polynomial identities are durable. ``IntervalF32`` models the WGSL
-implementation's explicitly sequenced arithmetic primitives: each arithmetic
-operation is consumed by a floating-point bit reinterpretation before the next
-operation, so reassociation or fusion cannot legally cross the integer-bit
-dependency. The script verifies those primitive enclosures and the
+SymPy proves the exact polynomial identities. ``IntervalF32`` separately
+models the WGSL implementation's explicitly sequenced arithmetic primitives.
+Hypothesis generates exactly representable binary32 values and shrinks any
+counterexample; explicit examples retain the numerically important boundaries.
+Each arithmetic operation is consumed by a floating-point bit reinterpretation
+before the next operation, so reassociation or fusion cannot legally cross the
+integer-bit dependency. The script verifies those primitive enclosures and the
 quartic-to-Bernstein transform. It does not by itself prove that every physical
 initial ray lies inside the shader's deliberately wider invariant envelope;
 that seam remains covered by the supported-domain fallback and CPU/GPU oracle
@@ -14,161 +16,84 @@ matrix. This is a research/validation tool, not a runtime dependency.
 from __future__ import annotations
 
 import math
-import random
 import struct
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from fractions import Fraction
 
-SEED = 0x4B434243  # "KCBC"
-RANDOM_CASES = 20_000
+import sympy as sp
+from hypothesis import example, given, settings
+from hypothesis import strategies as st
+from sympy_checks import require_polynomial_equal
+
+PRIMITIVE_EXAMPLES = 20_000
+BERNSTEIN_EXAMPLES = 5_000
 MIN_NORMAL_F32 = 2.0**-126
 MAX_FINITE_F32 = float.fromhex("0x1.fffffep+127")
+MIN_SUBNORMAL_F32 = float.fromhex("0x1p-149")
+ExactScalar = sp.Expr | Fraction
+ExactCoefficients = tuple[ExactScalar, ExactScalar, ExactScalar, ExactScalar]
 
-
-Monomial = tuple[tuple[str, int], ...]
-
-
-@dataclass(frozen=True)
-class Polynomial:
-    """Tiny exact sparse polynomial algebra used to keep this tool dependency-free."""
-
-    terms: dict[Monomial, Fraction]
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "terms",
-            {
-                monomial: coefficient
-                for monomial, coefficient in self.terms.items()
-                if coefficient
-            },
-        )
-
-    @classmethod
-    def scalar(cls, value: int | Fraction) -> Polynomial:
-        coefficient = Fraction(value)
-        return cls({(): coefficient} if coefficient else {})
-
-    @classmethod
-    def variable(cls, name: str) -> Polynomial:
-        return cls({((name, 1),): Fraction(1)})
-
-    @staticmethod
-    def coerce(value: Polynomial | int | Fraction) -> Polynomial:
-        return value if isinstance(value, Polynomial) else Polynomial.scalar(value)
-
-    def __add__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        result = dict(self.terms)
-        for monomial, coefficient in self.coerce(other).terms.items():
-            result[monomial] = result.get(monomial, Fraction(0)) + coefficient
-        return Polynomial(result)
-
-    def __radd__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        return self + other
-
-    def __neg__(self) -> Polynomial:
-        return Polynomial(
-            {monomial: -coefficient for monomial, coefficient in self.terms.items()}
-        )
-
-    def __sub__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        return self + -self.coerce(other)
-
-    def __rsub__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        return self.coerce(other) - self
-
-    def __mul__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        result: dict[Monomial, Fraction] = {}
-        for left_monomial, left_coefficient in self.terms.items():
-            for right_monomial, right_coefficient in self.coerce(other).terms.items():
-                powers: dict[str, int] = {}
-                for name, exponent in left_monomial + right_monomial:
-                    powers[name] = powers.get(name, 0) + exponent
-                monomial = tuple(sorted(powers.items()))
-                result[monomial] = result.get(monomial, Fraction(0)) + (
-                    left_coefficient * right_coefficient
-                )
-        return Polynomial(result)
-
-    def __rmul__(self, other: Polynomial | int | Fraction) -> Polynomial:
-        return self * other
-
-    def __truediv__(self, divisor: int | Fraction) -> Polynomial:
-        divisor = Fraction(divisor)
-        if divisor == 0:
-            raise ZeroDivisionError
-        return Polynomial(
-            {
-                monomial: coefficient / divisor
-                for monomial, coefficient in self.terms.items()
-            }
-        )
-
-    def __pow__(self, exponent: int) -> Polynomial:
-        if exponent < 0:
-            raise ValueError("polynomial exponent must be non-negative")
-        result = Polynomial.scalar(1)
-        factor = self
-        remaining = exponent
-        while remaining:
-            if remaining & 1:
-                result *= factor
-            factor *= factor
-            remaining >>= 1
-        return result
-
-    def substitute(
-        self, replacements: dict[str, Polynomial | int | Fraction]
-    ) -> Polynomial:
-        result = Polynomial.scalar(0)
-        for monomial, coefficient in self.terms.items():
-            term = Polynomial.scalar(coefficient)
-            for name, exponent in monomial:
-                replacement = self.coerce(
-                    replacements.get(name, Polynomial.variable(name))
-                )
-                term *= replacement**exponent
-            result += term
-        return result
-
-    def evaluate(self, replacements: dict[str, int | Fraction]) -> Fraction:
-        reduced = self.substitute(replacements)
-        if any(monomial for monomial in reduced.terms):
-            raise ValueError(f"evaluation left free variables: {reduced}")
-        return reduced.terms.get((), Fraction(0))
-
-
-def require_zero(expression: Polynomial, label: str) -> None:
-    if expression.terms:
-        raise AssertionError(f"{label} is nonzero: {expression.terms}")
+FINITE_F32 = st.floats(
+    allow_infinity=False,
+    allow_nan=False,
+    allow_subnormal=True,
+    width=32,
+)
+BOUNDED_F32 = st.floats(
+    min_value=-8.0,
+    max_value=8.0,
+    allow_infinity=False,
+    allow_nan=False,
+    allow_subnormal=True,
+    width=32,
+)
 
 
 @dataclass(frozen=True)
-class RadialPolynomial:
-    radius: str
-    spin: str
-    energy: str
-    angular_momentum: str
-    carter: str
-    potential: Polynomial
-    coefficients: tuple[Polynomial, Polynomial, Polynomial, Polynomial]
+class BernsteinSample:
+    leading: float
+    quadratic: float
+    linear: float
+    constant: float
+    lower: float
+    width: float
 
 
-def build_radial_polynomial() -> RadialPolynomial:
-    radius_name, spin_name, energy_name, angular_momentum_name, carter_name = (
-        "r",
-        "a",
-        "E",
-        "L",
-        "Q",
-    )
-    radius = Polynomial.variable(radius_name)
-    spin = Polynomial.variable(spin_name)
-    energy = Polynomial.variable(energy_name)
-    angular_momentum = Polynomial.variable(angular_momentum_name)
-    carter = Polynomial.variable(carter_name)
+BERNSTEIN_SAMPLES = st.builds(
+    BernsteinSample,
+    leading=BOUNDED_F32,
+    quadratic=BOUNDED_F32,
+    linear=BOUNDED_F32,
+    constant=BOUNDED_F32,
+    lower=BOUNDED_F32,
+    width=BOUNDED_F32,
+)
+
+
+@dataclass(frozen=True)
+class KerrRadialModel:
+    radius: sp.Symbol
+    spin: sp.Symbol
+    energy: sp.Symbol
+    angular_momentum: sp.Symbol
+    carter: sp.Symbol
+    potential: sp.Expr
+    coefficients: tuple[sp.Expr, sp.Expr, sp.Expr, sp.Expr]
+
+    @property
+    def generators(self) -> tuple[sp.Symbol, ...]:
+        return (
+            self.radius,
+            self.spin,
+            self.energy,
+            self.angular_momentum,
+            self.carter,
+        )
+
+
+def build_radial_model() -> KerrRadialModel:
+    radius, spin, energy, angular_momentum, carter = sp.symbols("r a E L Q", real=True)
     delta = radius**2 - 2 * radius + spin**2
     shifted_momentum = angular_momentum - spin * energy
     separation = shifted_momentum**2 + carter
@@ -181,48 +106,51 @@ def build_radial_polynomial() -> RadialPolynomial:
     linear = 2 * separation
     constant = -(spin**2) * carter
     expanded = leading * radius**4 + quadratic * radius**2 + linear * radius + constant
-    require_zero(separated - expanded, "separated Kerr radial potential")
+    generators = (radius, spin, energy, angular_momentum, carter)
+    require_polynomial_equal(
+        separated, expanded, generators, "separated Kerr radial potential"
+    )
 
-    return RadialPolynomial(
-        radius=radius_name,
-        spin=spin_name,
-        energy=energy_name,
-        angular_momentum=angular_momentum_name,
-        carter=carter_name,
+    return KerrRadialModel(
+        radius=radius,
+        spin=spin,
+        energy=energy,
+        angular_momentum=angular_momentum,
+        carter=carter,
         potential=expanded,
         coefficients=(leading, quadratic, linear, constant),
     )
 
 
-def verify_normalized_form(polynomial: RadialPolynomial) -> None:
-    radius = Polynomial.variable(polynomial.radius)
-    spin = Polynomial.variable(polynomial.spin)
-    impact = Polynomial.variable("b")
-    normalized_carter = Polynomial.variable("eta")
-    normalized = polynomial.potential.substitute(
+def verify_normalized_form(model: KerrRadialModel) -> None:
+    impact, normalized_carter = sp.symbols("b eta", real=True)
+    normalized = model.potential.xreplace(
         {
-            polynomial.energy: 1,
-            polynomial.angular_momentum: impact,
-            polynomial.carter: normalized_carter,
+            model.energy: sp.Integer(1),
+            model.angular_momentum: impact,
+            model.carter: normalized_carter,
         }
     )
     expected = (
-        radius**4
-        + (spin**2 - impact**2 - normalized_carter) * radius**2
-        + 2 * ((impact - spin) ** 2 + normalized_carter) * radius
-        - spin**2 * normalized_carter
+        model.radius**4
+        + (model.spin**2 - impact**2 - normalized_carter) * model.radius**2
+        + 2 * ((impact - model.spin) ** 2 + normalized_carter) * model.radius
+        - model.spin**2 * normalized_carter
     )
-    require_zero(normalized - expected, "normalized radial potential")
+    require_polynomial_equal(
+        normalized,
+        expected,
+        (model.radius, model.spin, impact, normalized_carter),
+        "normalized radial potential",
+    )
 
 
 def bernstein_coefficients(
-    leading: Polynomial | Fraction | int,
-    quadratic: Polynomial | Fraction | int,
-    linear: Polynomial | Fraction | int,
-    constant: Polynomial | Fraction | int,
-    lower: Polynomial | Fraction | int,
-    width: Polynomial | Fraction | int,
-) -> tuple[Polynomial | Fraction, ...]:
+    power_coefficients: ExactCoefficients,
+    lower: ExactScalar,
+    width: ExactScalar,
+) -> tuple[ExactScalar, ...]:
+    leading, quadratic, linear, constant = power_coefficients
     lower_squared = lower**2
     width_squared = width**2
     power = (
@@ -242,14 +170,9 @@ def bernstein_coefficients(
     )
 
 
-def verify_bernstein_transform(polynomial: RadialPolynomial) -> None:
-    lower = Polynomial.variable("lo")
-    width = Polynomial.variable("h")
-    parameter = Polynomial.variable("t")
-    leading, quadratic, linear, constant = polynomial.coefficients
-    coefficients = bernstein_coefficients(
-        leading, quadratic, linear, constant, lower, width
-    )
+def verify_bernstein_transform(model: KerrRadialModel) -> None:
+    lower, width, parameter = sp.symbols("lo h t", real=True)
+    coefficients = bernstein_coefficients(model.coefficients, lower, width)
     basis = tuple(
         math.comb(4, index) * parameter**index * (1 - parameter) ** (4 - index)
         for index in range(5)
@@ -258,11 +181,20 @@ def verify_bernstein_transform(polynomial: RadialPolynomial) -> None:
         coefficient * weight
         for coefficient, weight in zip(coefficients, basis, strict=True)
     )
-    expected = polynomial.potential.substitute(
-        {polynomial.radius: lower + width * parameter}
+    expected = model.potential.xreplace({model.radius: lower + width * parameter})
+    generators = (*model.generators, lower, width, parameter)
+    require_polynomial_equal(
+        reconstructed,
+        expected,
+        generators,
+        "quartic Bernstein reconstruction",
     )
-    require_zero(reconstructed - expected, "quartic Bernstein reconstruction")
-    require_zero(sum(basis) - 1, "degree-four Bernstein partition of unity")
+    require_polynomial_equal(
+        sum(basis),
+        sp.Integer(1),
+        (parameter,),
+        "degree-four Bernstein partition of unity",
+    )
 
 
 def f32(value: float) -> float:
@@ -393,45 +325,42 @@ def interval_contains(interval: IntervalF32, exact: Fraction) -> bool:
     return lower_ok and upper_ok
 
 
-def random_finite_f32(randomizer: random.Random) -> float:
-    while True:
-        bits = randomizer.getrandbits(32)
-        value = f32_from_bits(bits)
-        if math.isfinite(value) and abs(value) <= 2.0**40:
-            return value
-
-
-def verify_interval_primitives() -> None:
-    randomizer = random.Random(SEED)
-    for case in range(RANDOM_CASES):
-        left = random_finite_f32(randomizer)
-        right = random_finite_f32(randomizer)
-        left_interval = IntervalF32.point(left)
-        right_interval = IntervalF32.point(right)
-        exact_left = exact_fraction(left)
-        exact_right = exact_fraction(right)
-        checks = (
-            (left_interval.add(right_interval), exact_left + exact_right, "add"),
-            (left_interval.sub(right_interval), exact_left - exact_right, "sub"),
-            (left_interval.mul(right_interval), exact_left * exact_right, "mul"),
-            (left_interval.square(), exact_left * exact_left, "square"),
-        )
-        for interval, exact, operation in checks:
-            if not interval_contains(interval, exact):
-                raise AssertionError(
-                    f"{operation} escaped its interval at case {case}: "
-                    f"{left=}, {right=}, {interval=}, {exact=}"
-                )
+@settings(
+    database=None,
+    deadline=None,
+    derandomize=True,
+    max_examples=PRIMITIVE_EXAMPLES,
+)
+@example(left=0.0, right=-0.0)
+@example(left=MIN_SUBNORMAL_F32, right=-MIN_SUBNORMAL_F32)
+@example(left=MIN_NORMAL_F32, right=-next_down_f32(MIN_NORMAL_F32))
+@example(left=MAX_FINITE_F32, right=-MAX_FINITE_F32)
+@given(left=FINITE_F32, right=FINITE_F32)
+def verify_interval_primitives(left: float, right: float) -> None:
+    left_interval = IntervalF32.point(left)
+    right_interval = IntervalF32.point(right)
+    exact_left = exact_fraction(left)
+    exact_right = exact_fraction(right)
+    checks = (
+        (left_interval.add(right_interval), exact_left + exact_right, "add"),
+        (left_interval.sub(right_interval), exact_left - exact_right, "sub"),
+        (left_interval.mul(right_interval), exact_left * exact_right, "mul"),
+        (left_interval.square(), exact_left * exact_left, "square"),
+    )
+    for interval, exact, operation in checks:
+        if not interval_contains(interval, exact):
+            raise AssertionError(
+                f"{operation} escaped its interval: "
+                f"{left=}, {right=}, {interval=}, {exact=}"
+            )
 
 
 def interval_bernstein_coefficients(
-    leading: IntervalF32,
-    quadratic: IntervalF32,
-    linear: IntervalF32,
-    constant: IntervalF32,
+    power_coefficients: tuple[IntervalF32, IntervalF32, IntervalF32, IntervalF32],
     lower: IntervalF32,
     width: IntervalF32,
 ) -> tuple[IntervalF32, ...]:
+    leading, quadratic, linear, constant = power_coefficients
     two = IntervalF32.point(2.0)
     four = IntervalF32.point(4.0)
     six = IntervalF32.point(6.0)
@@ -467,42 +396,58 @@ def interval_bernstein_coefficients(
     )
 
 
-def verify_interval_bernstein() -> None:
-    randomizer = random.Random(SEED ^ 0xB37)
-    for case in range(5_000):
-        values = [f32(randomizer.uniform(-8.0, 8.0)) for _ in range(6)]
-        leading_value = abs(values[0]) + f32_from_bits(1)
-        quadratic_value, linear_value, constant_value = values[1:4]
-        lower_value = abs(values[4])
-        width_value = abs(values[5]) + 0.001
-        intervals = interval_bernstein_coefficients(
+@settings(
+    database=None,
+    deadline=None,
+    derandomize=True,
+    max_examples=BERNSTEIN_EXAMPLES,
+)
+@example(
+    sample=BernsteinSample(
+        leading=0.0,
+        quadratic=MIN_SUBNORMAL_F32,
+        linear=-MIN_SUBNORMAL_F32,
+        constant=MIN_NORMAL_F32,
+        lower=0.0,
+        width=0.0,
+    )
+)
+@given(sample=BERNSTEIN_SAMPLES)
+def verify_interval_bernstein(sample: BernsteinSample) -> None:
+    leading_value = f32(abs(sample.leading) + MIN_SUBNORMAL_F32)
+    lower_value = abs(sample.lower)
+    width_value = f32(abs(sample.width) + f32(0.001))
+    intervals = interval_bernstein_coefficients(
+        (
             IntervalF32.point(leading_value),
-            IntervalF32.point(quadratic_value),
-            IntervalF32.point(linear_value),
-            IntervalF32.point(constant_value),
-            IntervalF32.point(lower_value),
-            IntervalF32.point(width_value),
-        )
-        exact = bernstein_coefficients(
+            IntervalF32.point(sample.quadratic),
+            IntervalF32.point(sample.linear),
+            IntervalF32.point(sample.constant),
+        ),
+        IntervalF32.point(lower_value),
+        IntervalF32.point(width_value),
+    )
+    exact = bernstein_coefficients(
+        (
             exact_fraction(leading_value),
-            exact_fraction(quadratic_value),
-            exact_fraction(linear_value),
-            exact_fraction(constant_value),
-            exact_fraction(lower_value),
-            exact_fraction(width_value),
-        )
-        for index, (interval, exact_coefficient) in enumerate(
-            zip(intervals, exact, strict=True)
-        ):
-            if not interval_contains(interval, exact_coefficient):
-                raise AssertionError(
-                    f"Bernstein coefficient {index} escaped at case {case}: "
-                    f"{interval=}, {exact_coefficient=}"
-                )
+            exact_fraction(sample.quadratic),
+            exact_fraction(sample.linear),
+            exact_fraction(sample.constant),
+        ),
+        exact_fraction(lower_value),
+        exact_fraction(width_value),
+    )
+    for index, (interval, exact_coefficient) in enumerate(
+        zip(intervals, exact, strict=True)
+    ):
+        if not interval_contains(interval, exact_coefficient):
+            raise AssertionError(
+                f"Bernstein coefficient {index} escaped: "
+                f"{interval=}, {exact_coefficient=}"
+            )
 
 
-def verify_packed_horizon_bounds(polynomial: RadialPolynomial) -> None:
-    del polynomial
+def verify_packed_horizon_bounds() -> None:
     witnessed_nearest_rounding_failure = False
     for spin_bits in (0x0000_0000, 0x3F00_0000, 0x3F4C_CCCD, 0x3F7D_70A4, 0x3F7F_FFFF):
         spin = f32_from_bits(spin_bits)
@@ -526,7 +471,8 @@ def verify_packed_horizon_bounds(polynomial: RadialPolynomial) -> None:
         )
         if not lower_exact <= exact <= upper_exact:
             raise AssertionError(
-                f"packed horizon interval missed exact r+ for spin bits {spin_bits:#010x}"
+                "packed horizon interval missed exact r+ for spin bits "
+                f"{spin_bits:#010x}"
             )
         nearest_fraction = Fraction(nearest)
         nearest_exact = Decimal(nearest_fraction.numerator) / Decimal(
@@ -537,23 +483,23 @@ def verify_packed_horizon_bounds(polynomial: RadialPolynomial) -> None:
         raise AssertionError("horizon samples did not witness nearest > exact")
 
 
-def verify_precondition_mutations(polynomial: RadialPolynomial) -> None:
+def verify_precondition_mutations(model: KerrRadialModel) -> None:
     substitutions = {
-        polynomial.radius: Fraction(5, 2),
-        polynomial.spin: Fraction(4, 5),
-        polynomial.energy: Fraction(1),
-        polynomial.angular_momentum: Fraction(7, 3),
-        polynomial.carter: Fraction(5, 7),
+        model.radius: sp.Rational(5, 2),
+        model.spin: sp.Rational(4, 5),
+        model.energy: sp.Integer(1),
+        model.angular_momentum: sp.Rational(7, 3),
+        model.carter: sp.Rational(5, 7),
     }
-    physical = polynomial.potential.evaluate(substitutions)
-    flipped = polynomial.potential.evaluate(
-        substitutions | {polynomial.spin: -substitutions[polynomial.spin]}
+    physical = model.potential.xreplace(substitutions)
+    flipped = model.potential.xreplace(
+        substitutions | {model.spin: -substitutions[model.spin]}
     )
     if physical == flipped:
         raise AssertionError("physical-spin mutation was not observable")
 
-    negative_energy = polynomial.potential.evaluate(
-        substitutions | {polynomial.energy: -substitutions[polynomial.energy]}
+    negative_energy = model.potential.xreplace(
+        substitutions | {model.energy: -substitutions[model.energy]}
     )
     if physical == negative_energy:
         raise AssertionError("energy-sign mutation was not observable")
@@ -571,7 +517,8 @@ def verify_precondition_mutations(polynomial: RadialPolynomial) -> None:
     ):
         if preconditions(energy, radial_velocity):
             raise AssertionError(
-                f"invalid traversal precondition was accepted: {energy=}, {radial_velocity=}"
+                "invalid traversal precondition was accepted: "
+                f"{energy=}, {radial_velocity=}"
             )
 
 
@@ -586,10 +533,12 @@ def verify_segment_removal_witness() -> None:
         lower = Fraction(index, segment_count)
         width = Fraction(1, segment_count)
         coefficients = bernstein_coefficients(
-            0,
-            1,
-            -2 * center,
-            center**2 - half_width**2,
+            (
+                Fraction(0),
+                Fraction(1),
+                -2 * center,
+                center**2 - half_width**2,
+            ),
             lower,
             width,
         )
@@ -602,18 +551,19 @@ def verify_segment_removal_witness() -> None:
 
 
 def main() -> None:
-    polynomial = build_radial_polynomial()
-    verify_normalized_form(polynomial)
-    verify_bernstein_transform(polynomial)
+    model = build_radial_model()
+    verify_normalized_form(model)
+    verify_bernstein_transform(model)
     verify_interval_primitives()
     verify_interval_bernstein()
-    verify_packed_horizon_bounds(polynomial)
-    verify_precondition_mutations(polynomial)
+    verify_packed_horizon_bounds()
+    verify_precondition_mutations(model)
     verify_segment_removal_witness()
     print(
         "PASS_INTERVAL_MODEL: exact Kerr quartic, quartic-to-Bernstein "
-        f"identity, strict-evaluator f32 intervals ({RANDOM_CASES} primitive "
-        "cases), packed-horizon seam, and mutation witnesses; physical-input "
+        "identity, Hypothesis-generated strict-evaluator f32 intervals "
+        f"({PRIMITIVE_EXAMPLES} primitive and {BERNSTEIN_EXAMPLES} Bernstein "
+        "examples), packed-horizon seam, and mutation witnesses; physical-input "
         "enclosure remains a separate CPU/GPU oracle gate"
     )
 
