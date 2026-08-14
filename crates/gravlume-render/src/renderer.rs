@@ -460,18 +460,18 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Gravlume trace encoder"),
             });
-        self.trace.encode_node_pass(
+        self.trace.encode_escape_map_pass(
             &self.queue,
             &mut encoder,
             candidate,
             batch,
-            Some(self.timings.node_writes()),
+            Some(self.timings.escape_map_writes()),
         );
-        self.trace.encode_resolve_pass(
+        self.trace.encode_trace_pass(
             &mut encoder,
             candidate,
             batch,
-            Some(self.timings.resolve_writes()),
+            Some(self.timings.trace_writes()),
             true,
         );
         self.timings.encode_resolve(&mut encoder);

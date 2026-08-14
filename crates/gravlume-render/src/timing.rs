@@ -14,11 +14,11 @@ pub struct TimingSample {
 impl TimingSample {
     pub(crate) fn from_ticks(ticks: [u64; 4], timestamp_period_ns: f32) -> Self {
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
-        let node_ticks = ticks[1].saturating_sub(ticks[0]);
-        let resolve_ticks = ticks[3].saturating_sub(ticks[2]);
+        let escape_map_ticks = ticks[1].saturating_sub(ticks[0]);
+        let trace_ticks = ticks[3].saturating_sub(ticks[2]);
         Self {
-            compute_ms: node_ticks
-                .saturating_add(resolve_ticks)
+            compute_ms: escape_map_ticks
+                .saturating_add(trace_ticks)
                 .to_f64()
                 .unwrap_or(f64::INFINITY)
                 * milliseconds_per_tick,
@@ -94,7 +94,7 @@ impl GpuTimings {
         self.callback_receiver.is_none()
     }
 
-    pub(crate) const fn node_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
+    pub(crate) const fn escape_map_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(0),
@@ -102,7 +102,7 @@ impl GpuTimings {
         }
     }
 
-    pub(crate) const fn resolve_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
+    pub(crate) const fn trace_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
         wgpu::ComputePassTimestampWrites {
             query_set: &self.query_set,
             beginning_of_pass_write_index: Some(2),
@@ -226,13 +226,13 @@ mod tests {
         {
             let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("one-shot timestamp compute pass"),
-                timestamp_writes: Some(timings.node_writes()),
+                timestamp_writes: Some(timings.escape_map_writes()),
             });
         }
         {
             let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("one-shot timestamp resolve pass"),
-                timestamp_writes: Some(timings.resolve_writes()),
+                label: Some("one-shot timestamp trace pass"),
+                timestamp_writes: Some(timings.trace_writes()),
             });
         }
         timings.encode_resolve(&mut encoder);

@@ -1,43 +1,53 @@
 # Reference 实现与证据
 
-本文记录当前 `gravlume-domain` 与 `gravlume-reference` 的实现边界。连续公式和阈值仍分别以[数学物理合同](physics.md)与[验证合同](validation.md)为准；这里不复制或改写 profile。
+本文是 `gravlume-domain` 与 `gravlume-reference` 的当前证据清单。连续模型和验收阈值分别由[数学物理合同](physics.md)与[验证合同](validation.md)定义；本页不复制 profile 数值，也不把 `f64` 结果称为绝对 ground truth。
 
-## 已实现闭环
+## 已实现
 
-- `PhysicalSceneInput → PhysicalScene → Observation` 是原子 validation seam；稳定字段为 issue code 与 field path，解释文本不是协议字段。Observer Frame 保存 Gram residual、orientation determinant 与 up-axis fallback 诊断。
-- `ImageSample` 只保存 pixel/subpixel coordinates；`Observation::initial_ray` 针对自己的 view 重新验证并独占 top-left sample 到 future-directed Photon Momentum 的 CPU 映射。`ObservationTrace` 借用 Observation 解析 initial ray 后只保留追迹所需的 validated 值，`GeodesicTracer` 只通过该接口构造 backward trace，负 affine traversal 不改写物理 momentum。
-- `KerrNewmanSpacetime` 使用 canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` 状态与闭式 Cartesian Kerr–Schild Hamilton RHS；参数状态以 exponent-aligned integer significand 精确比较实际 binary64 值，轴线 geometry 使用 $r=|z|$ 解析极限。metric/radius denominator 失败是 typed error，不 clamp 方程。
-- `GeodesicTracer` 在 seam 强制 v1 的 `M=1` 归一化，`ObservationTracer` 额外强制 `omega_obs=1`；随后使用七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差。拒步不提交 state/event side effect。
-- accepted step 保存 quartic dense output；horizon、escape、equatorial surface 与 singularity guard 只在 bracket 内二分定位。同一步 candidate 在 tie tolerance 内全部保留，并按 `singularity → horizon → emitter → escape` 排序。
-- outcome 分开记录绑定完整有效输入的 identity、terminal、accepted/rejected/RHS counters、实际 min/max step、event bracket/residual、null/E/Lz/Carter drift、dense-localized turning radius、Hamilton RHS terminal traversal direction、非负 coordinate travel duration 与 azimuth advance。coordinate duration 从 DP dense/local step increment 补偿累计，不从两个绝对时间相减；turning point 按 affine traversal direction 检测并使用 dense output 定位；无转向的 capture 不以最小采样半径冒充 turning point，step/reject exhaustion 和 numerical failure 不伪装成物理 terminal。
-- v1 TOML 使用 `deny_unknown_fields` 并限制为 1 MiB；未知字段/enum/schema/profile、与 profile 不一致的固定 event 值、NaN/Inf、负零与非法物理值在 seam 拒绝。默认 Observation 和三个具名 geodesic preset 的完整 typed DTO 必须与编译期嵌入的规范 fixture 相等后才进入 domain，因此 producer、input、oracle 或 tolerance 的修改都必须使用新 ID/profile；代码中不维护第二份字段常量清单。80 位十进制保留为字符串到解析 seam，运行时明确转换为 `f64`，不声称保留 80 位算术。
-- `ReferenceComparison::baseline_v1` 在计算预算前验证 regular/strict policy roles 与 input ID；配置错误返回 `ComparisonError`，只有有效配对才产生数值 `ComparisonIssue`。
-- `GeodesicBatch` 建立最多 256 worker 的专用 Rayon pool；单条轨迹顺序确定，indexed parallel collect 保持 input order。
+| 领域        | 当前实现                                                                                                                      |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| validation  | `PhysicalSceneInput → PhysicalScene → Observation` 原子验证；稳定协议是 issue code 与 field path                              |
+| view ray    | `Observation::initial_ray` 独占 top-left pixel/subpixel 到 future-directed Photon Momentum 的映射                             |
+| spacetime   | canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` Cartesian Kerr–Schild Hamilton system                                             |
+| parameters  | 对实际 binary64 bit pattern 精确判定 extremality；axis geometry 使用解析极限                                                  |
+| integration | 七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差                                                  |
+| events      | accepted-step quartic dense output；只在 bracket 内定位 horizon、escape、equatorial surface 与 singularity guard              |
+| outcomes    | typed terminal、counters、step range、event bracket/residual、invariant drift、turning radius、travel time 与 azimuth advance |
+| fixtures    | 严格 v1 TOML、1 MiB 上限、unknown-field rejection、版本化 identity/profile 与高精度十进制字符串                               |
+| comparison  | 先验证 input/profile identity，再比较 regular/strict observable；配置错误与数值 issue 分离                                    |
+| batch       | 有界专用 Rayon pool；单轨迹顺序确定，输出保持 input order                                                                     |
 
-## 当前自动化证据
+Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinate duration 从 dense/local step increment 累计，不由两个绝对时间相减。step/reject exhaustion 和 numerical failure 不伪装成物理 terminal。
+
+## 自动化证据
 
 `cargo test --workspace --all-targets --locked` 当前覆盖：
 
-- oblate radius identity、rank-one inverse、Schwarzschild、Reissner–Nordström、Kerr–Newman、extremal/superextremal 与趋近 Minkowski 的特殊极限；
-- 默认 Kerr stationary observer 的 horizon、`g_tt`、frame Gram/orientation，以及跨 view sample 重新解析和 frequency-scale-invariant viewport null/frequency seam；
-- weak-field Schwarzschild deflection 对 leading `4M/b`、regular `b=6` 80 位 fixture、`sqrt(27)±10^-3` near-critical escape/capture 分类；
-- regular/strict 的 policy/input identity、termination、event position、escape direction、travel time 与 invariant drift comparison gate；
-- horizon、escape、equatorial surface、singularity guard、step exhaustion 和 same-step ambiguity；
-- 默认 Kerr Observation 的非临界 backward ray regular/strict 收敛、negative-affine turning localization，以及 Rayon batch 顺序。
+- oblate radius、null principal covector、rank-one inverse 与 Minkowski/Schwarzschild/RN/Kerr/KN 特殊极限；
+- extremal/superextremal binary64 分类、horizon、`g_tt` 与 stationary observer 适用域；
+- Observer Frame Gram/orientation、view sample 与 frequency-scale-invariant initial ray；
+- weak-field `4M/b`、regular `b=6` 80 位 fixture 和 `sqrt(27)±10^-3` near-critical branch；
+- regular/strict identity、termination、event position、escape direction、travel time 与 invariant drift gates；
+- horizon、escape、equatorial surface、singularity guard、step exhaustion 与 same-step ambiguity；
+- 默认 Kerr Observation 的非临界收敛、negative-affine turning localization 与 batch ordering。
 
-这些测试不需要 GPU。`f64` 结果不是绝对 ground truth；fixture producer、80 位 observable 和每项 tolerance 仍由 `crates/gravlume-reference/fixtures/v1` 保存。
+这些测试不需要 GPU。fixture producer、80 位 observable 和 tolerance 由 [`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/) 保存。
 
-## 适用域与未外推项
+## 适用域
 
-- 当前 trajectory fixture 只覆盖 equatorial Schwarzschild 和默认 exterior Kerr Observation 的非临界样本。published Kerr/Kerr–Newman trajectory、独立 chart/state representation、near-axis Killing-tensor overlap 与更广参数扫描仍是 reference ladder 的扩展项。
-- raw-radius/reciprocal-radius `f32` 条件性数据仍按[渲染研究](rendering.md)标记为候选 `[X]`；本实现没有把缺少完整 metadata 的表升级成 machine-readable scientific fixture。
-- finite escape sphere 是数值边界；当前 comparison 报告边界上的方向、位置和 travel time，不把它解释为无穷远精确 observable。
-- renderer 从同一 validated `Observation` 独立构造 GPU initial ray，并已对 regular sample matrix 比较 termination 与 escape direction；它不消费 CPU trajectory。near-critical agreement、source anchor 与频率比仍属于后续证据。
+- trajectory fixture 主要覆盖 equatorial Schwarzschild 和默认 exterior Kerr Observation 的非临界样本；
+- published Kerr/Kerr–Newman trajectory、独立 chart/state representation、near-axis Killing-tensor overlap 与更广参数扫描尚未闭合；
+- finite escape sphere 是数值边界，不能解释为无穷远精确 observable；
+- renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
+- near-critical GPU agreement、source anchor、frequency ratio 与 transport 仍属于后续证据。
 
-## 实现来源
+历史 raw-radius/reciprocal-radius `f32` 条件性实验已移入[研究记录](research/mino-step-selection.md)，不属于 reference fixture 合同。
 
-- Dormand–Prince pair：原始论文 [Dormand–Prince 1980](https://doi.org/10.1016/0771-050X%2880%2990013-3)，continuous extension [Shampine 1986](https://doi.org/10.1090/S0025-5718-1986-0815836-3)，系数交叉检查 [SciPy 1.18.0 RK45 source](https://github.com/scipy/scipy/blob/v1.18.0/scipy/integrate/_ivp/rk.py)。
-- bracketed root guarantee：[Brent 1971/1973 作者书目页](https://maths-people.anu.edu.au/~brent/pub/pub006.html)；当前实现选择合同允许的 safeguarded bisection。
-- serialization seam：[Serde container attributes](https://serde.rs/container-attrs.html) 与 [`toml::from_str` 1.1.4](https://docs.rs/toml/1.1.4/toml/fn.from_str.html)。
-- binary64 seam：[Rust `f64`](https://doc.rust-lang.org/stable/std/primitive.f64.html) 与 [`include_str!`](https://doc.rust-lang.org/stable/std/macro.include_str.html)。
-- batch execution：[`rayon::ThreadPool` 1.12.0](https://docs.rs/rayon/1.12.0/rayon/struct.ThreadPool.html)；vector operations：[`glam::DVec3` 0.33.3](https://docs.rs/glam/0.33.3/glam/f64/struct.DVec3.html)。依赖闭包的最终事实以 `Cargo.lock` 为准。
+## 主要来源
+
+- [Dormand–Prince 1980](https://doi.org/10.1016/0771-050X%2880%2990013-3) 与 [Shampine 1986](https://doi.org/10.1090/S0025-5718-1986-0815836-3)；
+- [SciPy RK45 source](https://github.com/scipy/scipy/blob/v1.18.0/scipy/integrate/_ivp/rk.py) 作为维护实现的系数对照；
+- [Brent 的 bracketed root 文献页](https://maths-people.anu.edu.au/~brent/pub/pub006.html)；
+- [Serde container attributes](https://serde.rs/container-attrs.html)、[`toml::from_str`](https://docs.rs/toml/1.1.4/toml/fn.from_str.html)与 [`rayon::ThreadPool`](https://docs.rs/rayon/1.12.0/rayon/struct.ThreadPool.html)。
+
+精确依赖版本仍以 `Cargo.lock` 为准。

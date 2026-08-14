@@ -11,22 +11,21 @@ use crate::{
     shadow_coverage::{ShadowCoverage, ShadowTarget},
 };
 
-pub const TRACE_SHADER: &str = include_str!("shaders/trace.wgsl");
-pub const DIRECTION_RECONSTRUCTION_SHADER: &str =
-    include_str!("shaders/direction_reconstruction.wgsl");
+pub const KERR_SCHILD_TRACE_SHADER: &str = include_str!("shaders/kerr_schild_trace.wgsl");
+pub const LENSING_PREVIEW_SHADER: &str = include_str!("shaders/lensing_preview.wgsl");
+pub const GEODESIC_ACCELERATION_SHADER: &str = include_str!("shaders/geodesic_acceleration.wgsl");
 pub const SHADOW_COVERAGE_SHADER: &str = include_str!("shaders/shadow_coverage.wgsl");
 #[cfg(test)]
-const DIAGNOSTIC_SHADER: &str = include_str!("shaders/trace_diagnostic.wgsl");
+const TRACE_CAPTURE_SHADER: &str = include_str!("shaders/trace_capture.wgsl");
 #[cfg(test)]
-const DIRECTION_RECONSTRUCTION_DIAGNOSTIC_SHADER: &str =
-    include_str!("shaders/direction_reconstruction_diagnostic.wgsl");
+const ACCELERATED_TRACE_CAPTURE_SHADER: &str =
+    include_str!("shaders/accelerated_trace_capture.wgsl");
 #[cfg(test)]
 const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
 #[cfg(test)]
 const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate_capture.wgsl");
 pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
 const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
-pub const KERR_CAPTURE_OVERRIDE: &str = "KERR_CAPTURE_FAST_PATH";
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
 pub const TRACE_WORKGROUP_WIDTH: u32 = 8;
 pub const TRACE_WORKGROUP_HEIGHT: u32 = 8;
@@ -34,21 +33,22 @@ pub const TRACE_WORKGROUP_HEIGHT: u32 = 8;
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct TraceUniforms {
-    pub spacetime: [f32; 4],
-    pub observer_event: [f32; 4],
-    pub observer_velocity: [f32; 4],
-    pub image_right: [f32; 4],
-    pub image_up: [f32; 4],
-    pub arrival: [f32; 4],
-    pub view: [f32; 4],
-    pub event_surfaces: [f32; 4],
-    pub step_policy: [f32; 4],
+    spacetime: [f32; 4],
+    observer_event: [f32; 4],
+    observer_velocity: [f32; 4],
+    image_right: [f32; 4],
+    image_up: [f32; 4],
+    arrival: [f32; 4],
+    camera: [f32; 4],
+    event_surfaces: [f32; 4],
+    step_policy: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 struct TraceDispatch {
-    tile_region: [u32; 4],
+    tile_origin: [u32; 2],
+    tile_count: [u32; 2],
 }
 
 impl TraceUniforms {
@@ -108,9 +108,9 @@ impl TraceUniforms {
             image_right: pack4(frame.image_right_txyz(), "image_right")?,
             image_up: pack4(frame.image_up_txyz(), "image_up")?,
             arrival: pack4(frame.arrival_direction_txyz(), "arrival")?,
-            view: pack4(
+            camera: pack4(
                 [(view.vertical_fov().radians() * 0.5).tan(), 1.0, 0.5, 0.5],
-                "view",
+                "camera",
             )?,
             event_surfaces: pack4(
                 [200.0, f64::from(f32::from_bits(0x2b80_0000)), horizon, 0.0],
@@ -151,7 +151,7 @@ pub enum GpuTraceInputError {
 
 pub struct RayTracer {
     pipeline: wgpu::ComputePipeline,
-    reconstruction_node_pipeline: Option<wgpu::ComputePipeline>,
+    escape_map_node_pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     dispatch: wgpu::Buffer,
@@ -178,7 +178,7 @@ impl TraceTargetKind {
 
 fn trace_bind_group_layout_entries(
     target_kind: TraceTargetKind,
-    has_direction_map: bool,
+    has_escape_map: bool,
 ) -> Vec<wgpu::BindGroupLayoutEntry> {
     let mut entries = vec![
         wgpu::BindGroupLayoutEntry {
@@ -224,7 +224,7 @@ fn trace_bind_group_layout_entries(
             count: None,
         }));
     }
-    if has_direction_map {
+    if has_escape_map {
         entries.push(wgpu::BindGroupLayoutEntry {
             binding: 6,
             visibility: wgpu::ShaderStages::COMPUTE,
@@ -240,7 +240,7 @@ fn trace_bind_group_layout_entries(
 }
 
 impl RayTracer {
-    pub(crate) fn new(
+    pub fn new(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -248,15 +248,15 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            direction_reconstruction_shader_source(),
-            "trace_scene_direction_reconstruction",
-            Some("trace_direction_reconstruction_nodes"),
+            accelerated_shader_source(),
+            "trace_scene_accelerated",
+            Some("trace_escape_map_nodes"),
             TraceTargetKind::Presentation,
         ))
     }
 
     #[cfg(test)]
-    pub(crate) fn for_trace_capture(
+    pub fn for_trace_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -264,7 +264,7 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            diagnostic_shader_source(),
+            trace_capture_shader_source(),
             "capture_trace_scene",
             None,
             TraceTargetKind::Diagnostic,
@@ -272,7 +272,7 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_direction_reconstruction_trace_capture(
+    pub fn for_accelerated_trace_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -280,27 +280,27 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            direction_reconstruction_diagnostic_shader_source(),
-            "capture_direction_reconstruction_trace_scene",
-            Some("trace_direction_reconstruction_nodes"),
+            accelerated_capture_shader_source(),
+            "capture_accelerated_trace_scene",
+            Some("trace_escape_map_nodes"),
             TraceTargetKind::Diagnostic,
         ))
     }
 
     #[cfg(test)]
-    pub(crate) fn for_initial_ray_capture(
+    pub fn for_initial_ray_capture(
         device: &wgpu::Device,
         observation: &Observation,
         subpixel: [f32; 2],
     ) -> Result<Self, GpuTraceInputError> {
         let mut uniforms = TraceUniforms::from_observation(observation)?;
-        uniforms.view[2..].copy_from_slice(&subpixel);
+        uniforms.camera[2..].copy_from_slice(&subpixel);
         Ok(Self::from_uniforms(
             device,
             uniforms,
             Cow::Owned(format!(
                 "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
-                diagnostic_shader_source()
+                trace_capture_shader_source()
             )),
             "write_initial_rays",
             None,
@@ -309,7 +309,7 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub(crate) fn for_invariant_gate_capture(
+    pub fn for_invariant_gate_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -319,7 +319,7 @@ impl RayTracer {
             uniforms,
             Cow::Owned(format!(
                 "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
-                diagnostic_shader_source()
+                trace_capture_shader_source()
             )),
             "write_invariant_gate_cases",
             None,
@@ -332,7 +332,7 @@ impl RayTracer {
         uniforms: TraceUniforms,
         shader_source: Cow<'static, str>,
         entry_point: &'static str,
-        reconstruction_node_entry_point: Option<&'static str>,
+        escape_map_node_entry_point: Option<&'static str>,
         target_kind: TraceTargetKind,
     ) -> Self {
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init
@@ -344,13 +344,14 @@ impl RayTracer {
         let dispatch = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU trace dispatch"),
             contents: bytemuck::bytes_of(&TraceDispatch {
-                tile_region: [0; 4],
+                tile_origin: [0; 2],
+                tile_count: [0; 2],
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let shadow_coverage = ShadowCoverage::new(device, &uniforms);
         let entries =
-            trace_bind_group_layout_entries(target_kind, reconstruction_node_entry_point.is_some());
+            trace_bind_group_layout_entries(target_kind, escape_map_node_entry_point.is_some());
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("GPU trace bind group layout"),
             entries: &entries,
@@ -364,40 +365,28 @@ impl RayTracer {
             label: Some("Cartesian Kerr-Schild trace shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source),
         });
-        let capture_constants = [(KERR_CAPTURE_OVERRIDE, 1.0)];
-        let pipeline_constants = if reconstruction_node_entry_point.is_some() {
-            capture_constants.as_slice()
-        } else {
-            &[]
-        };
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(entry_point),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some(entry_point),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: pipeline_constants,
-                ..Default::default()
-            },
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
-        let reconstruction_node_pipeline = reconstruction_node_entry_point.map(|entry_point| {
+        let escape_map_node_pipeline = escape_map_node_entry_point.map(|entry_point| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(entry_point),
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some(entry_point),
-                compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: pipeline_constants,
-                    ..Default::default()
-                },
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             })
         });
 
         Self {
             pipeline,
-            reconstruction_node_pipeline,
+            escape_map_node_pipeline,
             bind_group_layout,
             uniforms,
             dispatch,
@@ -406,7 +395,7 @@ impl RayTracer {
         }
     }
 
-    pub(crate) fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceImage {
+    pub fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceImage {
         let mut texture_usage =
             wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING;
         if self.target_kind.captures_records() {
@@ -464,22 +453,22 @@ impl RayTracer {
         });
         #[cfg(not(test))]
         let capture_entries: Option<Vec<wgpu::BindGroupEntry<'_>>> = None;
-        let direction_map = self.reconstruction_node_pipeline.as_ref().map(|_| {
+        let escape_map = self.escape_map_node_pipeline.as_ref().map(|_| {
             device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("packed direction reconstruction map"),
-                size: direction_reconstruction_scratch_bytes(extent),
+                label: Some("packed escape-direction map"),
+                size: escape_map_scratch_bytes(extent),
                 usage: wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             })
         });
-        let direction_map_entry = direction_map.as_ref().map(|buffer| wgpu::BindGroupEntry {
+        let escape_map_entry = escape_map.as_ref().map(|buffer| wgpu::BindGroupEntry {
             binding: 6,
             resource: buffer.as_entire_binding(),
         });
         let entries = entries
             .into_iter()
             .chain(capture_entries.into_iter().flatten())
-            .chain(direction_map_entry)
+            .chain(escape_map_entry)
             .collect::<Vec<_>>();
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("GPU trace bind group"),
@@ -497,30 +486,30 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub(crate) fn encode(
+    pub fn encode(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceImage,
         tiles: TileRegion,
     ) {
-        self.encode_node_pass(queue, encoder, target, tiles, None);
-        self.encode_resolve_pass(encoder, target, tiles, None, true);
+        self.encode_escape_map_pass(queue, encoder, target, tiles, None);
+        self.encode_trace_pass(encoder, target, tiles, None, true);
     }
 
     #[cfg(test)]
-    pub(crate) fn encode_base(
+    pub fn encode_base(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceImage,
         tiles: TileRegion,
     ) {
-        self.encode_node_pass(queue, encoder, target, tiles, None);
-        self.encode_resolve_pass(encoder, target, tiles, None, false);
+        self.encode_escape_map_pass(queue, encoder, target, tiles, None);
+        self.encode_trace_pass(encoder, target, tiles, None, false);
     }
 
-    pub(crate) fn encode_node_pass(
+    pub fn encode_escape_map_pass(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
@@ -528,21 +517,21 @@ impl RayTracer {
         tiles: TileRegion,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
-        self.set_tile_region(queue, tiles);
-        let Some(node_pipeline) = &self.reconstruction_node_pipeline else {
+        self.set_tile_dispatch(queue, tiles);
+        let Some(node_pipeline) = &self.escape_map_node_pipeline else {
             return;
         };
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("direction reconstruction node pass"),
+            label: Some("escape-direction map pass"),
             timestamp_writes,
         });
         pass.set_pipeline(node_pipeline);
         pass.set_bind_group(0, &target.bind_group, &[]);
-        let [workgroups_x, workgroups_y] = direction_reconstruction_node_workgroups(tiles);
+        let [workgroups_x, workgroups_y] = escape_map_node_workgroups(tiles);
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 
-    pub(crate) fn encode_resolve_pass(
+    pub fn encode_trace_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceImage,
@@ -569,11 +558,12 @@ impl RayTracer {
         }
     }
 
-    fn set_tile_region(&self, queue: &wgpu::Queue, tiles: TileRegion) {
+    fn set_tile_dispatch(&self, queue: &wgpu::Queue, tiles: TileRegion) {
         let [origin_x, origin_y] = tiles.origin();
         let [workgroups_x, workgroups_y] = tiles.workgroups();
         let dispatch = TraceDispatch {
-            tile_region: [origin_x, origin_y, workgroups_x, workgroups_y],
+            tile_origin: [origin_x, origin_y],
+            tile_count: [workgroups_x, workgroups_y],
         };
         // Small queue writes are staged immediately and execute before the following submission.
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Queue.html#method.write_buffer
@@ -589,27 +579,27 @@ pub struct TileRegion {
 
 impl TileRegion {
     #[cfg(any(test, feature = "gpu-benchmarks"))]
-    pub(crate) const fn all(extent: RenderExtent) -> Self {
+    pub const fn all(extent: RenderExtent) -> Self {
         Self {
             origin: [0, 0],
             workgroups: tile_grid(extent),
         }
     }
 
-    pub(crate) const fn new(origin: [u32; 2], workgroups: [u32; 2]) -> Self {
+    pub const fn new(origin: [u32; 2], workgroups: [u32; 2]) -> Self {
         debug_assert!(workgroups[0] > 0 && workgroups[1] > 0);
         Self { origin, workgroups }
     }
 
-    pub(crate) const fn origin(self) -> [u32; 2] {
+    pub const fn origin(self) -> [u32; 2] {
         self.origin
     }
 
-    pub(crate) const fn workgroups(self) -> [u32; 2] {
+    pub const fn workgroups(self) -> [u32; 2] {
         self.workgroups
     }
 
-    pub(crate) const fn len(self) -> u32 {
+    pub const fn len(self) -> u32 {
         self.workgroups[0] * self.workgroups[1]
     }
 
@@ -630,7 +620,7 @@ pub const fn tile_grid(extent: RenderExtent) -> [u32; 2] {
     ]
 }
 
-const fn direction_reconstruction_node_workgroups(tiles: TileRegion) -> [u32; 2] {
+const fn escape_map_node_workgroups(tiles: TileRegion) -> [u32; 2] {
     let [tile_columns, tile_rows] = tiles.workgroups();
     [
         (tile_columns * 2 + 1).div_ceil(TRACE_WORKGROUP_WIDTH),
@@ -638,7 +628,7 @@ const fn direction_reconstruction_node_workgroups(tiles: TileRegion) -> [u32; 2]
     ]
 }
 
-pub fn direction_reconstruction_scratch_bytes(extent: RenderExtent) -> u64 {
+pub fn escape_map_scratch_bytes(extent: RenderExtent) -> u64 {
     let columns = u64::from(extent.width().div_ceil(TRACE_WORKGROUP_WIDTH)) * 2 + 1;
     let rows = u64::from(extent.height().div_ceil(TRACE_WORKGROUP_HEIGHT)) * 2 + 1;
     columns
@@ -646,19 +636,23 @@ pub fn direction_reconstruction_scratch_bytes(extent: RenderExtent) -> u64 {
         .saturating_mul(size_of::<u32>())
 }
 
-fn direction_reconstruction_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!("{TRACE_SHADER}\n{DIRECTION_RECONSTRUCTION_SHADER}"))
-}
-
-#[cfg(test)]
-fn diagnostic_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!("{TRACE_SHADER}\n{DIAGNOSTIC_SHADER}"))
-}
-
-#[cfg(test)]
-fn direction_reconstruction_diagnostic_shader_source() -> Cow<'static, str> {
+fn accelerated_shader_source() -> Cow<'static, str> {
     Cow::Owned(format!(
-        "{TRACE_SHADER}\n{DIAGNOSTIC_SHADER}\n{DIRECTION_RECONSTRUCTION_SHADER}\n{DIRECTION_RECONSTRUCTION_DIAGNOSTIC_SHADER}"
+        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{GEODESIC_ACCELERATION_SHADER}"
+    ))
+}
+
+#[cfg(test)]
+fn trace_capture_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}"
+    ))
+}
+
+#[cfg(test)]
+fn accelerated_capture_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{GEODESIC_ACCELERATION_SHADER}\n{ACCELERATED_TRACE_CAPTURE_SHADER}"
     ))
 }
 
@@ -675,17 +669,17 @@ pub struct TraceImage {
 }
 
 impl TraceImage {
-    pub(crate) const fn view(&self) -> &wgpu::TextureView {
+    pub const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
     #[cfg(test)]
-    pub(crate) fn texture(&self) -> &wgpu::Texture {
+    pub fn texture(&self) -> &wgpu::Texture {
         self.view.texture()
     }
 
     #[cfg(test)]
-    pub(crate) const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
+    pub const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
         self.record_planes
             .as_ref()
             .expect("capture targets include diagnostic record planes")
@@ -693,7 +687,7 @@ impl TraceImage {
     }
 
     #[cfg(test)]
-    pub(crate) const fn shadow_control(&self) -> &wgpu::Buffer {
+    pub const fn shadow_control(&self) -> &wgpu::Buffer {
         &self.shadow_coverage.control
     }
 }

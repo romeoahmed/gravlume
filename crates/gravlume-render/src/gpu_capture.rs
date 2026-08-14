@@ -36,9 +36,9 @@ pub fn capture_trace(observation: &Observation) -> TraceCapture {
     capture(gpu, observation, &compute, false)
 }
 
-pub fn capture_direction_reconstruction_trace(observation: &Observation) -> TraceCapture {
+pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_direction_reconstruction_trace_capture(&gpu.device, observation)
+    let compute = RayTracer::for_accelerated_trace_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
     capture(gpu, observation, &compute, false)
 }
@@ -83,12 +83,12 @@ pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -
     bytemuck::pod_read_unaligned(&gpu.read_buffer(&readback, submission))
 }
 
-pub fn capture_direction_reconstruction_trace_in_batches(
+pub fn capture_accelerated_trace_in_batches(
     observation: &Observation,
     tiles_per_batch: u32,
 ) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_direction_reconstruction_trace_capture(&gpu.device, observation)
+    let compute = RayTracer::for_accelerated_trace_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
     capture_in_batches(gpu, observation, &compute, tiles_per_batch)
 }

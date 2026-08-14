@@ -1,10 +1,6 @@
-# Outgoing Cartesian Kerr–Schild ↔ Boyer–Lindquist/Mino 零步 seam
+# Kerr–Schild ↔ Boyer–Lindquist/Mino 零步 seam
 
-状态：**physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的
-trajectory/f32 Gate C/D 随后被高分辨率反例否决。** 本文只封闭
-Kerr–Newman chart convention 与 pure-Kerr Mino state 的局部零步 seam；trajectory 与
-step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式
-误写成整个积分器的证明。
+> **状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的 trajectory/f32 Gate C/D 随后被高分辨率反例否决。本文只封闭 Kerr–Newman chart convention 与 pure-Kerr Mino state 的局部零步 seam；trajectory 与 step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式误写成整个积分器的证明。
 
 可复现的 SymPy 证明脚本为
 [verify_kerr_schild_mino_map.py](scripts/verify_kerr_schild_mino_map.py)。它是 docs 下的研究工具，

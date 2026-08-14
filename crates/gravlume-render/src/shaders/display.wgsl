@@ -1,10 +1,13 @@
+// Final scene/UI composition and SDR or extended-linear HDR output transfer.
+
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
 }
 
 struct OutputUniforms {
-    mapping: vec4<f32>,
+    // (HDR headroom, reference-white scale, reserved, reserved)
+    tone_mapping: vec4<f32>,
 }
 
 @group(0) @binding(0)
@@ -24,36 +27,30 @@ fn fullscreen_triangle(@builtin(vertex_index) vertex_index: u32) -> VertexOutput
     return VertexOutput(vec4<f32>(x, y, 0.0, 1.0), uv);
 }
 
-fn is_non_finite(value: f32) -> bool {
-    let exponent = bitcast<u32>(value) & 0x7f800000u;
-    return exponent == 0x7f800000u;
-}
-
 fn invalid_scene_linear(scene_linear: vec3<f32>) -> bool {
+    let exponent = bitcast<vec3<u32>>(scene_linear) & vec3<u32>(0x7f800000u);
     return any(scene_linear < vec3<f32>(0.0))
-        || is_non_finite(scene_linear.x)
-        || is_non_finite(scene_linear.y)
-        || is_non_finite(scene_linear.z);
+        || any(exponent == vec3<u32>(0x7f800000u));
 }
 
 fn linear_to_srgb(linear: vec3<f32>) -> vec3<f32> {
     let cutoff = linear <= vec3<f32>(0.0031308);
-    let lower = linear * vec3<f32>(12.92);
-    let upper = vec3<f32>(1.055) * pow(linear, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055);
+    let lower = linear * 12.92;
+    let upper = 1.055 * pow(linear, vec3<f32>(1.0 / 2.4)) - 0.055;
     return select(upper, lower, cutoff);
 }
 
 fn srgb_to_linear(gamma: vec3<f32>) -> vec3<f32> {
     let cutoff = gamma <= vec3<f32>(0.04045);
-    let lower = gamma / vec3<f32>(12.92);
-    let upper = pow((gamma + vec3<f32>(0.055)) / vec3<f32>(1.055), vec3<f32>(2.4));
+    let lower = gamma / 12.92;
+    let upper = pow((gamma + 0.055) / 1.055, vec3<f32>(2.4));
     return select(upper, lower, cutoff);
 }
 
-fn texel_at(texture: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
+fn load_nearest(texture: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     let dimensions = textureDimensions(texture);
     let maximum = vec2<i32>(dimensions) - vec2<i32>(1);
-    let texel = min(vec2<i32>(uv * vec2<f32>(dimensions)), maximum);
+    let texel = clamp(vec2<i32>(uv * vec2<f32>(dimensions)), vec2<i32>(0), maximum);
     return textureLoad(texture, texel, 0);
 }
 
@@ -76,12 +73,12 @@ fn scene_at(uv: vec2<f32>) -> vec3<f32> {
     if any(fitted < vec2<f32>(0.0)) || any(fitted >= vec2<f32>(1.0)) {
         return vec3<f32>(0.0);
     }
-    let scene_linear = texel_at(scene_texture, fitted).rgb;
+    let scene_linear = load_nearest(scene_texture, fitted).rgb;
     return select(scene_linear, vec3<f32>(1.0, 0.0, 1.0), invalid_scene_linear(scene_linear));
 }
 
 fn ui_at(uv: vec2<f32>) -> vec4<f32> {
-    let gamma_premultiplied = texel_at(ui_texture, uv);
+    let gamma_premultiplied = load_nearest(ui_texture, uv);
     let alpha = clamp(gamma_premultiplied.a, 0.0, 1.0);
     if alpha == 0.0 {
         return vec4<f32>(0.0);
@@ -95,29 +92,23 @@ fn sdr_map(scene_linear: vec3<f32>) -> vec3<f32> {
     return scene_linear / (vec3<f32>(1.0) + scene_linear);
 }
 
-fn hdr_map_channel(scene_linear: f32, headroom: f32) -> f32 {
-    if headroom <= 1.0 {
-        return min(scene_linear, 1.0);
-    }
-    if scene_linear <= 1.0 {
-        return scene_linear;
+fn hdr_map(scene_linear: vec3<f32>) -> vec3<f32> {
+    let headroom = max(output_uniforms.tone_mapping.x, 1.0);
+    if headroom == 1.0 {
+        return min(scene_linear, vec3<f32>(1.0));
     }
     let highlight_range = headroom - 1.0;
-    return 1.0 + highlight_range * (1.0 - exp(-(scene_linear - 1.0) / highlight_range));
-}
-
-fn hdr_map(scene_linear: vec3<f32>) -> vec3<f32> {
-    let headroom = max(output_uniforms.mapping.x, 1.0);
-    return vec3<f32>(
-        hdr_map_channel(scene_linear.x, headroom),
-        hdr_map_channel(scene_linear.y, headroom),
-        hdr_map_channel(scene_linear.z, headroom),
-    );
+    // select evaluates both values, so keep the unselected highlight expression finite below
+    // reference white as well.
+    let excess = max(scene_linear - 1.0, vec3<f32>(0.0));
+    let highlights = 1.0
+        + highlight_range * (1.0 - exp(-excess / highlight_range));
+    return select(highlights, scene_linear, scene_linear <= vec3<f32>(1.0));
 }
 
 fn composite(mapped_scene: vec3<f32>, uv: vec2<f32>) -> vec3<f32> {
     let ui = ui_at(uv);
-    let reference_white_scale = max(output_uniforms.mapping.y, 0.0);
+    let reference_white_scale = max(output_uniforms.tone_mapping.y, 0.0);
     return (mapped_scene * (1.0 - ui.a) + ui.rgb) * reference_white_scale;
 }
 

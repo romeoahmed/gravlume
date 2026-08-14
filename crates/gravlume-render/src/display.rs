@@ -10,7 +10,7 @@ pub const UI_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 struct OutputUniforms {
-    mapping: [f32; 4],
+    tone_mapping: [f32; 4],
 }
 
 pub struct DisplayPipeline {
@@ -310,7 +310,7 @@ impl DisplayTarget {
 impl From<SurfaceSelection> for OutputUniforms {
     fn from(selection: SurfaceSelection) -> Self {
         Self {
-            mapping: [
+            tone_mapping: [
                 selection.tone_map_headroom(),
                 selection.reference_white_scale(),
                 0.0,
