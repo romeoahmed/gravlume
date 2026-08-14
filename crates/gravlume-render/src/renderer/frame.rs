@@ -496,10 +496,10 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
         #[test]
-        fn trace_progress_covers_each_tile_once_with_bounded_batches(
-            width in 1_u32..=257,
-            height in 1_u32..=257,
-            maximum_dispatch_dimension in 1_u32..=16,
+        fn trace_progress_covers_native_extents_once_with_bounded_batches(
+            width in 1_u32..=3_840,
+            height in 1_u32..=2_160,
+            maximum_dispatch_dimension in 1_u32..=512,
         ) {
             let extent = RenderExtent::new(width, height).expect("generated extent is nonzero");
             let mut progress = TraceProgress::new(extent, maximum_dispatch_dimension);
@@ -616,28 +616,6 @@ mod tests {
                 maximum_pixels: MAXIMUM_NATIVE_TRACE_PIXELS,
             })
         ));
-    }
-
-    #[test]
-    fn trace_batches_respect_the_device_dispatch_dimension_at_4k() {
-        let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
-        let maximum_dispatch_dimension = 512;
-        let mut progress = TraceProgress::new(extent, maximum_dispatch_dimension);
-        let [tile_columns, tile_rows] = tile_grid(extent);
-        let mut covered_tiles = 0;
-
-        while let Some(batch) = progress.next_batch() {
-            let [workgroups_x, workgroups_y] = batch.workgroups();
-            assert!(workgroups_x <= maximum_dispatch_dimension);
-            assert!(workgroups_y <= maximum_dispatch_dimension);
-            let [origin_x, origin_y] = batch.origin();
-            assert_eq!(origin_y * tile_columns + origin_x, covered_tiles);
-            progress.submitted(batch);
-            covered_tiles += batch.len();
-            progress.completed(f64::MIN_POSITIVE);
-        }
-
-        assert_eq!(covered_tiles, tile_columns * tile_rows);
     }
 
     #[test]

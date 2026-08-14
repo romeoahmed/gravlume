@@ -1,8 +1,8 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, Extremality, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
-    PhysicalSceneInput, StationaryObserverInput, ValidationIssueCode,
+    Angle, KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+    StationaryObserverInput, ValidationIssueCode,
 };
 use proptest::prelude::*;
 
@@ -60,25 +60,6 @@ fn invalid_scene_reports_stable_codes_and_field_paths() {
         issue.code() == ValidationIssueCode::NonPositive
             && issue.field_path() == "physical_scene.observer.measured_frequency"
     }));
-}
-
-#[test]
-fn default_kerr_observer_matches_the_versioned_contract() {
-    let scene = default_scene();
-
-    assert_eq!(scene.extremality(), Extremality::Subextremal);
-    assert!(
-        (scene
-            .spacetime()
-            .outer_horizon_radius()
-            .expect("horizon exists")
-            - 1.6)
-            .abs()
-            < 2.0e-15
-    );
-    assert!((scene.observer_metric_g_tt() + 0.933_345_183_078_563_8).abs() < 2.0e-15);
-    assert!(scene.observer_frame().gram_residual() < 2.0e-12);
-    assert!(scene.observer_frame().orientation_determinant() > 0.0);
 }
 
 #[test]

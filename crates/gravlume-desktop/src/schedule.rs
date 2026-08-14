@@ -110,30 +110,46 @@ impl EventLoopSchedule {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
 
-    #[test]
-    fn resize_coalescing_keeps_the_latest_extent_and_waits_for_gpu_idle() {
-        let start = Instant::now();
-        let mut pending = PendingResize::default();
+    proptest! {
+        #[test]
+        fn resize_coalescing_matches_the_latest_nonzero_request(
+            requests in prop::collection::vec((0_u32..=4_096, 0_u32..=2_160), 0..64),
+        ) {
+            let start = Instant::now();
+            let mut pending = PendingResize::default();
+            let mut expected = None;
 
-        assert!(!pending.request(start, PhysicalSize::new(1_280, 720)));
-        assert!(!pending.request(
-            start + Duration::from_millis(20),
-            PhysicalSize::new(1_920, 1_080),
-        ));
-        assert_eq!(
-            pending.take_due(start + Duration::from_secs(1), false),
-            None
-        );
-        assert_eq!(
-            pending.take_due(start + Duration::from_secs(1), true),
-            Some(PhysicalSize::new(1_920, 1_080))
-        );
+            for (index, (width, height)) in requests.into_iter().enumerate() {
+                let elapsed_ms = u64::try_from(index)
+                    .expect("generated resize sequence length fits in u64");
+                let now = start + Duration::from_millis(elapsed_ms);
+                let size = PhysicalSize::new(width, height);
+                let pauses = pending.request(now, size);
 
-        assert!(!pending.request(start, PhysicalSize::new(800, 600)));
-        assert!(pending.request(start, PhysicalSize::new(0, 0)));
-        assert!(!pending.is_pending());
+                if width == 0 || height == 0 {
+                    prop_assert!(pauses);
+                    expected = None;
+                } else {
+                    prop_assert!(!pauses);
+                    let deadline = now + RESIZE_SETTLE_INTERVAL;
+                    expected = Some((size, deadline));
+                }
+                prop_assert_eq!(pending.is_pending(), expected.is_some());
+                prop_assert_eq!(pending.deadline(), expected.map(|(_, deadline)| deadline));
+            }
+
+            if let Some((size, deadline)) = expected {
+                prop_assert_eq!(pending.take_due(deadline, false), None);
+                prop_assert_eq!(pending.take_due(deadline, true), Some(size));
+                prop_assert!(!pending.is_pending());
+            } else {
+                prop_assert_eq!(pending.take_due(start + Duration::from_secs(1), true), None);
+            }
+        }
     }
 
     #[test]
