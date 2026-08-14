@@ -1,7 +1,7 @@
 use crate::{
-    Extremality, GeodesicState, ImageSample, KerrNewmanSpacetime, KerrSchildChart, ObserverFrame,
-    PerspectiveView, SpacetimeEvent, StationaryObserverInput, ValidationIssueCode,
-    ValidationReport, observer::StationaryObserver, state::FourVector,
+    EquatorialCircularEmitter, Extremality, GeodesicState, ImageSample, KerrNewmanSpacetime,
+    KerrSchildChart, ObserverFrame, PerspectiveView, SpacetimeEvent, StationaryObserverInput,
+    ValidationIssueCode, ValidationReport, observer::StationaryObserver, state::FourVector,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
@@ -38,6 +38,7 @@ impl PhysicalSceneInput {
 pub struct PhysicalScene {
     spacetime: KerrNewmanSpacetime,
     observer: StationaryObserver,
+    equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
 }
 
 impl PhysicalScene {
@@ -75,6 +76,7 @@ impl PhysicalScene {
         Ok(Self {
             spacetime,
             observer,
+            equatorial_circular_emitter: None,
         })
     }
 
@@ -101,6 +103,21 @@ impl PhysicalScene {
     #[must_use]
     pub const fn observer_metric_g_tt(&self) -> f64 {
         self.observer.metric_g_tt()
+    }
+
+    #[must_use]
+    pub const fn equatorial_circular_emitter(&self) -> Option<EquatorialCircularEmitter> {
+        self.equatorial_circular_emitter
+    }
+
+    /// Returns an equivalent scene with the validated source installed.
+    #[must_use]
+    pub const fn with_equatorial_circular_emitter(
+        mut self,
+        emitter: EquatorialCircularEmitter,
+    ) -> Self {
+        self.equatorial_circular_emitter = Some(emitter);
+        self
     }
 }
 

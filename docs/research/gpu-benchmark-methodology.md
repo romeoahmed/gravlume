@@ -4,15 +4,15 @@
 
 ## 1. 测量对象
 
-固定 workload 为默认 Kerr scene、`1280×720`、完整 production escape-direction map、interval
-capture、KS fallback 与 selective shadow coverage。资源、pipeline 和 scene 在 Criterion 计时
-闭包外创建；每次迭代重新编码并提交一张完整 candidate。
+固定 workload 为默认 Kerr surface scene、`1280×720`、full Cartesian KS、equatorial event 与
+直接 bolometric transport。资源、pipeline 和 scene 在 Criterion 计时闭包外创建；每次迭代重新
+编码并提交一张完整 candidate。该 workload 随 `surface-observable-v1` 取代旧 sky accelerator
+workload，因此两者的绝对时间不能串成同一历史序列。
 
-benchmark 复用 renderer 自己的 `GpuTimings`：escape-map pass 和 trace pass 各写一对
-timestamp，最后一个 resolve 同时包含 shadow classify/refine。两段 GPU duration 相加后通过
-Criterion `Bencher::iter_custom` 返回。命令编码、queue submit、等待和 readback 不计入该
-duration，因此这个指标用于比较 kernel throughput，不代表 resize-to-publish 或点击到像素的
-端到端延迟。
+benchmark 复用 renderer 自己的 `GpuTimings`：当前 surface plan 只测一条 trace pass；具
+escape-map 的 sky plan 才累加两条 pass。resolved GPU duration 通过 Criterion
+`Bencher::iter_custom` 返回。命令编码、queue submit、等待和 readback 不计入该 duration，因此
+这个指标用于比较 kernel throughput，不代表 resize-to-publish 或点击到像素的端到端延迟。
 
 Criterion 明确把 `iter_custom` 定义为由被测 workload 自行提供总 `Duration` 的接口；wgpu
 则规定 pass timestamp 由 `TIMESTAMP_QUERY` feature 提供，resolved tick 需要按
@@ -24,7 +24,7 @@ Criterion 明确把 `iter_custom` 定义为由被测 workload 自行提供总 `D
 
 ## 2. 为什么不保留第二套 profiler
 
-production 已有四 tick、单 readback buffer、明确 submission 生命周期的 `GpuTimings`。
+production 已有 plan-sized query set、单 readback buffer、明确 submission 生命周期的 `GpuTimings`：surface trace 使用两个 tick，sky escape-map + trace 使用四个 tick。
 永久 benchmark 再引入 `wgpu-profiler` 会复制 query ownership、frame lifecycle 和错误面；而
 一个 compute pass 的 descriptor 只能安装一组 timestamp writes。当前 benchmark 不需要
 scope tree、动态 query pool 或多帧 profiler，因此直接复用 production abstraction 更小，

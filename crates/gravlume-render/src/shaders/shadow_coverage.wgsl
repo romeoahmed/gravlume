@@ -118,7 +118,7 @@ fn refine_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
             SHADOW_SAMPLE_OFFSETS[sample_index],
         );
         if result.termination == TERMINATION_ESCAPE {
-            scene_linear += analytic_sky(result.direction);
+            scene_linear += analytic_sky(result.source_coordinates);
             escape_samples += 1u;
         } else if result.termination != TERMINATION_HORIZON {
             return;

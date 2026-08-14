@@ -1,7 +1,8 @@
 use std::borrow::Cow;
 
 use gravlume_domain::{
-    Extremality, KerrNewmanSpacetime, KerrSchildChart, Observation, ValidationReport,
+    EquatorialCircularEmitter, Extremality, KerrNewmanSpacetime, KerrSchildChart, Observation,
+    ValidationReport,
 };
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
@@ -15,8 +16,11 @@ pub const KERR_SCHILD_TRACE_SHADER: &str = include_str!("shaders/kerr_schild_tra
 pub const LENSING_PREVIEW_SHADER: &str = include_str!("shaders/lensing_preview.wgsl");
 pub const GEODESIC_ACCELERATION_SHADER: &str = include_str!("shaders/geodesic_acceleration.wgsl");
 pub const SHADOW_COVERAGE_SHADER: &str = include_str!("shaders/shadow_coverage.wgsl");
+pub const SURFACE_PREVIEW_SHADER: &str = include_str!("shaders/surface_preview.wgsl");
 #[cfg(test)]
 const TRACE_CAPTURE_SHADER: &str = include_str!("shaders/trace_capture.wgsl");
+#[cfg(test)]
+const SURFACE_TRACE_CAPTURE_SHADER: &str = include_str!("shaders/surface_trace_capture.wgsl");
 #[cfg(test)]
 const ACCELERATED_TRACE_CAPTURE_SHADER: &str =
     include_str!("shaders/accelerated_trace_capture.wgsl");
@@ -24,8 +28,13 @@ const ACCELERATED_TRACE_CAPTURE_SHADER: &str =
 const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
 #[cfg(test)]
 const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate_capture.wgsl");
+#[cfg(test)]
+const EVENT_POLICY_CAPTURE_SHADER: &str = include_str!("shaders/event_policy_capture.wgsl");
 pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
 const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
+const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M: f32 = 200.0;
+const GPU_EVENT_TIE_TOLERANCE_OVER_M: f32 = f32::from_bits(0x3700_0000);
+const GPU_EVENT_ARMING_BAND_OVER_M: f32 = f32::from_bits(0x3980_0000);
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
 pub const TRACE_WORKGROUP_WIDTH: u32 = 8;
 pub const TRACE_WORKGROUP_HEIGHT: u32 = 8;
@@ -41,8 +50,11 @@ pub struct TraceUniforms {
     arrival: [f32; 4],
     camera: [f32; 4],
     event_surfaces: [f32; 4],
+    surface_emitter: [f32; 4],
     step_policy: [f32; 4],
 }
+
+const _: () = assert!(std::mem::size_of::<TraceUniforms>() == 160);
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
@@ -97,6 +109,7 @@ impl TraceUniforms {
         }
         let horizon = gpu_spacetime.outer_horizon_radius().unwrap_or(-1.0);
         let [_, observer_x, observer_y, observer_z] = scene.observer_event().to_txyz();
+        let surface_emitter = pack_surface_emitter(scene.equatorial_circular_emitter(), mass)?;
 
         Ok(Self {
             spacetime: spacetime_uniform,
@@ -113,12 +126,66 @@ impl TraceUniforms {
                 "camera",
             )?,
             event_surfaces: pack4(
-                [200.0, f64::from(f32::from_bits(0x2b80_0000)), horizon, 0.0],
+                [
+                    f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
+                    f64::from(f32::from_bits(0x2b80_0000)),
+                    horizon,
+                    f64::from(GPU_EVENT_TIE_TOLERANCE_OVER_M),
+                ],
                 "event_surfaces",
             )?,
+            surface_emitter,
             step_policy: [0.1, 0.005, 8.0, INVARIANT_DRIFT_LIMIT],
         })
     }
+}
+
+fn pack_surface_emitter(
+    emitter: Option<EquatorialCircularEmitter>,
+    mass_m: f64,
+) -> Result<[f32; 4], GpuTraceInputError> {
+    let Some(emitter) = emitter else {
+        return Ok([0.0; 4]);
+    };
+    let outer_radius_over_m = emitter.outer_radius_m() / mass_m;
+    if outer_radius_over_m >= f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M) {
+        return Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary {
+            outer_radius_over_m,
+            escape_radius_over_m: f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
+        });
+    }
+    let packed = pack4(
+        [
+            emitter.inner_radius_m() / mass_m,
+            outer_radius_over_m,
+            emitter.intensity_at_six_m(),
+            f64::from(GPU_EVENT_ARMING_BAND_OVER_M),
+        ],
+        "surface_emitter",
+    )?;
+    // A binary64 value inside the boundary can round onto it when packed for the shader.
+    // Source: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
+    if packed[1] >= OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M {
+        return Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary {
+            outer_radius_over_m,
+            escape_radius_over_m: f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
+        });
+    }
+    let interval_collapsed = emitter.outer_radius_m() > emitter.inner_radius_m()
+        && packed[1].to_bits() == packed[0].to_bits();
+    let intensity_underflowed = emitter.intensity_at_six_m() > 0.0 && packed[2] == 0.0;
+    if packed[0] <= 0.0
+        || packed[1] < packed[0]
+        || packed[2] < 0.0
+        || packed[..3].iter().any(|value| value.is_subnormal())
+        || interval_collapsed
+        || intensity_underflowed
+    {
+        return Err(GpuTraceInputError::NotRepresentable {
+            field: "surface_emitter",
+        });
+    }
+    Ok(packed)
 }
 
 fn pack4(values: [f64; 4], field: &'static str) -> Result<[f32; 4], GpuTraceInputError> {
@@ -147,6 +214,13 @@ pub enum GpuTraceInputError {
     },
     #[error("observation field {field} is not representable by the GPU f32 contract")]
     NotRepresentable { field: &'static str },
+    #[error(
+        "surface outer radius {outer_radius_over_m} M must be strictly inside the GPU escape boundary {escape_radius_over_m} M"
+    )]
+    SurfaceOutsideEscapeBoundary {
+        outer_radius_over_m: f64,
+        escape_radius_over_m: f64,
+    },
 }
 
 pub struct RayTracer {
@@ -155,8 +229,40 @@ pub struct RayTracer {
     bind_group_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     dispatch: wgpu::Buffer,
-    shadow_coverage: ShadowCoverage,
+    shadow_coverage: Option<ShadowCoverage>,
+    plan: TracePlan,
     target_kind: TraceTargetKind,
+}
+
+#[derive(Clone, Copy)]
+enum TracePlan {
+    AcceleratedSky,
+    EquatorialSurface,
+}
+
+impl TracePlan {
+    const fn resolve(observation: &Observation) -> Self {
+        if observation.scene().equatorial_circular_emitter().is_some() {
+            Self::EquatorialSurface
+        } else {
+            Self::AcceleratedSky
+        }
+    }
+
+    fn scratch_bytes(self, extent: RenderExtent) -> u64 {
+        match self {
+            Self::AcceleratedSky => shadow_coverage_scratch_bytes(extent)
+                .saturating_add(escape_map_scratch_bytes(extent)),
+            Self::EquatorialSurface => 0,
+        }
+    }
+
+    const fn surface_events_enabled(self) -> f64 {
+        match self {
+            Self::AcceleratedSky => 0.0,
+            Self::EquatorialSurface => 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -164,6 +270,85 @@ enum TraceTargetKind {
     Presentation,
     #[cfg(test)]
     Diagnostic,
+}
+
+struct TracePipelineSpec {
+    shader_source: Cow<'static, str>,
+    entry_point: &'static str,
+    escape_map_node_entry_point: Option<&'static str>,
+    has_shadow_refinement: bool,
+    plan: TracePlan,
+    target_kind: TraceTargetKind,
+}
+
+pub struct TraceBatchOptions<'a> {
+    escape_map_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
+    trace_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
+    refine_final_batch: bool,
+}
+
+impl<'a> TraceBatchOptions<'a> {
+    pub const fn new(
+        escape_map_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
+        trace_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
+        refine_final_batch: bool,
+    ) -> Self {
+        Self {
+            escape_map_timestamp_writes,
+            trace_timestamp_writes,
+            refine_final_batch,
+        }
+    }
+
+    #[cfg(test)]
+    const fn untimed(refine_final_batch: bool) -> Self {
+        Self::new(None, None, refine_final_batch)
+    }
+}
+
+impl TracePlan {
+    fn presentation_spec(self) -> TracePipelineSpec {
+        match self {
+            Self::AcceleratedSky => TracePipelineSpec {
+                shader_source: accelerated_shader_source(),
+                entry_point: "trace_scene_accelerated",
+                escape_map_node_entry_point: Some("trace_escape_map_nodes"),
+                has_shadow_refinement: true,
+                plan: self,
+                target_kind: TraceTargetKind::Presentation,
+            },
+            Self::EquatorialSurface => TracePipelineSpec {
+                shader_source: surface_shader_source(),
+                entry_point: "trace_surface_scene",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: self,
+                target_kind: TraceTargetKind::Presentation,
+            },
+        }
+    }
+
+    #[cfg(test)]
+    fn capture_spec(self) -> TracePipelineSpec {
+        match self {
+            Self::AcceleratedSky => TracePipelineSpec {
+                shader_source: trace_capture_shader_source(),
+                entry_point: "capture_trace_scene",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: true,
+                plan: self,
+                target_kind: TraceTargetKind::Diagnostic,
+            },
+            Self::EquatorialSurface => TracePipelineSpec {
+                shader_source: surface_capture_shader_source(),
+                entry_point: "capture_surface_trace_scene",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: self,
+                target_kind: TraceTargetKind::Diagnostic,
+            },
+        }
+    }
 }
 
 impl TraceTargetKind {
@@ -213,7 +398,7 @@ fn trace_bind_group_layout_entries(
         },
     ];
     if target_kind.captures_records() {
-        entries.extend((3..=5).map(|binding| wgpu::BindGroupLayoutEntry {
+        entries.extend((3..=6).map(|binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
@@ -226,7 +411,7 @@ fn trace_bind_group_layout_entries(
     }
     if has_escape_map {
         entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 6,
+            binding: 7,
             visibility: wgpu::ShaderStages::COMPUTE,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Storage { read_only: false },
@@ -245,13 +430,11 @@ impl RayTracer {
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
         let uniforms = TraceUniforms::from_observation(observation)?;
+        let plan = TracePlan::resolve(observation);
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            accelerated_shader_source(),
-            "trace_scene_accelerated",
-            Some("trace_escape_map_nodes"),
-            TraceTargetKind::Presentation,
+            plan.presentation_spec(),
         ))
     }
 
@@ -261,14 +444,8 @@ impl RayTracer {
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
         let uniforms = TraceUniforms::from_observation(observation)?;
-        Ok(Self::from_uniforms(
-            device,
-            uniforms,
-            trace_capture_shader_source(),
-            "capture_trace_scene",
-            None,
-            TraceTargetKind::Diagnostic,
-        ))
+        let plan = TracePlan::resolve(observation);
+        Ok(Self::from_uniforms(device, uniforms, plan.capture_spec()))
     }
 
     #[cfg(test)]
@@ -280,10 +457,14 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            accelerated_capture_shader_source(),
-            "capture_accelerated_trace_scene",
-            Some("trace_escape_map_nodes"),
-            TraceTargetKind::Diagnostic,
+            TracePipelineSpec {
+                shader_source: accelerated_capture_shader_source(),
+                entry_point: "capture_accelerated_trace_scene",
+                escape_map_node_entry_point: Some("trace_escape_map_nodes"),
+                has_shadow_refinement: true,
+                plan: TracePlan::AcceleratedSky,
+                target_kind: TraceTargetKind::Diagnostic,
+            },
         ))
     }
 
@@ -298,13 +479,17 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            Cow::Owned(format!(
-                "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
-                trace_capture_shader_source()
-            )),
-            "write_initial_rays",
-            None,
-            TraceTargetKind::Diagnostic,
+            TracePipelineSpec {
+                shader_source: Cow::Owned(format!(
+                    "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
+                    trace_capture_shader_source()
+                )),
+                entry_point: "write_initial_rays",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: TracePlan::resolve(observation),
+                target_kind: TraceTargetKind::Diagnostic,
+            },
         ))
     }
 
@@ -317,24 +502,56 @@ impl RayTracer {
         Ok(Self::from_uniforms(
             device,
             uniforms,
-            Cow::Owned(format!(
-                "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
-                trace_capture_shader_source()
-            )),
-            "write_invariant_gate_cases",
-            None,
-            TraceTargetKind::Diagnostic,
+            TracePipelineSpec {
+                shader_source: Cow::Owned(format!(
+                    "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
+                    trace_capture_shader_source()
+                )),
+                entry_point: "write_invariant_gate_cases",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: TracePlan::resolve(observation),
+                target_kind: TraceTargetKind::Diagnostic,
+            },
+        ))
+    }
+
+    #[cfg(test)]
+    pub fn for_event_policy_capture(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<Self, GpuTraceInputError> {
+        let uniforms = TraceUniforms::from_observation(observation)?;
+        Ok(Self::from_uniforms(
+            device,
+            uniforms,
+            TracePipelineSpec {
+                shader_source: Cow::Owned(format!(
+                    "{}\n{EVENT_POLICY_CAPTURE_SHADER}",
+                    trace_capture_shader_source()
+                )),
+                entry_point: "write_event_policy_cases",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: TracePlan::resolve(observation),
+                target_kind: TraceTargetKind::Diagnostic,
+            },
         ))
     }
 
     fn from_uniforms(
         device: &wgpu::Device,
         uniforms: TraceUniforms,
-        shader_source: Cow<'static, str>,
-        entry_point: &'static str,
-        escape_map_node_entry_point: Option<&'static str>,
-        target_kind: TraceTargetKind,
+        spec: TracePipelineSpec,
     ) -> Self {
+        let TracePipelineSpec {
+            shader_source,
+            entry_point,
+            escape_map_node_entry_point,
+            has_shadow_refinement,
+            plan,
+            target_kind,
+        } = spec;
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init
         let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU trace uniforms"),
@@ -349,7 +566,7 @@ impl RayTracer {
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let shadow_coverage = ShadowCoverage::new(device, &uniforms);
+        let shadow_coverage = has_shadow_refinement.then(|| ShadowCoverage::new(device, &uniforms));
         let entries =
             trace_bind_group_layout_entries(target_kind, escape_map_node_entry_point.is_some());
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -365,12 +582,16 @@ impl RayTracer {
             label: Some("Cartesian Kerr-Schild trace shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source),
         });
+        let pipeline_constants = [("SURFACE_EVENTS_ENABLED", plan.surface_events_enabled())];
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some(entry_point),
             layout: Some(&pipeline_layout),
             module: &shader,
             entry_point: Some(entry_point),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &pipeline_constants,
+                ..Default::default()
+            },
             cache: None,
         });
         let escape_map_node_pipeline = escape_map_node_entry_point.map(|entry_point| {
@@ -379,7 +600,10 @@ impl RayTracer {
                 layout: Some(&pipeline_layout),
                 module: &shader,
                 entry_point: Some(entry_point),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &pipeline_constants,
+                    ..Default::default()
+                },
                 cache: None,
             })
         });
@@ -391,8 +615,17 @@ impl RayTracer {
             uniforms,
             dispatch,
             shadow_coverage,
+            plan,
             target_kind,
         }
+    }
+
+    pub fn scratch_bytes(&self, extent: RenderExtent) -> u64 {
+        self.plan.scratch_bytes(extent)
+    }
+
+    pub(crate) const fn has_escape_map(&self) -> bool {
+        self.escape_map_node_pipeline.is_some()
     }
 
     pub fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceImage {
@@ -420,9 +653,10 @@ impl RayTracer {
         let record_planes = self.target_kind.captures_records().then(|| {
             let size = trace_record_plane_size(extent);
             DiagnosticPlanes {
-                direction_time: create_record_plane(device, "trace direction and time", size),
+                source_time: create_record_plane(device, "trace source and time", size),
                 invariant_drift: create_record_plane(device, "trace invariant drift", size),
                 metadata: create_record_plane(device, "trace metadata", size),
+                event: create_record_plane(device, "trace event candidates", size),
             }
         });
         let entries = [
@@ -462,7 +696,7 @@ impl RayTracer {
             })
         });
         let escape_map_entry = escape_map.as_ref().map(|buffer| wgpu::BindGroupEntry {
-            binding: 6,
+            binding: 7,
             resource: buffer.as_entire_binding(),
         });
         let entries = entries
@@ -475,7 +709,10 @@ impl RayTracer {
             layout: &self.bind_group_layout,
             entries: &entries,
         });
-        let shadow_coverage = self.shadow_coverage.create_target(device, &view, extent);
+        let shadow_coverage = self
+            .shadow_coverage
+            .as_ref()
+            .map(|coverage| coverage.create_target(device, &view, extent));
         TraceImage {
             view,
             #[cfg(test)]
@@ -493,8 +730,13 @@ impl RayTracer {
         target: &TraceImage,
         tiles: TileRegion,
     ) {
-        self.encode_escape_map_pass(queue, encoder, target, tiles, None);
-        self.encode_trace_pass(encoder, target, tiles, None, true);
+        self.encode_batch(
+            queue,
+            encoder,
+            target,
+            tiles,
+            TraceBatchOptions::untimed(true),
+        );
     }
 
     #[cfg(test)]
@@ -505,19 +747,46 @@ impl RayTracer {
         target: &TraceImage,
         tiles: TileRegion,
     ) {
-        self.encode_escape_map_pass(queue, encoder, target, tiles, None);
-        self.encode_trace_pass(encoder, target, tiles, None, false);
+        self.encode_batch(
+            queue,
+            encoder,
+            target,
+            tiles,
+            TraceBatchOptions::untimed(false),
+        );
     }
 
-    pub fn encode_escape_map_pass(
+    pub fn encode_batch(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceImage,
         tiles: TileRegion,
+        options: TraceBatchOptions<'_>,
+    ) {
+        let TraceBatchOptions {
+            escape_map_timestamp_writes,
+            trace_timestamp_writes,
+            refine_final_batch,
+        } = options;
+        self.set_tile_dispatch(queue, tiles);
+        self.encode_escape_map_pass(encoder, target, tiles, escape_map_timestamp_writes);
+        self.encode_trace_pass(
+            encoder,
+            target,
+            tiles,
+            trace_timestamp_writes,
+            refine_final_batch,
+        );
+    }
+
+    fn encode_escape_map_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &TraceImage,
+        tiles: TileRegion,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
-        self.set_tile_dispatch(queue, tiles);
         let Some(node_pipeline) = &self.escape_map_node_pipeline else {
             return;
         };
@@ -531,7 +800,7 @@ impl RayTracer {
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
     }
 
-    pub fn encode_trace_pass(
+    fn encode_trace_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         target: &TraceImage,
@@ -539,9 +808,13 @@ impl RayTracer {
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
         refine_final_batch: bool,
     ) {
-        let refine_shadow = refine_final_batch && tiles.finishes(target.shadow_coverage.extent);
-        if refine_shadow {
-            ShadowCoverage::reset_control(encoder, &target.shadow_coverage);
+        let refinement = self
+            .shadow_coverage
+            .as_ref()
+            .zip(target.shadow_coverage.as_ref())
+            .filter(|(_, shadow)| refine_final_batch && tiles.finishes(shadow.extent));
+        if let Some((_, shadow)) = refinement {
+            ShadowCoverage::reset_control(encoder, shadow);
         }
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("GPU trace pass"),
@@ -552,9 +825,8 @@ impl RayTracer {
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePass.html#method.dispatch_workgroups
         let [workgroups_x, workgroups_y] = tiles.workgroups();
         pass.dispatch_workgroups(workgroups_x, workgroups_y, 1);
-        if refine_shadow {
-            self.shadow_coverage
-                .encode(&mut pass, &target.shadow_coverage);
+        if let Some((coverage, shadow)) = refinement {
+            coverage.encode(&mut pass, shadow);
         }
     }
 
@@ -642,10 +914,23 @@ fn accelerated_shader_source() -> Cow<'static, str> {
     ))
 }
 
+fn surface_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{SURFACE_PREVIEW_SHADER}"
+    ))
+}
+
 #[cfg(test)]
 fn trace_capture_shader_source() -> Cow<'static, str> {
     Cow::Owned(format!(
         "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}"
+    ))
+}
+
+#[cfg(test)]
+fn surface_capture_shader_source() -> Cow<'static, str> {
+    Cow::Owned(format!(
+        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{SURFACE_PREVIEW_SHADER}\n{SURFACE_TRACE_CAPTURE_SHADER}"
     ))
 }
 
@@ -665,7 +950,7 @@ pub struct TraceImage {
     #[cfg(test)]
     record_planes: Option<DiagnosticPlanes>,
     bind_group: wgpu::BindGroup,
-    shadow_coverage: ShadowTarget,
+    shadow_coverage: Option<ShadowTarget>,
 }
 
 impl TraceImage {
@@ -679,7 +964,7 @@ impl TraceImage {
     }
 
     #[cfg(test)]
-    pub const fn record_planes(&self) -> [&wgpu::Buffer; 3] {
+    pub const fn record_planes(&self) -> [&wgpu::Buffer; 4] {
         self.record_planes
             .as_ref()
             .expect("capture targets include diagnostic record planes")
@@ -688,21 +973,31 @@ impl TraceImage {
 
     #[cfg(test)]
     pub const fn shadow_control(&self) -> &wgpu::Buffer {
-        &self.shadow_coverage.control
+        &self
+            .shadow_coverage
+            .as_ref()
+            .expect("refined capture target contains shadow control")
+            .control
     }
 }
 
 #[cfg(test)]
 struct DiagnosticPlanes {
-    direction_time: wgpu::Buffer,
+    source_time: wgpu::Buffer,
     invariant_drift: wgpu::Buffer,
     metadata: wgpu::Buffer,
+    event: wgpu::Buffer,
 }
 
 #[cfg(test)]
 impl DiagnosticPlanes {
-    const fn buffers(&self) -> [&wgpu::Buffer; 3] {
-        [&self.direction_time, &self.invariant_drift, &self.metadata]
+    const fn buffers(&self) -> [&wgpu::Buffer; 4] {
+        [
+            &self.source_time,
+            &self.invariant_drift,
+            &self.metadata,
+            &self.event,
+        ]
     }
 }
 
@@ -736,6 +1031,7 @@ pub enum TraceTermination {
     StepExhaustion = 4,
     NumericalFailure = 5,
     Uncertain = 6,
+    EquatorialSurface = 7,
 }
 
 impl From<TraceTermination> for u32 {
@@ -759,6 +1055,7 @@ impl TryFrom<u32> for TraceTermination {
             4 => Ok(Self::StepExhaustion),
             5 => Ok(Self::NumericalFailure),
             6 => Ok(Self::Uncertain),
+            7 => Ok(Self::EquatorialSurface),
             unknown => Err(UnknownTraceTermination(unknown)),
         }
     }

@@ -1,11 +1,14 @@
 use serde::Deserialize;
 
-use crate::{AffineDirection, EquatorialCircularSurface, EventConfiguration, TraceInputId};
+use gravlume_domain::{EquatorialCircularEmitter, Observation};
+
+use crate::{AffineDirection, EventConfiguration, TraceInputId};
 
 use super::{
     DecimalString, ExpectedSurfaceOutcome, FixtureDocument, FixtureError,
-    SurfaceObservationFixture, invalid_physical_data, inverse_cube_intensity, v1,
+    SurfaceObservationFixture, invalid_physical_data, v1,
 };
+use crate::surface::{emitted_bolometric_intensity, vacuum_observed_bolometric_intensity};
 
 const BASE_OBSERVATION: &str = include_str!("../../fixtures/v1/default-kerr-observation.toml");
 const SURFACE_OBSERVABLE: &str = include_str!("../../fixtures/v2/kerr-surface-observable.toml");
@@ -28,7 +31,19 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     if raw.base_observation_id != base.input_id.as_str() {
         return Err(FixtureError::InconsistentApplicability);
     }
-    let observation = base.observation;
+    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+        raw.surface.inner_radius_m.value,
+        raw.surface.outer_radius_m.value,
+        raw.emission.intensity_at_6m.value,
+    )
+    .map_err(invalid_physical_data)?;
+    let observation = Observation::new(
+        base.observation
+            .scene()
+            .clone()
+            .with_equatorial_circular_emitter(emitter),
+        *base.observation.view(),
+    );
     let sample = observation
         .view()
         .sample(
@@ -38,19 +53,13 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
             raw.sample.subpixel[1].value,
         )
         .map_err(invalid_physical_data)?;
-    let surface = EquatorialCircularSurface::new(
-        raw.surface.inner_radius_m.value,
-        raw.surface.outer_radius_m.value,
-    )
-    .map_err(invalid_physical_data)?;
-    validate_expected(&raw, surface)?;
-
     let initial_ray = observation
         .initial_ray(sample)
         .map_err(invalid_physical_data)?;
     let spacetime = *observation.scene().spacetime();
+    validate_expected(&raw, emitter, spacetime.mass_m())?;
     let events = EventConfiguration::observation_baseline_v1()
-        .with_equatorial_surface(surface.inner_radius_m(), surface.outer_radius_m())
+        .with_equatorial_surface(emitter.inner_radius_m(), emitter.outer_radius_m())
         .map_err(invalid_physical_data)?;
     let input_id = TraceInputId::new(raw.id).bind(
         spacetime,
@@ -65,7 +74,6 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
         travel_time_m: raw.expected.travel_time_m.value,
         emitted_bolometric_intensity: raw.expected.emitted_bolometric_intensity.value,
         observed_bolometric_intensity: raw.expected.observed_bolometric_intensity.value,
-        intensity_at_six_m: raw.emission.intensity_at_6m.value,
         source_coordinate_absolute_tolerance_m: raw.tolerance.source_coordinate_abs_m.value,
         source_azimuth_absolute_tolerance_rad: raw.tolerance.source_azimuth_abs_rad.value,
         frequency_ratio_relative_tolerance: raw.tolerance.frequency_ratio_rel.value,
@@ -75,9 +83,8 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     Ok(FixtureDocument::SurfaceObservation(
         SurfaceObservationFixture {
             input_id,
-            spacetime,
-            initial_ray,
-            surface,
+            observation,
+            sample,
             expected,
         },
     ))
@@ -98,7 +105,8 @@ fn validate_envelope(raw: &RawSurfaceFixture) -> Result<(), FixtureError> {
 
 fn validate_expected(
     raw: &RawSurfaceFixture,
-    surface: EquatorialCircularSurface,
+    surface: EquatorialCircularEmitter,
+    mass_m: f64,
 ) -> Result<(), FixtureError> {
     let expected = &raw.expected;
     let tolerance = &raw.tolerance;
@@ -118,14 +126,10 @@ fn validate_expected(
     {
         return Err(FixtureError::InconsistentExpectedObservables);
     }
-    let emitted = inverse_cube_intensity(
-        raw.emission.intensity_at_6m.value,
-        expected.source_radius_m.value,
-    );
-    let mut observed = emitted;
-    for _ in 0..4 {
-        observed *= expected.frequency_ratio.value;
-    }
+    let emitted = emitted_bolometric_intensity(surface, mass_m, expected.source_radius_m.value)
+        .map_err(|_| FixtureError::InconsistentExpectedObservables)?;
+    let observed = vacuum_observed_bolometric_intensity(emitted, expected.frequency_ratio.value)
+        .map_err(|_| FixtureError::InconsistentExpectedObservables)?;
     if (emitted - expected.emitted_bolometric_intensity.value).abs()
         > tolerance.bolometric_intensity_abs.value
         || (observed - expected.observed_bolometric_intensity.value).abs()

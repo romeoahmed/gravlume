@@ -6,13 +6,13 @@
 
 | 领域        | 当前实现                                                                                                                      |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| validation  | `PhysicalSceneInput → PhysicalScene → Observation` 原子验证；稳定协议是 issue code 与 field path                              |
+| validation  | scene-owned `EquatorialCircularEmitter` 与 `PhysicalSceneInput → PhysicalScene → Observation` 原子验证；稳定协议是 issue code 与 field path |
 | view ray    | `Observation::initial_ray` 独占 top-left pixel/subpixel 到 future-directed Photon Momentum 的映射                             |
 | spacetime   | canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` Cartesian Kerr–Schild Hamilton system                                             |
 | parameters  | 对实际 binary64 bit pattern 精确判定 extremality；axis geometry 使用解析极限                                                  |
 | integration | 七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差                                                  |
-| events      | accepted-step quartic dense output；只在 bracket 内定位 horizon、escape、equatorial surface 与 singularity guard              |
-| outcomes    | typed terminal、event/invariant diagnostics、turning/travel/azimuth；surface request 另含 typed Source Anchor 与 Frequency Ratio |
+| events      | accepted-step quartic dense output；只在 bracket 内定位 horizon、escape、equatorial surface 与 singularity guard；surface 必须严格位于 numerical escape boundary 内 |
+| outcomes    | typed terminal、event/invariant diagnostics、turning/travel/azimuth；source-bearing Observation 原子返回 Source Anchor、Frequency Ratio、emitted 与 observed bolometric intensity |
 | fixtures    | 严格 v1/v2 TOML、1 MiB 上限、unknown-field rejection、版本化 identity/profile 与十进制字符串                                 |
 | comparison  | 先验证 input/profile identity，再比较 regular/strict terminal、event、source、frequency、time 与 invariant observable         |
 | batch       | 有界专用 Rayon pool；单轨迹顺序确定，输出保持 input order                                                                     |
@@ -41,7 +41,7 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - finite escape sphere 是数值边界，不能解释为无穷远精确 observable；
 - renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
 - CPU surface 证据目前只有一个默认 Kerr image sample；更广 Kerr–Newman 参数、retrograde、multi-crossing 与独立高精度 trajectory oracle 尚未闭合；
-- near-critical GPU agreement、GPU source anchor/frequency ratio 与 production transport 仍属于后续证据。
+- GPU canonical surface sample 已闭合 source anchor/frequency ratio 与 production transport；near-critical、多像与更广参数域仍属于后续证据。
 
 历史 raw-radius/reciprocal-radius `f32` 条件性实验已移入[研究记录](research/mino-step-selection.md)，不属于 reference fixture 合同。
 

@@ -27,7 +27,4 @@ pub use outcome::{
     Termination, TraceDiagnostics, TraceInputId,
 };
 pub use policy::ReferencePolicy;
-pub use surface::{
-    BolometricTransportError, EquatorialCircularSurface, FrequencyRatio, SourceAnchor,
-    SurfaceConfigurationError, SurfaceObservable, SurfaceObservableError,
-};
+pub use surface::{FrequencyRatio, SourceAnchor, SurfaceObservable, SurfaceObservableError};

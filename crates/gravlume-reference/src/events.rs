@@ -56,7 +56,8 @@ impl EventConfiguration {
     ///
     /// # Errors
     ///
-    /// Rejects non-finite, non-positive, or reversed radii.
+    /// Rejects non-finite, non-positive, or reversed radii, and surfaces that are not strictly
+    /// inside an installed escape boundary.
     pub fn with_equatorial_surface(
         mut self,
         inner_radius_m: f64,
@@ -68,6 +69,12 @@ impl EventConfiguration {
             || outer_radius_m < inner_radius_m
         {
             return Err(EventConfigurationError::InvalidEquatorialSurface);
+        }
+        if self
+            .escape_radius_m
+            .is_some_and(|escape_radius_m| outer_radius_m >= escape_radius_m)
+        {
+            return Err(EventConfigurationError::EquatorialSurfaceOutsideEscape);
         }
         self.equatorial_surface = Some(EquatorialSurface {
             inner_radius_m,
@@ -103,6 +110,8 @@ pub enum EventConfigurationError {
     InvalidEscapeRadius,
     #[error("equatorial surface radii must be finite, positive, and ordered")]
     InvalidEquatorialSurface,
+    #[error("equatorial surface must lie strictly inside the installed escape boundary")]
+    EquatorialSurfaceOutsideEscape,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

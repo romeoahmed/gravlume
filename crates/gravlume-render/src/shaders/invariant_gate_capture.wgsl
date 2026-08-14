@@ -14,9 +14,10 @@ fn write_invariant_gate_cases(@builtin(global_invocation_id) global_id: vec3<u32
         TERMINATION_UNCERTAIN,
         invariant_budget_exceeded(drift),
     );
-    let result = TraceResult(
+    let result = GeometricSample(
         termination,
         0u,
+        EVENT_CANDIDATE_ESCAPE,
         1u,
         0.0,
         vec3<f32>(1.0, 0.0, 0.0),
@@ -24,5 +25,5 @@ fn write_invariant_gate_cases(@builtin(global_invocation_id) global_id: vec3<u32
         drift,
     );
     store_trace_record(index, result);
-    store_scene_result(pixel, result.termination, result.direction);
+    store_scene_result(pixel, result.termination, result.source_coordinates);
 }

@@ -8,15 +8,15 @@ use std::{num::NonZeroU32, time::Duration};
 
 use criterion::{Criterion, SamplingMode, Throughput};
 use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
-    PhysicalSceneInput, StationaryObserverInput, ValidationReport,
+    Angle, EquatorialCircularEmitter, KerrNewmanSpacetime, KerrSchildChart, Observation,
+    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput, ValidationReport,
 };
 
 use crate::{
     CapabilityError, GpuTraceInputError, TimingError,
     capabilities::{BASELINE_FEATURES, check_baseline_adapter, required_device_limits},
     extent::RenderExtent,
-    ray_tracer::{RayTracer, TileRegion, TraceImage},
+    ray_tracer::{RayTracer, TileRegion, TraceBatchOptions, TraceImage},
     timing::GpuTimings,
 };
 
@@ -74,7 +74,7 @@ impl TraceGpuBenchmark {
         let compute = RayTracer::new(&device, &observation)?;
         let target = compute.create_target(&device, extent);
         let tiles = TileRegion::all(extent);
-        let timings = GpuTimings::new(&device);
+        let timings = GpuTimings::new(&device, compute.has_escape_map());
 
         Ok(Self {
             device,
@@ -113,19 +113,16 @@ impl TraceGpuBenchmark {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("production trace benchmark encoder"),
             });
-        self.compute.encode_escape_map_pass(
+        self.compute.encode_batch(
             &self.queue,
             &mut encoder,
             &self.target,
             self.tiles,
-            Some(self.timings.escape_map_writes()),
-        );
-        self.compute.encode_trace_pass(
-            &mut encoder,
-            &self.target,
-            self.tiles,
-            Some(self.timings.trace_writes()),
-            true,
+            TraceBatchOptions::new(
+                self.timings.escape_map_writes(),
+                Some(self.timings.trace_writes()),
+                true,
+            ),
         );
         self.timings.encode_resolve(&mut encoder);
         let submission = self.queue.submit([encoder.finish()]);
@@ -235,13 +232,15 @@ fn benchmark_observation() -> Result<Observation, TraceBenchmarkError> {
         [0.0, 0.0, 1.0],
         1.0,
     );
+    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)?;
     let scene = PhysicalScene::new(PhysicalSceneInput::new(
         1.0,
         0.8,
         0.0,
         KerrSchildChart::Outgoing,
         observer,
-    ))?;
+    ))?
+    .with_equatorial_circular_emitter(emitter);
     let view = PerspectiveView::new(
         NonZeroU32::new(BENCHMARK_WIDTH).ok_or(TraceBenchmarkError::UnsupportedExtent)?,
         NonZeroU32::new(BENCHMARK_HEIGHT).ok_or(TraceBenchmarkError::UnsupportedExtent)?,

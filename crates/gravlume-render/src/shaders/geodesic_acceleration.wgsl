@@ -5,7 +5,7 @@ struct EscapeDirectionMap {
     nodes: array<u32>,
 }
 
-@group(0) @binding(6)
+@group(0) @binding(7)
 var<storage, read_write> escape_direction_map: EscapeDirectionMap;
 
 const ESCAPE_MAP_TILE_AXIS = 8u;
@@ -282,7 +282,7 @@ fn trace_pixel_with_radial_capture_at(
     pixel: vec2<u32>,
     extent: vec2<u32>,
     subpixel: vec2<f32>,
-) -> TraceResult {
+) -> GeometricSample {
     let initial = initial_state_at(pixel, extent, subpixel);
     if initial.rhs.flags != 0u {
         return failure_result(initial.rhs.flags, 0u, 0.0, vec4<f32>(0.0));
@@ -297,9 +297,10 @@ fn trace_pixel_with_radial_capture_at(
         return failure_result(invariants.flags, 0u, 0.0, vec4<f32>(0.0));
     }
     if radial_capture_is_proven(initial, invariants) {
-        return TraceResult(
+        return GeometricSample(
             TERMINATION_HORIZON,
             0u,
+            EVENT_CANDIDATE_HORIZON,
             0u,
             0.0,
             vec3<f32>(0.0),
@@ -313,7 +314,7 @@ fn trace_pixel_with_radial_capture_at(
 fn trace_pixel_with_radial_capture(
     pixel: vec2<u32>,
     extent: vec2<u32>,
-) -> TraceResult {
+) -> GeometricSample {
     return trace_pixel_with_radial_capture_at(
         pixel,
         extent,
@@ -321,7 +322,7 @@ fn trace_pixel_with_radial_capture(
     );
 }
 
-fn trace_accelerated_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> TraceResult {
+fn trace_accelerated_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> GeometricSample {
     return trace_pixel_with_radial_capture(pixel, extent);
 }
 
@@ -329,22 +330,22 @@ fn octahedral_nonzero_sign(value: f32) -> f32 {
     return select(-1.0, 1.0, value >= 0.0);
 }
 
-fn escape_map_pack_node(result: TraceResult) -> u32 {
+fn escape_map_pack_node(result: GeometricSample) -> u32 {
     if result.termination == TERMINATION_HORIZON {
         return ESCAPE_MAP_TAG_HORIZON << ESCAPE_MAP_TAG_SHIFT;
     }
-    if result.termination != TERMINATION_ESCAPE || !finite_vec3(result.direction) {
+    if result.termination != TERMINATION_ESCAPE || !finite_vec3(result.source_coordinates) {
         return 0u;
     }
 
     // Octahedral projection is homogeneous, so normalizing to L2 first would only add a square
     // root and another reciprocal.
-    let l1_norm = dot(abs(result.direction), vec3<f32>(1.0));
+    let l1_norm = dot(abs(result.source_coordinates), vec3<f32>(1.0));
     if l1_norm <= 0.0 || !finite_scalar(l1_norm) {
         return 0u;
     }
-    var projected = result.direction.xy / l1_norm;
-    if result.direction.z < 0.0 {
+    var projected = result.source_coordinates.xy / l1_norm;
+    if result.source_coordinates.z < 0.0 {
         projected = (vec2<f32>(1.0) - abs(projected.yx))
             * vec2<f32>(
                 octahedral_nonzero_sign(projected.x),
@@ -517,7 +518,7 @@ fn escape_map_result(
     local_id: vec2<u32>,
     workgroup_id: vec2<u32>,
     extent: vec2<u32>,
-) -> TraceResult {
+) -> GeometricSample {
     let tile = trace_dispatch.tile_origin + workgroup_id;
     let grid = escape_map_grid_dimensions(extent);
     if all(local_id == vec2<u32>(0u)) {
@@ -545,9 +546,10 @@ fn escape_map_result(
         return failure_result(FLAG_INVALID_DENOMINATOR, 0u, 0.0, vec4<f32>(0.0));
     }
     if escape_map_accepted != 0u {
-        return TraceResult(
+        return GeometricSample(
             TERMINATION_ESCAPE,
             0u,
+            EVENT_CANDIDATE_ESCAPE,
             0u,
             0.0,
             escape_map_interpolate_direction(local_id),
@@ -565,9 +567,10 @@ fn escape_map_result(
         ];
         let termination = u32(stencil.w);
         if termination == TERMINATION_HORIZON || termination == TERMINATION_ESCAPE {
-            return TraceResult(
+            return GeometricSample(
                 termination,
                 0u,
+                event_candidate_mask(termination),
                 0u,
                 0.0,
                 stencil.xyz,
@@ -591,5 +594,5 @@ fn trace_scene_accelerated(
     if any(pixel >= extent) {
         return;
     }
-    store_scene_result(pixel, result.termination, result.direction);
+    store_scene_result(pixel, result.termination, result.source_coordinates);
 }

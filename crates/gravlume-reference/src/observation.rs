@@ -1,11 +1,12 @@
 use gravlume_domain::{
-    ImageSample, InitialViewRay, KerrNewmanSpacetime, Observation, ValidationReport,
+    EquatorialCircularEmitter, ImageSample, InitialViewRay, KerrNewmanSpacetime, Observation,
+    ValidationReport,
 };
 
 use crate::{
-    AffineDirection, EquatorialCircularSurface, EventConfiguration, EventConfigurationError,
-    GeodesicTrace, GeodesicTracer, ReferenceOutcome, ReferencePolicy, SurfaceObservableError,
-    Termination, TraceInputId,
+    AffineDirection, EventConfiguration, EventConfigurationError, GeodesicTrace, GeodesicTracer,
+    ReferenceOutcome, ReferencePolicy, SurfaceObservableError, Termination, TraceInputId,
+    surface::observable_at,
 };
 
 #[derive(Clone, Debug)]
@@ -14,7 +15,7 @@ pub struct ObservationTrace {
     spacetime: KerrNewmanSpacetime,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
-    equatorial_circular_surface: Option<EquatorialCircularSurface>,
+    equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
 }
 
 impl ObservationTrace {
@@ -30,37 +31,13 @@ impl ObservationTrace {
         policy: ReferencePolicy,
     ) -> Result<Self, ValidationReport> {
         let initial_ray = observation.initial_ray(sample)?;
-        Ok(Self::from_initial_ray(
+        Ok(Self {
             input_id,
-            *observation.scene().spacetime(),
+            spacetime: *observation.scene().spacetime(),
             initial_ray,
             policy,
-        ))
-    }
-
-    pub(crate) const fn from_initial_ray(
-        input_id: TraceInputId,
-        spacetime: KerrNewmanSpacetime,
-        initial_ray: InitialViewRay,
-        policy: ReferencePolicy,
-    ) -> Self {
-        Self {
-            input_id,
-            spacetime,
-            initial_ray,
-            policy,
-            equatorial_circular_surface: None,
-        }
-    }
-
-    /// Requests the physical observables of the first hit on a prograde circular surface.
-    #[must_use]
-    pub const fn with_equatorial_circular_surface(
-        mut self,
-        surface: EquatorialCircularSurface,
-    ) -> Self {
-        self.equatorial_circular_surface = Some(surface);
-        self
+            equatorial_circular_emitter: observation.scene().equatorial_circular_emitter(),
+        })
     }
 }
 
@@ -90,13 +67,13 @@ impl ObservationTracer {
             spacetime,
             initial_ray,
             policy,
-            equatorial_circular_surface,
+            equatorial_circular_emitter,
         } = request;
         if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
             return Err(ObservationTraceError::NonNormalizedReferenceInput);
         }
         let mut events = EventConfiguration::observation_baseline_v1();
-        if let Some(surface) = equatorial_circular_surface {
+        if let Some(surface) = equatorial_circular_emitter {
             events = events
                 .with_equatorial_surface(surface.inner_radius_m(), surface.outer_radius_m())?;
         }
@@ -108,11 +85,15 @@ impl ObservationTracer {
             initial_ray.state(),
             AffineDirection::Negative,
         ));
-        if let Some(surface) = equatorial_circular_surface
+        if let Some(surface) = equatorial_circular_emitter
             && outcome.termination() == Termination::EquatorialSurface
         {
-            outcome.surface_observable =
-                Some(surface.observable_at(spacetime, outcome.state(), observer_frequency)?);
+            outcome.surface_observable = Some(observable_at(
+                surface,
+                spacetime,
+                outcome.state(),
+                observer_frequency,
+            )?);
         }
         Ok(outcome)
     }

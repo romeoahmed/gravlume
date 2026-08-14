@@ -13,5 +13,5 @@ fn capture_accelerated_trace_scene(
         return;
     }
     store_trace_record(pixel.y * extent.x + pixel.x, result);
-    store_scene_result(pixel, result.termination, result.direction);
+    store_scene_result(pixel, result.termination, result.source_coordinates);
 }

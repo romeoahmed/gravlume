@@ -20,7 +20,7 @@ use crate::{
         install_device_callbacks, scoped_gpu_operation,
     },
     extent::{ExtentChange, ExtentTracker, RenderExtent},
-    ray_tracer::RayTracer,
+    ray_tracer::{RayTracer, TraceBatchOptions},
     timing::GpuTimings,
 };
 
@@ -258,7 +258,7 @@ impl Renderer {
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
             egui_wgpu::Renderer::new(&device, UI_FORMAT, egui_wgpu::RendererOptions::default());
-        let timings = GpuTimings::new(&device);
+        let timings = GpuTimings::new(&device, trace.has_escape_map());
         let initial_size = window.inner_size();
         let mut renderer = Self {
             surface: Some(surface),
@@ -460,19 +460,16 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Gravlume trace encoder"),
             });
-        self.trace.encode_escape_map_pass(
+        self.trace.encode_batch(
             &self.queue,
             &mut encoder,
             candidate,
             batch,
-            Some(self.timings.escape_map_writes()),
-        );
-        self.trace.encode_trace_pass(
-            &mut encoder,
-            candidate,
-            batch,
-            Some(self.timings.trace_writes()),
-            true,
+            TraceBatchOptions::new(
+                self.timings.escape_map_writes(),
+                Some(self.timings.trace_writes()),
+                true,
+            ),
         );
         self.timings.encode_resolve(&mut encoder);
         self.queue.submit([encoder.finish()]);
@@ -653,9 +650,16 @@ impl Renderer {
 
     fn resource_plan_for_rebuild(&self, replacement: RenderExtent) -> CoreResourcePlan {
         let published = self.published_scene.extent();
+        let replacement_trace_scratch = self.trace.scratch_bytes(replacement);
         self.frame_resources.as_ref().map_or_else(
-            || CoreResourcePlan::without_installed_frame(published, replacement),
-            |frame| frame.rebuild_plan(published, replacement),
+            || {
+                CoreResourcePlan::without_installed_frame(
+                    published,
+                    replacement,
+                    replacement_trace_scratch,
+                )
+            },
+            |frame| frame.rebuild_plan(published, replacement, replacement_trace_scratch),
         )
     }
 

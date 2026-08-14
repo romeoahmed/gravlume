@@ -1,4 +1,4 @@
-use gravlume_domain::Observation;
+use gravlume_domain::{ImageSample, Observation};
 
 use crate::{
     extent::RenderExtent,
@@ -6,13 +6,14 @@ use crate::{
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
-const RECORD_FIELD_COUNT: u64 = 3;
+const RECORD_FIELD_COUNT: u64 = 4;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TraceRecord {
-    pub direction_time: [f32; 4],
+    pub source_time: [f32; 4],
     pub invariant_drift: [f32; 4],
     pub metadata: [u32; 4],
+    pub event: [u32; 4],
 }
 
 pub struct TraceCapture {
@@ -34,6 +35,15 @@ pub fn capture_trace(observation: &Observation) -> TraceCapture {
     let compute =
         RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
     capture(gpu, observation, &compute, false)
+}
+
+pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> TraceCapture {
+    let gpu = crate::test_device::native_gpu();
+    let compute =
+        RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
+    let [pixel_x, pixel_y] = sample.pixel();
+    let tile = TileRegion::new([pixel_x / 8, pixel_y / 8], [1, 1]);
+    capture_region(gpu, observation, &compute, tile)
 }
 
 pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
@@ -107,6 +117,13 @@ pub fn capture_invariant_gate_cases(observation: &Observation) -> TraceCapture {
     capture(gpu, observation, &compute, false)
 }
 
+pub fn capture_event_policy_cases(observation: &Observation) -> TraceCapture {
+    let gpu = crate::test_device::native_gpu();
+    let compute = RayTracer::for_event_policy_capture(&gpu.device, observation)
+        .expect("observation packs for GPU");
+    capture(gpu, observation, &compute, false)
+}
+
 fn capture(
     gpu: &crate::test_device::TestGpu,
     observation: &Observation,
@@ -126,6 +143,23 @@ fn capture(
     } else {
         compute.encode_base(&gpu.queue, &mut encoder, &target, tiles);
     }
+    finish_capture(gpu, extent, &target, encoder)
+}
+
+fn capture_region(
+    gpu: &crate::test_device::TestGpu,
+    observation: &Observation,
+    compute: &RayTracer,
+    tiles: TileRegion,
+) -> TraceCapture {
+    let extent = observation_extent(observation);
+    let target = compute.create_target(&gpu.device, extent);
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("headless trace region encoder"),
+        });
+    compute.encode_base(&gpu.queue, &mut encoder, &target, tiles);
     finish_capture(gpu, extent, &target, encoder)
 }
 
@@ -232,17 +266,20 @@ fn finish_capture(
     let mapped = gpu.read_buffer(&readback, submission);
     let record_end = usize::try_from(record_bytes).expect("test trace size fits usize");
     let plane_size = usize::try_from(plane_size).expect("test record plane size fits usize");
-    let direction_time = mapped[..plane_size].chunks_exact(RECORD_FIELD_SIZE);
+    let source_time = mapped[..plane_size].chunks_exact(RECORD_FIELD_SIZE);
     let invariant_drift = mapped[plane_size..plane_size * 2].chunks_exact(RECORD_FIELD_SIZE);
-    let metadata = mapped[plane_size * 2..record_end].chunks_exact(RECORD_FIELD_SIZE);
-    let records = direction_time
+    let metadata = mapped[plane_size * 2..plane_size * 3].chunks_exact(RECORD_FIELD_SIZE);
+    let event = mapped[plane_size * 3..record_end].chunks_exact(RECORD_FIELD_SIZE);
+    let records = source_time
         .zip(invariant_drift)
         .zip(metadata)
+        .zip(event)
         .map(
-            |((direction_time, invariant_drift), metadata)| TraceRecord {
-                direction_time: bytemuck::pod_read_unaligned(direction_time),
+            |(((source_time, invariant_drift), metadata), event)| TraceRecord {
+                source_time: bytemuck::pod_read_unaligned(source_time),
                 invariant_drift: bytemuck::pod_read_unaligned(invariant_drift),
                 metadata: bytemuck::pod_read_unaligned(metadata),
+                event: bytemuck::pod_read_unaligned(event),
             },
         )
         .collect();
