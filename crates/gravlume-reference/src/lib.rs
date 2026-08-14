@@ -17,8 +17,8 @@ pub use batch::{GeodesicBatch, GeodesicBatchError};
 pub use comparison::{ComparisonError, ComparisonIssue, ReferenceComparison};
 pub use events::{EventConfiguration, EventConfigurationError, EventKind};
 pub use fixture::{
-    ExpectedOutcome, ExpectedSurfaceOutcome, FixtureDocument, FixtureError, GeodesicFixture,
-    ObservationFixture, SurfaceObservationFixture,
+    ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture,
+    SurfaceObservationFixture,
 };
 pub use geodesic::{GeodesicConfigurationError, GeodesicTracer};
 pub use observation::{ObservationTrace, ObservationTraceError, ObservationTracer};
@@ -28,6 +28,6 @@ pub use outcome::{
 };
 pub use policy::ReferencePolicy;
 pub use surface::{
-    EquatorialCircularSurface, EquatorialSurfaceAnchor, FrequencyRatio, SourceAnchor,
+    BolometricTransportError, EquatorialCircularSurface, FrequencyRatio, SourceAnchor,
     SurfaceConfigurationError, SurfaceObservable, SurfaceObservableError,
 };

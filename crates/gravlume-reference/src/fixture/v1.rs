@@ -1,17 +1,20 @@
-use std::{fmt, num::NonZeroU32};
+use std::num::NonZeroU32;
 
 use gravlume_domain::{
     Angle, Extremality, GeodesicState, KerrNewmanSpacetime, KerrSchildChart, Observation,
     PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
 };
-use serde::{Deserialize, Deserializer, de};
+use serde::Deserialize;
 
 use crate::{
     AffineDirection, EventConfiguration, ReferencePolicy, Termination, TraceInputId,
     events::escape_event_is_armed,
 };
 
-use super::{ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture, ObservationFixture};
+use super::{
+    DecimalString, ExpectedOutcome, FixtureDocument, FixtureError, GeodesicFixture,
+    ObservationFixture, invalid_physical_data,
+};
 
 const PRODUCER_PRECISION_DIGITS: u32 = 80;
 const GEODESIC_INITIAL_NULL_ABS_MAX: f64 = 1.0e-80;
@@ -191,39 +194,6 @@ struct RawGeodesicTolerance {
     turning_radius_abs_m: Option<DecimalString>,
     event_radius_abs_m: Option<DecimalString>,
     azimuth_advance_abs_rad: DecimalString,
-}
-
-#[derive(Clone, PartialEq)]
-struct DecimalString {
-    source: String,
-    value: f64,
-}
-
-impl fmt::Debug for DecimalString {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("DecimalString")
-            .field(&self.source)
-            .finish()
-    }
-}
-
-impl<'de> Deserialize<'de> for DecimalString {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let source = String::deserialize(deserializer)?;
-        let value = source
-            .parse::<f64>()
-            .map_err(|_| de::Error::custom("decimal string is not representable as f64"))?;
-        if !value.is_finite() || (value == 0.0 && source.trim_start().starts_with('-')) {
-            return Err(de::Error::custom(
-                "decimal string must be finite and must not encode negative zero",
-            ));
-        }
-        Ok(Self { source, value })
-    }
 }
 
 macro_rules! fixture_enum {
@@ -653,8 +623,4 @@ fn validate_observation_expected(
 
 fn decimal_array<const N: usize>(values: &[DecimalString; N]) -> [f64; N] {
     std::array::from_fn(|index| values[index].value)
-}
-
-fn invalid_physical_data(error: impl fmt::Display) -> FixtureError {
-    FixtureError::InvalidPhysicalData(error.to_string())
 }

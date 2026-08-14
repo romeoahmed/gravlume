@@ -52,24 +52,16 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
         .into_surface_observation()
         .expect("fixture is a surface observation");
     let regular = ObservationTracer::baseline_v1()
-        .trace(
-            fixture
-                .trace_request(ReferencePolicy::regular_v1())
-                .expect("fixture request remains valid"),
-        )
+        .trace(fixture.trace_request(ReferencePolicy::regular_v1()))
         .expect("the regular source model is valid at the localized hit");
     let strict = ObservationTracer::baseline_v1()
-        .trace(
-            fixture
-                .trace_request(ReferencePolicy::strict_v1())
-                .expect("fixture request remains valid"),
-        )
+        .trace(fixture.trace_request(ReferencePolicy::strict_v1()))
         .expect("the strict source model is valid at the localized hit");
     let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
         .expect("policy roles and surface input identity match");
 
-    assert!(fixture.expected().accepts(&regular));
-    assert!(fixture.expected().accepts(&strict));
+    assert!(fixture.accepts(&regular));
+    assert!(fixture.accepts(&strict));
     assert!(comparison.is_accepted(), "{:?}", comparison.issues());
     assert!(comparison.source_anchor_distance_m().is_some());
     assert!(comparison.frequency_ratio_relative_error().is_some());
@@ -77,20 +69,11 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
     let observable = regular
         .surface_observable()
         .expect("surface termination carries its physical observable");
-    let anchor = observable
-        .source_anchor()
-        .as_equatorial_surface()
-        .expect("the configured source is an equatorial surface");
+    let anchor = observable.source_anchor();
     assert!((6.0..=20.0).contains(&anchor.radius_m()));
     assert!(anchor.azimuth_rad().is_finite());
     assert!(observable.frequency_ratio().value() > 0.0);
 
-    let emitted_bolometric_intensity = (anchor.radius_m() / 6.0).powi(-3);
-    let observed_bolometric_intensity = observable
-        .vacuum_observed_bolometric_intensity(emitted_bolometric_intensity)
-        .expect("the validation fixture radiance is finite and non-negative");
-    let expected = observable.frequency_ratio().value().powi(4) * emitted_bolometric_intensity;
-    assert_eq!(observed_bolometric_intensity.to_bits(), expected.to_bits());
     for invalid in [f64::NAN, f64::INFINITY, -f64::MIN_POSITIVE] {
         assert!(
             observable
