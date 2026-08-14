@@ -266,8 +266,9 @@ mod tests {
         }
 
         #[test]
-        fn timestamp_decoder_rejects_every_wrong_byte_count(length in 0_usize..64) {
-            prop_assume!(!matches!(length, 16 | 32));
+        fn timestamp_decoder_rejects_unsupported_byte_counts(
+            length in prop_oneof![0_usize..16, 17_usize..32, 33_usize..=64],
+        ) {
             prop_assert_eq!(super::decode_query_ticks(&vec![0; length]), None);
         }
     }

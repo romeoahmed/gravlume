@@ -153,7 +153,7 @@ fn gpu_trace_rejects_extremality_changed_by_f32_packing() {
 }
 
 #[test]
-fn gpu_trace_rejects_surface_profiles_collapsed_by_f32_packing() {
+fn gpu_trace_rejects_surface_profiles_not_representable_after_f32_packing() {
     let base = default_observation(1, 1);
     let collapsed_interval = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
         6.0,
@@ -209,44 +209,39 @@ fn gpu_trace_rejects_surface_profiles_reaching_packed_escape_boundary() {
 #[test]
 fn gpu_event_ties_use_affine_distance_and_stable_protocol_order() {
     let capture = capture_event_policy_cases(&default_observation(8, 1));
+    let cases = [
+        (
+            TraceTermination::Escape,
+            EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE,
+        ),
+        (
+            TraceTermination::Escape,
+            EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE,
+        ),
+        (
+            TraceTermination::EquatorialSurface,
+            EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE,
+        ),
+        (
+            TraceTermination::EquatorialSurface,
+            EVENT_CANDIDATE_HORIZON | EVENT_CANDIDATE_SURFACE,
+        ),
+    ];
 
-    assert_eq!(
-        capture.records[0].metadata[0],
-        u32::from(TraceTermination::Escape),
-        "the minimum-step case must classify the same affine separation as a tie"
-    );
-    assert_eq!(
-        capture.records[0].event[..2],
-        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
-    );
-    assert_eq!(
-        capture.records[1].metadata[0],
-        u32::from(TraceTermination::Escape),
-        "the maximum-step case must classify the same affine separation as a tie"
-    );
-    assert_eq!(
-        capture.records[1].event[..2],
-        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
-    );
-    assert_eq!(
-        capture.records[2].metadata[0],
-        u32::from(TraceTermination::EquatorialSurface),
-        "an exact tie must use emitter-before-escape protocol order"
-    );
-    assert_eq!(
-        capture.records[2].event[..2],
-        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
-    );
-    assert_eq!(
-        capture.records[3].metadata[0],
-        u32::from(TraceTermination::EquatorialSurface),
-        "the earliest candidate must be selected before ties are classified"
-    );
-    assert_eq!(
-        capture.records[3].event[..2],
-        [EVENT_CANDIDATE_HORIZON | EVENT_CANDIDATE_SURFACE, 1],
-        "only candidates within tolerance of the localized earliest event are reported"
-    );
+    for (case_index, (record, (termination, candidates))) in
+        capture.records[..cases.len()].iter().zip(cases).enumerate()
+    {
+        assert_eq!(
+            record.metadata[0],
+            u32::from(termination),
+            "event-policy case {case_index}"
+        );
+        assert_eq!(
+            record.event[..2],
+            [candidates, 1],
+            "event-policy case {case_index}"
+        );
+    }
 }
 
 #[test]
