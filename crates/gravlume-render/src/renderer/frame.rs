@@ -4,10 +4,7 @@ use crate::{
     display::{DisplayPipeline, DisplayTarget, PublishedScene, ScenePresentation},
     error::ResizeError,
     extent::RenderExtent,
-    ray_tracer::{
-        RayTracer, TileRegion, TraceImage, escape_map_scratch_bytes, shadow_coverage_scratch_bytes,
-        tile_grid,
-    },
+    ray_tracer::{RayTracer, TileRegion, TraceImage, tile_grid},
 };
 
 const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 3_840 * 2_160;
@@ -28,6 +25,7 @@ pub struct FrameResources {
     completed_batches: u32,
     total_compute_ms: f64,
     maximum_batch_ms: f64,
+    trace_scratch: u64,
 }
 
 struct TraceCandidate {
@@ -123,12 +121,11 @@ impl FrameResourceFootprint {
         }
     }
 
-    fn tracing(extent: RenderExtent) -> Self {
+    const fn tracing(extent: RenderExtent, trace_scratch: u64) -> Self {
         Self {
             ui: extent_pixels(extent),
             candidate: extent_pixels(extent),
-            trace_scratch: shadow_coverage_scratch_bytes(extent)
-                .saturating_add(escape_map_scratch_bytes(extent)),
+            trace_scratch,
         }
     }
 
@@ -141,23 +138,28 @@ impl FrameResourceFootprint {
 }
 
 impl CoreResourcePlan {
-    pub fn without_installed_frame(published: RenderExtent, replacement: RenderExtent) -> Self {
+    pub const fn without_installed_frame(
+        published: RenderExtent,
+        replacement: RenderExtent,
+        replacement_trace_scratch: u64,
+    ) -> Self {
         Self {
             published: extent_pixels(published),
             installed: FrameResourceFootprint::EMPTY,
-            replacement: FrameResourceFootprint::tracing(replacement),
+            replacement: FrameResourceFootprint::tracing(replacement, replacement_trace_scratch),
         }
     }
 
-    fn rebuild(
+    const fn rebuild(
         published: RenderExtent,
         installed: FrameResourceFootprint,
         replacement: RenderExtent,
+        replacement_trace_scratch: u64,
     ) -> Self {
         Self {
             published: extent_pixels(published),
             installed,
-            replacement: FrameResourceFootprint::tracing(replacement),
+            replacement: FrameResourceFootprint::tracing(replacement, replacement_trace_scratch),
         }
     }
 
@@ -192,6 +194,7 @@ impl FrameResources {
         let display_target = DisplayPipeline::create_target(device, extent);
         let presentation = display.bind_scene(device, published.view(), &display_target);
         let candidate = Self::create_candidate(device, trace, display, &display_target, extent);
+        let trace_scratch = trace.scratch_bytes(extent);
         Self {
             candidate: Some(candidate),
             display: display_target,
@@ -200,6 +203,7 @@ impl FrameResources {
             completed_batches: 0,
             total_compute_ms: 0.0,
             maximum_batch_ms: 0.0,
+            trace_scratch,
         }
     }
 
@@ -305,20 +309,26 @@ impl FrameResources {
         }
     }
 
-    fn resource_footprint(&self) -> FrameResourceFootprint {
+    const fn resource_footprint(&self) -> FrameResourceFootprint {
         if self.candidate.is_some() {
-            FrameResourceFootprint::tracing(self.extent)
+            FrameResourceFootprint::tracing(self.extent, self.trace_scratch)
         } else {
             FrameResourceFootprint::display_only(self.extent)
         }
     }
 
-    pub fn rebuild_plan(
+    pub const fn rebuild_plan(
         &self,
         published: RenderExtent,
         replacement: RenderExtent,
+        replacement_trace_scratch: u64,
     ) -> CoreResourcePlan {
-        CoreResourcePlan::rebuild(published, self.resource_footprint(), replacement)
+        CoreResourcePlan::rebuild(
+            published,
+            self.resource_footprint(),
+            replacement,
+            replacement_trace_scratch,
+        )
     }
 }
 
@@ -577,15 +587,25 @@ mod tests {
     fn core_resource_budget_accounts_for_transactional_4k_rebuild() {
         let limits = wgpu::Limits::default();
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
-        let initial = CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent);
-        let active_rebuild =
-            CoreResourcePlan::rebuild(extent, FrameResourceFootprint::tracing(extent), extent);
-        let completed_rebuild =
-            CoreResourcePlan::rebuild(extent, FrameResourceFootprint::display_only(extent), extent);
+        let scratch = sky_trace_scratch(extent);
+        let initial = CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent, scratch);
+        let active_rebuild = CoreResourcePlan::rebuild(
+            extent,
+            FrameResourceFootprint::tracing(extent, scratch),
+            extent,
+            scratch,
+        );
+        let completed_rebuild = CoreResourcePlan::rebuild(
+            extent,
+            FrameResourceFootprint::display_only(extent),
+            extent,
+            scratch,
+        );
         let cold_rebuild = CoreResourcePlan::rebuild(
             RenderExtent::ONE,
-            FrameResourceFootprint::tracing(extent),
+            FrameResourceFootprint::tracing(extent, scratch),
             extent,
+            scratch,
         );
         assert_eq!(extent_pixels(extent), MAXIMUM_NATIVE_TRACE_PIXELS);
         assert!(initial.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
@@ -608,7 +628,11 @@ mod tests {
             validate_extent(
                 extent,
                 &limits,
-                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, extent),
+                CoreResourcePlan::without_installed_frame(
+                    RenderExtent::ONE,
+                    extent,
+                    sky_trace_scratch(extent),
+                ),
             ),
             Err(ResizeError::NativePixelBudget {
                 width: 3_840,
@@ -629,7 +653,11 @@ mod tests {
             validate_extent(
                 too_wide,
                 &limits,
-                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, too_wide),
+                CoreResourcePlan::without_installed_frame(
+                    RenderExtent::ONE,
+                    too_wide,
+                    sky_trace_scratch(too_wide),
+                ),
             ),
             Err(ResizeError::ExtentLimit {
                 width,
@@ -641,7 +669,11 @@ mod tests {
             validate_extent(
                 too_tall,
                 &limits,
-                CoreResourcePlan::without_installed_frame(RenderExtent::ONE, too_tall),
+                CoreResourcePlan::without_installed_frame(
+                    RenderExtent::ONE,
+                    too_tall,
+                    sky_trace_scratch(too_tall),
+                ),
             ),
             Err(ResizeError::ExtentLimit {
                 width: 1,
@@ -649,5 +681,10 @@ mod tests {
                 max_texture_dimension_2d,
             }) if height == maximum + 1 && max_texture_dimension_2d == maximum
         ));
+    }
+
+    fn sky_trace_scratch(extent: RenderExtent) -> u64 {
+        crate::ray_tracer::shadow_coverage_scratch_bytes(extent)
+            .saturating_add(crate::ray_tracer::escape_map_scratch_bytes(extent))
     }
 }

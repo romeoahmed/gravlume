@@ -28,11 +28,12 @@ fn write_initial_rays(@builtin(global_invocation_id) global_id: vec3<u32>) {
         * (trace_uniforms.observer_velocity + arrival);
     let momentum_covariant = vec4<f32>(-initial.energy, initial.state.momentum);
     let null_residual = normalized_null_residual(momentum_covariant, momentum_contravariant);
-    trace_direction_time[index] = vec4<f32>(
+    trace_source_time[index] = vec4<f32>(
         sight.yzw,
         trace_uniforms.camera.y,
     );
     trace_invariant_drift[index] = vec4<f32>(null_residual, 0.0, 0.0, 0.0);
     trace_metadata[index] = vec4<u32>(0u);
+    trace_event[index] = vec4<u32>(0u);
     textureStore(scene_hdr, vec2<i32>(pixel), vec4<f32>(0.0, 0.0, 0.0, 1.0));
 }

@@ -1,8 +1,8 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
-    StationaryObserverInput, ValidationIssueCode,
+    Angle, EquatorialCircularEmitter, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
+    PhysicalSceneInput, StationaryObserverInput, ValidationIssueCode,
 };
 use proptest::prelude::*;
 
@@ -94,6 +94,30 @@ fn image_sample() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
+
+    #[test]
+    fn equatorial_emitter_accepts_exactly_its_intrinsic_domain(
+        inner_radius_m in proptest::num::f64::ANY,
+        outer_radius_m in proptest::num::f64::ANY,
+        intensity_at_six_m in proptest::num::f64::ANY,
+    ) {
+        let is_valid = inner_radius_m.is_finite()
+            && outer_radius_m.is_finite()
+            && inner_radius_m > 0.0
+            && outer_radius_m >= inner_radius_m
+            && intensity_at_six_m.is_finite()
+            && intensity_at_six_m >= 0.0;
+
+        prop_assert_eq!(
+            EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+                inner_radius_m,
+                outer_radius_m,
+                intensity_at_six_m,
+            )
+            .is_ok(),
+            is_valid,
+        );
+    }
 
     #[test]
     fn image_samples_produce_future_directed_null_rays(

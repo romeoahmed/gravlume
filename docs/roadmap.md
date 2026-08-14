@@ -6,6 +6,7 @@
 
 - validated domain 与独立 CPU `f64` reference；
 - CPU equatorial circular surface 的 Source Anchor、Frequency Ratio 与 vacuum bolometric fixture；
+- scene-owned equatorial emitter 与 GPU full-KS `g^4 I_em` 直接 HDR transport；
 - native winit/egui/wgpu 生命周期；
 - Metal/Vulkan Cartesian Kerr–Schild GPU trace；
 - escape-direction map、interval radial capture 与完整 KS fallback；
@@ -16,7 +17,7 @@ Windows 和 Wayland 仍缺具名 OS、adapter、driver 与 compositor 的实机�
 
 ## 可解释物理图像
 
-**交付：** 薄表面盘、scalar emission/absorption、frequency ratio、blackbody/spectral LUT 与 scene-linear capture。
+**交付：** scalar emission/absorption、blackbody/spectral LUT、surface footprint 与 scientific scene-linear capture。
 
 **退出条件：**
 

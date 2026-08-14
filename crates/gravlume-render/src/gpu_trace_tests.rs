@@ -1,8 +1,8 @@
 use std::num::NonZeroU32;
 
 use gravlume_domain::{
-    Angle, ImageSample, KerrNewmanSpacetime, KerrSchildChart, Observation, PerspectiveView,
-    PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    Angle, EquatorialCircularEmitter, ImageSample, KerrNewmanSpacetime, KerrSchildChart,
+    Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
 };
 use gravlume_reference::{
     ObservationTrace, ObservationTracer, ReferencePolicy, Termination, TraceInputId,
@@ -12,12 +12,16 @@ use proptest::prelude::*;
 
 use crate::{
     gpu_capture::{
-        capture_accelerated_trace, capture_accelerated_trace_in_batches, capture_initial_rays,
-        capture_invariant_gate_cases, capture_refined_edge_count, capture_refined_trace,
-        capture_trace,
+        capture_accelerated_trace, capture_accelerated_trace_in_batches,
+        capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
+        capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
     },
     ray_tracer::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
 };
+
+const EVENT_CANDIDATE_HORIZON: u32 = 1 << 1;
+const EVENT_CANDIDATE_SURFACE: u32 = 1 << 2;
+const EVENT_CANDIDATE_ESCAPE: u32 = 1 << 3;
 
 #[test]
 fn trace_termination_discriminants_are_stable_and_checked() {
@@ -28,6 +32,7 @@ fn trace_termination_discriminants_are_stable_and_checked() {
         (4, TraceTermination::StepExhaustion),
         (5, TraceTermination::NumericalFailure),
         (6, TraceTermination::Uncertain),
+        (7, TraceTermination::EquatorialSurface),
     ];
 
     for (raw, expected) in cases {
@@ -35,10 +40,74 @@ fn trace_termination_discriminants_are_stable_and_checked() {
         assert_eq!(TraceTermination::try_from(raw), Ok(expected));
     }
 
-    for raw in [0, 7, u32::MAX] {
+    for raw in [0, 8, u32::MAX] {
         assert_eq!(
             TraceTermination::try_from(raw),
             Err(UnknownTraceTermination(raw)),
+        );
+    }
+}
+
+#[test]
+fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
+    const SURFACE_OBSERVABLE: &str =
+        include_str!("../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
+    let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+        .expect("repository surface fixture parses")
+        .into_surface_observation()
+        .expect("fixture is a surface observation");
+    let observation = fixture.observation();
+    let sample = fixture.sample();
+    let capture = capture_trace_sample(observation, sample);
+    let [pixel_x, pixel_y] = sample.pixel();
+    let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
+        .expect("fixture pixel index fits usize");
+    let gpu = capture.records[index];
+    let reference = ObservationTracer::baseline_v1()
+        .trace(
+            fixture
+                .trace_request(ReferencePolicy::regular_v1())
+                .expect("fixture sample resolves through its observation"),
+        )
+        .expect("canonical surface source is valid");
+    let reference_observable = reference
+        .surface_observable()
+        .expect("canonical trace terminates on the surface");
+    let reference_anchor = reference_observable.source_anchor();
+
+    assert_eq!(
+        TraceTermination::try_from(gpu.metadata[0]),
+        Ok(TraceTermination::EquatorialSurface)
+    );
+    assert_eq!(gpu.metadata[1], 0, "surface trace failure flags");
+    assert_eq!(gpu.event[..2], [EVENT_CANDIDATE_SURFACE, 0]);
+    assert!((f64::from(gpu.source_time[0]) - reference_anchor.radius_m()).abs() <= 5.0e-3);
+    let azimuth_error = (f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad())
+        .sin()
+        .atan2((f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad()).cos())
+        .abs();
+    assert!(
+        azimuth_error <= 3.0e-4,
+        "source azimuth error {azimuth_error:e}"
+    );
+    let reference_ratio = reference_observable.frequency_ratio().value();
+    let ratio_relative_error =
+        (f64::from(gpu.source_time[2]) - reference_ratio).abs() / reference_ratio;
+    assert!(
+        ratio_relative_error <= 2.0e-3,
+        "frequency-ratio error {ratio_relative_error:e}"
+    );
+    assert!((f64::from(gpu.source_time[3]) - reference.travel_time_m()).abs() <= 1.0e-3);
+
+    let expected = reference_observable.observed_bolometric_intensity();
+    let pixel = capture.hdr_pixel(index);
+    for channel in pixel[..6].chunks_exact(2) {
+        let actual = decode_f16(u16::from_le_bytes(
+            channel.try_into().expect("half channel has two bytes"),
+        ));
+        assert!(
+            (f64::from(actual) - expected).abs() / expected <= 2.0e-3,
+            "surface radiance {actual:e}, expected {expected:e}"
         );
     }
 }
@@ -84,15 +153,137 @@ fn gpu_trace_rejects_extremality_changed_by_f32_packing() {
 }
 
 #[test]
+fn gpu_trace_rejects_surface_profiles_collapsed_by_f32_packing() {
+    let base = default_observation(1, 1);
+    let collapsed_interval = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+        6.0,
+        f64::from_bits(6.0_f64.to_bits() + 1),
+        1.0,
+    )
+    .expect("binary64 interval is nonempty");
+    let underflowed_intensity =
+        EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, f64::MIN_POSITIVE)
+            .expect("binary64 intensity is positive");
+
+    for emitter in [collapsed_interval, underflowed_intensity] {
+        let observation = Observation::new(
+            base.scene()
+                .clone()
+                .with_equatorial_circular_emitter(emitter),
+            *base.view(),
+        );
+        assert!(matches!(
+            TraceUniforms::from_observation(&observation),
+            Err(crate::GpuTraceInputError::NotRepresentable {
+                field: "surface_emitter"
+            })
+        ));
+    }
+}
+
+#[test]
+fn gpu_trace_rejects_surface_profiles_reaching_packed_escape_boundary() {
+    let base = default_observation(1, 1);
+
+    for outer_radius_m in [199.999_999, 200.0, 250.0] {
+        let emitter =
+            EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, outer_radius_m, 1.0)
+                .expect("physical emitter is valid independently of the GPU profile");
+        let observation = Observation::new(
+            base.scene()
+                .clone()
+                .with_equatorial_circular_emitter(emitter),
+            *base.view(),
+        );
+
+        assert!(
+            matches!(
+                TraceUniforms::from_observation(&observation),
+                Err(crate::GpuTraceInputError::SurfaceOutsideEscapeBoundary { .. })
+            ),
+            "surface ending at {outer_radius_m} M escaped the GPU profile applicability check"
+        );
+    }
+}
+
+#[test]
+fn gpu_event_ties_use_affine_distance_and_stable_protocol_order() {
+    let capture = capture_event_policy_cases(&default_observation(8, 1));
+
+    assert_eq!(
+        capture.records[0].metadata[0],
+        u32::from(TraceTermination::Escape),
+        "the minimum-step case must classify the same affine separation as a tie"
+    );
+    assert_eq!(
+        capture.records[0].event[..2],
+        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
+    );
+    assert_eq!(
+        capture.records[1].metadata[0],
+        u32::from(TraceTermination::Escape),
+        "the maximum-step case must classify the same affine separation as a tie"
+    );
+    assert_eq!(
+        capture.records[1].event[..2],
+        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
+    );
+    assert_eq!(
+        capture.records[2].metadata[0],
+        u32::from(TraceTermination::EquatorialSurface),
+        "an exact tie must use emitter-before-escape protocol order"
+    );
+    assert_eq!(
+        capture.records[2].event[..2],
+        [EVENT_CANDIDATE_SURFACE | EVENT_CANDIDATE_ESCAPE, 1]
+    );
+    assert_eq!(
+        capture.records[3].metadata[0],
+        u32::from(TraceTermination::EquatorialSurface),
+        "the earliest candidate must be selected before ties are classified"
+    );
+    assert_eq!(
+        capture.records[3].event[..2],
+        [EVENT_CANDIDATE_HORIZON | EVENT_CANDIDATE_SURFACE, 1],
+        "only candidates within tolerance of the localized earliest event are reported"
+    );
+}
+
+#[test]
+fn gpu_surface_event_arming_requires_leaving_the_profile_band() {
+    let base = default_observation(8, 1);
+    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
+        .expect("surface profile is valid");
+    let observation = Observation::new(
+        base.scene()
+            .clone()
+            .with_equatorial_circular_emitter(emitter),
+        *base.view(),
+    );
+    let capture = capture_event_policy_cases(&observation);
+    let armed = capture.records[4..]
+        .iter()
+        .map(|record| record.metadata[0])
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        armed,
+        [0, 0, 1, 1],
+        "surface, in-band, outside-band, and sticky-armed cases"
+    );
+}
+
+#[test]
 fn mass_scale_does_not_change_the_dimensionless_trace_result() {
     let unit = capture_trace(&observation_at_scale(7, 5, 1.0));
     let scaled = capture_trace(&observation_at_scale(7, 5, 8.0));
 
     assert_eq!(unit.records.len(), scaled.records.len());
     for (unit, scaled) in unit.records.iter().zip(&scaled.records) {
-        assert_same_bits(unit.direction_time, scaled.direction_time);
+        assert_same_bits(unit.source_time, scaled.source_time);
         assert_same_bits(unit.invariant_drift, scaled.invariant_drift);
         assert_eq!(unit.metadata, scaled.metadata);
+        assert_eq!(unit.event, scaled.event);
     }
 }
 
@@ -110,10 +301,11 @@ fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
         Ok(origin_termination),
         TraceTermination::try_from(translated.metadata[0])
     );
-    let origin_direction: [f32; 3] = origin.direction_time[..3]
+    assert_eq!(origin.event, translated.event);
+    let origin_direction: [f32; 3] = origin.source_time[..3]
         .try_into()
         .expect("trace direction contains three components");
-    let translated_direction: [f32; 3] = translated.direction_time[..3]
+    let translated_direction: [f32; 3] = translated.source_time[..3]
         .try_into()
         .expect("trace direction contains three components");
     let angular_difference = angle_between(
@@ -124,12 +316,12 @@ fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
         angular_difference <= 2.0e-6,
         "time translation changed the trace direction by {angular_difference:e} rad"
     );
-    let travel_time_difference = (origin.direction_time[3] - translated.direction_time[3]).abs();
+    let travel_time_difference = (origin.source_time[3] - translated.source_time[3]).abs();
     assert!(
         travel_time_difference <= 1.0e-3,
         "time translation changed travel time from {} to {}",
-        origin.direction_time[3],
-        translated.direction_time[3]
+        origin.source_time[3],
+        translated.source_time[3]
     );
 }
 
@@ -278,8 +470,9 @@ fn accelerated_trace_batches_reuse_the_same_packed_stencil_contract() {
     for (pixel, (single, progressive)) in
         single.records.iter().zip(&progressive.records).enumerate()
     {
-        assert_same_bits(single.direction_time, progressive.direction_time);
+        assert_same_bits(single.source_time, progressive.source_time);
         assert_eq!(single.metadata[0], progressive.metadata[0], "pixel {pixel}");
+        assert_eq!(single.event, progressive.event, "pixel {pixel}");
     }
 }
 
@@ -311,9 +504,9 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
         let cpu_sight = cpu.sight_direction_txyz();
         let cpu_direction = [cpu_sight[1], cpu_sight[2], cpu_sight[3]];
         let gpu_direction = [
-            f64::from(gpu.direction_time[0]),
-            f64::from(gpu.direction_time[1]),
-            f64::from(gpu.direction_time[2]),
+            f64::from(gpu.source_time[0]),
+            f64::from(gpu.source_time[1]),
+            f64::from(gpu.source_time[2]),
         ];
         let angle = angle_between(cpu_direction, gpu_direction);
 
@@ -372,9 +565,9 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
 
         if let Some(reference_direction) = reference.escape_direction_xyz() {
             let gpu_direction = [
-                f64::from(gpu.direction_time[0]),
-                f64::from(gpu.direction_time[1]),
-                f64::from(gpu.direction_time[2]),
+                f64::from(gpu.source_time[0]),
+                f64::from(gpu.source_time[1]),
+                f64::from(gpu.source_time[2]),
             ];
             let angular_error = angle_between(reference_direction, gpu_direction);
             assert!(
@@ -389,12 +582,11 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             "{image_sample:?}: event residual {event_residual:e}"
         );
 
-        let travel_time_error =
-            (f64::from(gpu.direction_time[3]) - reference.travel_time_m()).abs();
+        let travel_time_error = (f64::from(gpu.source_time[3]) - reference.travel_time_m()).abs();
         assert!(
             travel_time_error <= 1.0e-3,
             "{image_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
-            gpu.direction_time[3],
+            gpu.source_time[3],
             reference.travel_time_m(),
             gpu.invariant_drift,
             reference.diagnostics(),
@@ -439,12 +631,16 @@ fn accelerated_trace_preserves_full_trace_branches_and_escape_directions() {
                 actual.metadata[0], expected.metadata[0],
                 "{label}: transfer changed the terminal branch at pixel {index}"
             );
+            assert_eq!(
+                actual.event, expected.event,
+                "{label}: transfer changed event diagnostics at pixel {index}"
+            );
             if TraceTermination::try_from(expected.metadata[0]) != Ok(TraceTermination::Escape) {
                 continue;
             }
 
-            let expected_direction = &expected.direction_time[..3];
-            let actual_direction = &actual.direction_time[..3];
+            let expected_direction = &expected.source_time[..3];
+            let actual_direction = &actual.source_time[..3];
             let chord_squared = expected_direction
                 .iter()
                 .zip(actual_direction)
@@ -538,12 +734,25 @@ fn refinable_branch(raw: u32) -> Option<bool> {
         TraceTermination::SingularityGuard
         | TraceTermination::StepExhaustion
         | TraceTermination::NumericalFailure
-        | TraceTermination::Uncertain => None,
+        | TraceTermination::Uncertain
+        | TraceTermination::EquatorialSurface => None,
     }
 }
 
 fn assert_same_bits(left: [f32; 4], right: [f32; 4]) {
     assert_eq!(left.map(f32::to_bits), right.map(f32::to_bits));
+}
+
+fn decode_f16(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let significand = bits & 0x03ff;
+    match exponent {
+        0 => sign * f32::from(significand) * 2.0_f32.powi(-24),
+        31 if significand == 0 => sign * f32::INFINITY,
+        31 => f32::NAN,
+        _ => sign * (1.0 + f32::from(significand) / 1024.0) * 2.0_f32.powi(exponent - 15),
+    }
 }
 
 fn default_observation(width: u32, height: u32) -> Observation {

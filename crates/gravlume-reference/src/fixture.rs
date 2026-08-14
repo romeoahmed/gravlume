@@ -3,13 +3,12 @@ mod v2;
 
 use std::fmt;
 
-use gravlume_domain::{GeodesicState, InitialViewRay, KerrNewmanSpacetime, Observation};
+use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, Observation, ValidationReport};
 use serde::{Deserialize, Deserializer, de};
 
 use crate::{
-    AffineDirection, EquatorialCircularSurface, EventConfiguration, GeodesicTrace,
-    ObservationTrace, ReferenceOutcome, ReferencePolicy, Termination, TraceInputId,
-    surface::wrapped_angle_difference,
+    AffineDirection, EventConfiguration, GeodesicTrace, ObservationTrace, ReferenceOutcome,
+    ReferencePolicy, Termination, TraceInputId, surface::wrapped_angle_difference,
 };
 
 const MAX_FIXTURE_BYTES: usize = 1024 * 1024;
@@ -124,9 +123,8 @@ impl ObservationFixture {
 #[derive(Clone, Debug)]
 pub struct SurfaceObservationFixture {
     input_id: TraceInputId,
-    spacetime: KerrNewmanSpacetime,
-    initial_ray: InitialViewRay,
-    surface: EquatorialCircularSurface,
+    observation: Observation,
+    sample: gravlume_domain::ImageSample,
     expected: ExpectedSurfaceOutcome,
 }
 
@@ -137,15 +135,31 @@ impl SurfaceObservationFixture {
     }
 
     /// Builds the same validated physical trace under the selected numerical policy.
-    #[must_use]
-    pub fn trace_request(&self, policy: ReferencePolicy) -> ObservationTrace {
-        ObservationTrace::from_initial_ray(
+    /// Resolves the versioned sample through the same source-bearing Observation seam as callers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation report if the stored sample no longer belongs to its observation.
+    pub fn trace_request(
+        &self,
+        policy: ReferencePolicy,
+    ) -> Result<ObservationTrace, ValidationReport> {
+        ObservationTrace::new(
             self.input_id.clone(),
-            self.spacetime,
-            self.initial_ray,
+            &self.observation,
+            self.sample,
             policy,
         )
-        .with_equatorial_circular_surface(self.surface)
+    }
+
+    #[must_use]
+    pub const fn observation(&self) -> &Observation {
+        &self.observation
+    }
+
+    #[must_use]
+    pub const fn sample(&self) -> gravlume_domain::ImageSample {
+        self.sample
     }
 
     #[must_use]
@@ -251,7 +265,6 @@ struct ExpectedSurfaceOutcome {
     travel_time_m: f64,
     emitted_bolometric_intensity: f64,
     observed_bolometric_intensity: f64,
-    intensity_at_six_m: f64,
     source_coordinate_absolute_tolerance_m: f64,
     source_azimuth_absolute_tolerance_rad: f64,
     frequency_ratio_relative_tolerance: f64,
@@ -281,20 +294,12 @@ impl ExpectedSurfaceOutcome {
         {
             return false;
         }
-        let emitted = inverse_cube_intensity(self.intensity_at_six_m, anchor.radius_m());
-        let Ok(observed) = observable.vacuum_observed_bolometric_intensity(emitted) else {
-            return false;
-        };
-        (emitted - self.emitted_bolometric_intensity).abs()
+        (observable.emitted_bolometric_intensity() - self.emitted_bolometric_intensity).abs()
             <= self.bolometric_intensity_absolute_tolerance
-            && (observed - self.observed_bolometric_intensity).abs()
+            && (observable.observed_bolometric_intensity() - self.observed_bolometric_intensity)
+                .abs()
                 <= self.bolometric_intensity_absolute_tolerance
     }
-}
-
-fn inverse_cube_intensity(intensity_at_six_m: f64, radius_m: f64) -> f64 {
-    let radius_ratio = radius_m / 6.0;
-    intensity_at_six_m / radius_ratio / radius_ratio / radius_ratio
 }
 
 #[derive(Debug, thiserror::Error)]

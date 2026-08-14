@@ -140,9 +140,9 @@ g_{tt}=-0.933345183078563810878066121578.
 
 ### 3.1 Geometry scene
 
-当前 GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱；方向主轴与不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。
+Physical Scene 无 emitter 时 GPU 使用无 emission/absorption 的 analytic sky。sky radiance 只是定位方向与 seam 的测试图，不解释为光谱；方向主轴与不同空间频率必须可从 Source Anchor 复原。几何比较使用 termination、escape direction、travel time 和 invariant，不使用 tone-mapped RGB 作为 oracle。默认桌面 scene 在同一 analytic escape environment 前安装第 3.2 节的 emitter。
 
-### 3.2 Surface-observable add-on
+### 3.2 Surface observable
 
 reference surface fixture 增加 equatorial surface：
 
@@ -151,9 +151,13 @@ reference surface fixture 增加 equatorial surface：
 - vacuum between surface and observer，无 absorption；
 - observed bolometric intensity $I_{\rm obs}=g^4I_{\rm em}$。
 
+该 emitter domain 是 Physical Scene；`baseline-v1` trace 的 applicability 另要求
+$r_{\rm out}<R_{\rm esc}=200M$。触碰或越过数值 escape boundary 的合法 Physical Scene 必须在
+CPU/GPU trace seam 返回 typed error，不能静默先终止为 Escape。
+
 这是规定的 surface-radiance fixture，不声称 Novikov–Thorne/Page–Thorne accretion physics。blackbody/spectral LUT 是另一 fixture；不得为让默认图更漂亮而改变这一合同。
 
-版本化 artifact 位于 [`fixtures/v2/kerr-surface-observable.toml`](../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)，引用 v1 canonical Observation 而不复制 scene 参数。它固定 source request、image sample、emission profile、strict expected observable 与 tolerance；v1 schema/profile 不原地扩展。当前该 artifact 只证明 CPU regular/strict reference 闭环，不能当作 GPU transport 已实现的证据。
+版本化 artifact 位于 [`fixtures/v2/kerr-surface-observable.toml`](../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)，引用 v1 canonical Observation 而不复制 scene 参数。它固定 source、image sample、emission profile、strict expected observable 与 tolerance；v1 schema/profile 不原地扩展。CPU regular/strict reference 先独立闭环；GPU full Cartesian Kerr–Schild test 再按本页 GPU gate 比较 termination、Source Anchor、Frequency Ratio、travel time 与最终 `RGBA16F` radiance。
 
 ## 4. Reference Policy
 
@@ -175,12 +179,16 @@ reference surface fixture 增加 equatorial surface：
 | max consecutive rejects      |                          `64` |
 | dense-event affine tolerance |                     `2e-11 M` |
 | event tie tolerance          |                     `5e-11 M` |
-| event arming band            | `1.28e-9 M` for radius events |
+| event arming band            | `1.28e-9` normalized event-function units |
 | singularity guard            |    $(r^4+a^2z^2)/M^4=2^{-40}$ |
 
 `reference-strict-v1` 把所有 `rtol/atol` 除以 16、maximum step 降为 `0.25 M`、event tolerance 除以 4、step/reject 上限加倍。regular fixture 必须同时运行两个 policy；“baseline 成功”而 strict 改变 branch/termination 时，baseline 失败，不选择更好看的结果。
 
-起点位于 event surface 时 event 初始 unarmed；只有 $F<-b_{\rm arm}$ 后才允许反向 crossing。fixture 声明的初始 armed 状态必须由初始 canonical state、event function 和 arming band 推导并一致；未安装对应 event 时不得携带该声明。Reference Outcome 总是记录 accepted/rejected steps、实际 min/max step、event bracket/residual 和触发的资源上限。
+起点位于 event surface 时 event 初始 unarmed。horizon/singularity 在 $F>b_{\rm arm}$、escape 在
+$F<-b_{\rm arm}$、双向 equatorial surface 在 $|F|>b_{\rm arm}$ 后 armed；一旦 armed 不再因返回
+band 而清除。fixture 声明的初始 armed 状态必须由初始 canonical state、event function 和 arming
+band 推导并一致；未安装对应 event 时不得携带该声明。Reference Outcome 总是记录
+accepted/rejected steps、实际 min/max step、event bracket/residual 和触发的资源上限。
 
 ## 5. 验收预算
 
@@ -225,6 +233,12 @@ near-critical fixture 不套一个全局 angle tolerance。它必须给成对的
 ### 5.3 GPU renderer agreement
 
 下列是当前 GPU 实现的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
+
+`gpu-ks-rk4-v1` 以 $M$ 无量纲化，固定 radial step scale `0.1`、step range
+`[0.005M,8M]`、最多 `2048` steps、event tie tolerance $2^{-17}M$ 与 equatorial surface
+arming band $2^{-12}M$。tie 比较 localized fractions 的差乘当前 affine step magnitude；candidate
+以 singularity → horizon → emitter → escape bit order 保存，ambiguity 独立保存。arming 是 per-ray
+sticky state，只在已提交 endpoint 离开 band 后置位。
 
 | observable                                            |                                                v1 gate |
 | ----------------------------------------------------- | -----------------------------------------------------: |

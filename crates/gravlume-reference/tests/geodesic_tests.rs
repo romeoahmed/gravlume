@@ -1,7 +1,7 @@
 use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 use gravlume_reference::{
-    AffineDirection, EventConfiguration, GeodesicConfigurationError, GeodesicTrace, GeodesicTracer,
-    ReferencePolicy, Termination, TraceInputId,
+    AffineDirection, EventConfiguration, EventConfigurationError, GeodesicConfigurationError,
+    GeodesicTrace, GeodesicTracer, ReferencePolicy, Termination, TraceInputId,
 };
 use proptest::prelude::*;
 
@@ -127,4 +127,16 @@ fn equatorial_surface_is_localized_as_a_distinct_terminal_event() {
 
     assert_eq!(outcome.termination(), Termination::EquatorialSurface);
     assert!(outcome.state().components()[3].abs() < 2.0e-11);
+}
+
+#[test]
+fn observation_profile_rejects_surfaces_not_strictly_inside_escape_boundary() {
+    for outer_radius_m in [200.0, 250.0] {
+        assert_eq!(
+            EventConfiguration::observation_baseline_v1()
+                .with_equatorial_surface(6.0, outer_radius_m),
+            Err(EventConfigurationError::EquatorialSurfaceOutsideEscape),
+            "surface ending at {outer_radius_m} M escaped the profile applicability check"
+        );
+    }
 }

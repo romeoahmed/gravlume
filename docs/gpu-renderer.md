@@ -7,10 +7,10 @@
 ```text
 validated Observation
   -> checked f64-to-f32 packing
+  -> private sealed TracePlan
   -> hidden native-resolution candidate
-       escape-map pass
-       trace pass: reconstruction or full KS fallback
-       final shadow classify/refine
+       sky: escape-map + reconstruction/full-KS fallback + shadow refine
+       surface: full KS + local GeometricSample + immediate g^4 transport
   -> timestamp + generation check
   -> atomic texture-view publication
   -> linear scene/UI composition
@@ -21,17 +21,18 @@ validated Observation
 
 ### 输入与 ABI
 
-- `Renderer::new` 只接受 validated `Observation`。Host 按 $M$ 无量纲化，并受检转换为 binary32；不可表示字段、未归一化 observer frequency 或 f32 packing 后改变 extremality 分类都会返回 `GpuTraceInputError`。
+- `Renderer::new` 只接受 validated `Observation`。Host 按 $M$ 无量纲化，并受检转换为 binary32；不可表示字段、未归一化 observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正 intensity 下溢为零，或 source 未严格落在 numerical escape boundary 内，都会返回 `GpuTraceInputError`。
 - Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。
-- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Production ABI 只包含实际运行需要的 uniform、candidate、dispatch 和 escape map；scientific record planes 仅由 test capture 创建。
-- Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure 与 uncertain，并有 checked host/WGSL mapping。
+- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 10 个连续 16-byte block；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Production ABI 只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；四个 scientific record planes 仅由 test capture 创建。
+- Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。
+- Renderer 从 Physical Scene 解析 private sealed `TracePlan`，并用 WGSL pipeline override 固化 surface-event capability。Surface plan 在 shader、bindings、timing 与 target 上都不含 escape map 或 shadow refinement scratch；caller 不选择 accelerator。
 
 ### 数值基线
 
 - WGSL 独立实现 binary32 outgoing Cartesian Kerr–Schild geometry 与 negative-affine classical RK4。每 ray 的动态状态是 $(\mathbf x,\mathbf p)$，$E=-p_t$ 为构造常量；relative time 与 spatial derivative 一起用 `vec4` 做 RK accumulation。
 - Geometry 复用 discriminant-root $\Sigma$、$1/r$ 与 $1/(r^2+a^2)$；Hamilton force 只计算 contracted principal-null Jacobian。Carter diagnostic 使用不借 $H=0$、无 axis seam 的 Cartesian 表达式。
 - Ordinary accepted step 复用 exact endpoint geometry/RHS 供 event、invariant 与下一步 $k_1$ 使用；它没有把 classical RK4 的 $k_4$ 错当成 FSAL。
-- Event 保留 endpoint bracket 与 priority。仅当 Bézier derivative controls 证明 guard cubic 单调且 derivative 有条件时，执行固定六次 safeguarded Newton；否则保留 chord fraction。Travel time、direction、event residual 与 drift 均来自同一个 localized state。
+- Event 保留 endpoint bracket。每个 armed crossed guard 独立定位后选择 affine traversal 上最早 candidate；tie 以具单位 affine distance 判定，全部 candidates 按稳定 bit order 保留，ambiguity 独立记录并降为 `Uncertain`。Surface 从 profile arming band 外进入后才允许 crossing。仅当 Bézier derivative controls 证明 guard cubic 单调且 derivative 有条件时，执行固定六次 safeguarded Newton；否则保留 chord fraction。Travel time、source coordinate、event residual 与 drift 均来自同一个 localized state。
 - 四项 recorded invariant 任一超过 GPU profile budget，就把确定终止降为 `Uncertain`。Radicand、denominator、finite 与 singularity guards 都产生 machine-readable failure。
 
 完整公式、符号验证和 binary32 边界见 [KS RK4 约化记录](research/kerr-schild-rk4-reduction.md)。
@@ -43,6 +44,13 @@ validated Observation
 - **Shadow coverage：** 最后一批完成后，先读取不可变 alpha branch tag 分类 capture/escape 边缘，再以四个真实 rotated-grid subpixel rays 覆盖边界。非边缘像素保持原结果，不用颜色 blur 伪造物理 coverage。
 
 Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例从 production 删除。性能与否决证据只在[加速研究账本](research/gpu-geodesic-acceleration.md)和 [Mino 决策记录](research/mino-step-selection.md)维护。
+
+### Thin surface transport
+
+- Surface event 使用 $z=0$ 双向 crossing；dense-localized radius 必须位于 source inclusive interval。
+- Localized state 独立求 Kerr–Newman prograde circular emitter、oblate chart azimuth 与 $g=\nu_{\rm obs}/\nu_{\rm em}$；非法 orbit/frequency 产生 visible numerical failure。
+- `GeometricSample` 只在 invocation-local function value 中存在；event ambiguity 从 candidate bitset 派生，不复制进该值。Production 不创建 G-buffer；`I_{\rm em}=I_6(r/6M)^{-3}` 经逐次 $g^4$ transport 后直接写现有 `RGBA16F` candidate。
+- 当前 transport 是 neutral bolometric scene-linear intensity；不冒充 blackbody、spectral shift、absorption 或 Novikov–Thorne/Page–Thorne disk。
 
 ### Publication 与 display
 
@@ -57,10 +65,11 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 
 | 层                | 合同                                                                                                         |
 | ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| packing/ABI       | termination round-trip、uniform size/offset、production binding/access/format、Naga parse/validation         |
+| packing/ABI       | termination round-trip、uniform size/offset、production binding/access/format、Naga parse/validation、event candidate/ambiguity capture |
 | normalization     | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                 |
 | initial ray       | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                         |
-| solver            | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time 与四项 invariant drift        |
+| solver            | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming |
+| surface           | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance    |
 | dispatch          | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap      |
 | acceleration      | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback |
 | coverage          | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                |
@@ -74,7 +83,7 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - Regular matrix 仍以默认 exterior Kerr Observation 为主；KN accelerator equality 只覆盖严格亚极端的具名样本，不是完整 charge sweep。
 - Near-critical、高绕转、near-axis 与 near-extreme 的 GPU/reference ladder 尚未闭合。
 - RK4 使用固定 radius-scaled step policy；当前没有 `Uncertain` ray 的第二遍更高精度追迹。
-- Thin disk、frequency-ratio image、emission/absorption、spectral output 与 scientific export 尚未实现。
+- Surface footprint、多像/near-critical surface ladder、absorption、spectral output 与 scientific export 尚未实现。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。

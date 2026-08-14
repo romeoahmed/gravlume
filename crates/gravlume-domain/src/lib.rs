@@ -2,6 +2,7 @@
 
 //! Validated scientific domain types for Gravlume.
 
+mod emission;
 mod numerics;
 mod observer;
 mod scene;
@@ -10,6 +11,7 @@ mod state;
 mod validation;
 mod view;
 
+pub use emission::EquatorialCircularEmitter;
 pub use observer::{ObserverFrame, StationaryObserverInput};
 pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput};
 pub use spacetime::{

@@ -36,18 +36,21 @@ gravlume-reference
 
 ```text
 PhysicalSceneInput -> PhysicalScene
+                          + EquatorialCircularEmitter
                           + PerspectiveView -> Observation
 Observation + ImageSample -> InitialViewRay
 ```
 
 `Observation::initial_ray` 针对自己的 view 验证 sample，并建立 future-directed、null 与 frequency 合同。`KerrSchildChart` 表示 chart convention；`Extremality` 表示 subextremal/extremal/superextremal 分类。
 
+`EquatorialCircularEmitter` 是 domain-owned validated source；它原子携带 inclusive radial
+interval 与 `inverse-cube-bolometric-v1` 的 $I_6$，但不携带 solver、pipeline 或 display policy。
 Reference 保留两个有意不同的接口：
 
-- `ObservationTracer`：从 validated `Observation` 构造规范化 backward trace；`ObservationTrace::with_equatorial_circular_surface` 显式请求第一个 surface hit 的 Source Anchor、Frequency Ratio 与 vacuum bolometric observable；
+- `ObservationTracer`：从 validated `Observation` 的 Physical Scene 读取 emitter，并一次性构造规范化 backward trace、Source Anchor、Frequency Ratio、emitted intensity 与 vacuum-observed intensity；
 - `GeodesicTracer`：fixture、收敛研究和批处理使用 canonical state。
 
-`GeodesicTracer` 不猜测 canonical state 的 observer frequency，也不把所有 equatorial event 解释成 emitter。source request 只在能够证明 $M=\omega_{\rm obs}=1$ 的 Observation seam 安装；未请求 surface 时现有 sky outcome 不携带 source observable。
+`GeodesicTracer` 不猜测 canonical state 的 observer frequency，也不把所有 equatorial event 解释成 emitter。source event 只在能够证明 $M=\omega_{\rm obs}=1$ 的 Observation seam 安装；Physical Scene 无 emitter 时 sky outcome 不携带 source observable。
 
 输入或配置错误、无 timelike circular emitter 与非法 radiance 返回 typed `Err`；数值失败、步数耗尽与 non-convergence 是 `ReferenceOutcome`，不是 panic。CPU 与 WGSL 保持独立计算图，避免同一个符号错误同时污染 oracle 和被测对象。
 
@@ -70,7 +73,7 @@ Reference 保留两个有意不同的接口：
 | -------------------- | ----------------------------------------------------------------------------------------- |
 | `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
-| `ray_tracer.rs`      | Observation→GPU DTO、escape-map/trace pipelines 与 candidate image                        |
+| `ray_tracer.rs`      | Observation→GPU DTO、private sealed TracePlan、plan-specific pipeline/scratch 与 candidate image |
 | `shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                            |
 | `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
 | `capabilities.rs`    | adapter baseline 与纯 surface-output resolver                                             |
@@ -87,6 +90,8 @@ WGSL 位于 `src/shaders/`：
 | `kerr_schild_trace.wgsl`     | 精确 Cartesian Kerr–Schild integration 与 observables     |
 | `geodesic_acceleration.wgsl` | interval capture、escape-direction map 与完整 KS fallback |
 | `lensing_preview.wgsl`       | termination/direction 到 scene-linear preview             |
+| `surface_preview.wgsl`       | equatorial Source Anchor/Frequency Ratio 的直接 bolometric transport |
+| `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
 | `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
 | `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
 | `*_capture.wgsl`             | test-only scientific readback entry points                |
@@ -98,10 +103,10 @@ WGSL 位于 `src/shaders/`：
 每个 active extent generation 拥有隐藏的原生分辨率 candidate：
 
 ```text
-escape-map pass
-  -> trace pass (reconstruct or full KS fallback)
-  -> final-batch shadow classify/refine
-  -> timestamp readback
+private TracePlan
+  -> sky: escape-map -> reconstruct/full-KS trace -> final-batch shadow refine
+  -> surface: full-KS trace -> immediate bolometric transport
+  -> plan-sized timestamp readback
   -> generation check
   -> promote candidate texture view
   -> request one presentation
@@ -168,7 +173,7 @@ Production 不常驻每像素科学 records：
 - UI target：`4 B/pixel`；
 - published scene：`8 B/pixel`；
 - escape map 与 shadow scratch：按 extent 精确计算；
-- 三个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
+- 四个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
 
 分配 replacement 前，renderer 计算 published + installed + replacement 的完整 core plan，并同时执行 3840×2160 pixel policy 与 256 MiB core-resource gate。Surface images、driver heap 和 alignment 不在该逻辑账本内；这项 gate 不是实测显存峰值。
 
