@@ -318,10 +318,17 @@ turning point 的 sign 是显式 branch state，不能用 `signum(0)` 永久锁�
 boundary normalized-residual gate。它不导入项目代码，而是独立构造 corrected metric、
 legacy metric、标准 BL metric 与 Jacobians。
 
+符号恒等式保持 exact `Rational`，按表达式类别显式使用 `Poly`、`cancel` 或
+`trigsimp`，不调用启发式 `simplify()`；near-boundary 数值检查把 exact substitutions
+直接传给 `evalf`，避免先替换再数值化造成精度损失。这遵循 SymPy 的
+[programmatic best practices](https://docs.sympy.org/latest/explanation/best-practices.html)
+与 [`evalf(subs=...)` 建议](https://docs.sympy.org/latest/tutorials/intro-tutorial/basic_operations.html#evalf)。
+
 运行命令：
 
 ```text
-uvx --from sympy==1.14.0 python docs/research/scripts/verify_kerr_schild_mino_map.py
+uv run --isolated --project docs/research/scripts --locked \
+  python -B docs/research/scripts/verify_kerr_schild_mino_map.py
 ```
 
 2026-08-13 的完整摘要输出：
@@ -332,14 +339,14 @@ sympy=1.14.0
 symbolic.metric_pullback=PASS branches=ingoing,outgoing
 symbolic.cartesian_oblate_map=PASS
 symbolic.tangent_covector_duality=PASS
-symbolic.affine_mino=PASS branches=ingoing,outgoing
+symbolic.affine_mino=PASS
 symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing
 symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch=4*M*a*r*u/(a**2*(1 - u) + r**2)
 symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591
 boundary.seed=0x4B534D53 precision_digits=180
-boundary.near_axis=PASS u=1.4177889e-70 abs_delta=55.547747 M2_minus_a2=0.30789136 metric=1.8465478e-181 duality=0 mino=6.4812513e-112
-boundary.near_horizon=PASS u=0.74761718 abs_delta=1.7212955e-60 M2_minus_a2=0.39906777 metric=3.3885179e-121 duality=0 mino=1.5490368e-120
-boundary.near_extremality=PASS u=0.77608197 abs_delta=2.9993350e-80 M2_minus_a2=2.0992798e-60 metric=2.8574685e-101 duality=0 mino=0
+boundary.near_axis=PASS u=1.4177889e-70 abs_delta=55.547747 M2_minus_a2=0.30789136 metric=1.6293634e-552 duality=0 mino=4.9724224e-557
+boundary.near_horizon=PASS u=0.74761718 abs_delta=1.7212955e-60 M2_minus_a2=0.39906777 metric=4.1892576e-491 duality=0 mino=7.8031003e-500
+boundary.near_extremality=PASS u=0.77608197 abs_delta=2.9993350e-80 M2_minus_a2=2.0992798e-60 metric=3.8639081e-472 duality=0 mino=1.4739640e-477
 RESULT=PASS
 ```
 

@@ -189,7 +189,14 @@ R(r)=E^2r^4+\left[-2Ea(L-aE)-((L-aE)^2+Q)\right]r^2
 
 若 backward ray 初始向内，且能证明 `R(r)>0` 覆盖 `[r_+,r_obs]`，就不存在外部 radial turning point，可直接判定 Horizon。实现不求四次方程的根，而是把区间分成 12 段；每段 degree-4 power coefficients 转为 Bernstein coefficients，只有全部向外扩张 interval 的下界严格为正才接受。`IntervalF32` 在每个 WGSL `+/-/*` 后通过 bit reinterpretation 建立优化屏障并向外扩一 ULP，near-zero/FTZ 扩到最小 normal；`E/Lz/Q/r_obs` 再用相对 `2^-12` envelope 包住 host→shader 与初值/invariant seam。任一非有限、带电、`|a|>0.9`、`r_obs>256M`、near-axis、径向导数 margin 不足或区间条件失败都回退完整 KS。[WGSL floating-point evaluation](https://www.w3.org/TR/WGSL/#floating-point-evaluation)
 
-SymPy 1.14 的可复现脚本验证 exact Kerr quartic、quartic→Bernstein 恒等式、20,000 组 strict-f32 primitive enclosure、packed-horizon seam 与 mutation witnesses；它明确不把工程化 physical-input envelope 夸大成连续域形式证明。GPU oracle 另对 default、负自旋、`r_obs=5M`、远场、near-extreme 与 near-axis profile 做全像素 branch/direction 比较；后两者必须零接受。一次真实 near-extreme false accept 正是由该矩阵发现，随后收紧为 explicit fallback。
+[可复现脚本](scripts/verify_kerr_capture_bernstein.py)用 SymPy 1.14 验证 exact Kerr quartic 与 quartic→Bernstein 恒等式，并用 Hypothesis 6.165.6 的原生 binary32 strategy 生成、收缩 strict-f32 primitive/Bernstein enclosure 反例；显式 examples 固定 signed zero、subnormal、normal 边界与最大 finite，另验证 packed-horizon seam 和 mutation witnesses。这里属性测试补充数值实现，不替代符号证明。[Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.given) [32-bit float strategy](https://hypothesis.readthedocs.io/en/latest/reference/strategies.html#hypothesis.strategies.floats)
+
+```text
+uv run --isolated --project docs/research/scripts --locked \
+  python -B docs/research/scripts/verify_kerr_capture_bernstein.py
+```
+
+脚本明确不把工程化 physical-input envelope 夸大成连续域形式证明。GPU oracle 另对 default、负自旋、`r_obs=5M`、远场、near-extreme 与 near-axis profile 做全像素 branch/direction 比较；后两者必须零接受。一次真实 near-extreme false accept 正是由该矩阵发现，随后收紧为 explicit fallback。
 
 默认 1280×720 接受 `56,937/921,600` pixels（`6.178%`）。在已经采用 global map 后，Apple M5/Metal 两次 32 对增量分别为 `-9.156%`、CI `[-10.733%, -7.707%]` 与 `-5.946%`、CI `[-9.573%, -3.652%]`，branch tags 全等，Escape direction 完全不变。这个 shortcut 只服务 presentation Horizon/color；科学 record capture 仍执行完整 KS。它没有 2× 收益，但实现局部、单向保守、fallback 完整且两次稳定改善远高于其维护成本，因此保留。
 

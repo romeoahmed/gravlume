@@ -44,8 +44,8 @@ terminal observable 逐点单调：最后一步相位、turning branch、event l
 形式化命令：
 
 ```text
-uvx --from sympy==1.14.0 \
-  python docs/research/scripts/verify_mino_step_model.py
+uv run --isolated --project docs/research/scripts --locked \
+  python -B docs/research/scripts/verify_mino_step_model.py
 ```
 
 该脚本只证明局部数值模型，不证明 supported domain 或完整 renderer correctness。
