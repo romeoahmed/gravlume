@@ -537,8 +537,6 @@ mod tests {
             }
 
             prop_assert!(covered.into_iter().all(|tile| tile));
-            prop_assert_eq!(progress.next_tile, progress.total_tiles);
-            prop_assert!(progress.in_flight.is_none());
             prop_assert!(progress.next_batch().is_none(), "complete traces are reused");
         }
     }

@@ -707,6 +707,7 @@ fn select_earliest_event(
 #[cfg(test)]
 mod tests {
     use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
+    use proptest::prelude::*;
 
     use super::{
         EventArming, EventConfiguration, EventKind, GeodesicTrace, GeodesicTracer, ReferencePolicy,
@@ -800,33 +801,60 @@ mod tests {
         assert_eq!(outcome.termination(), Termination::SingularityGuard);
     }
 
-    #[test]
-    fn same_step_event_ties_keep_every_candidate_in_stable_protocol_order() {
-        let state = GeodesicState::new([0.0; 4], [-1.0, 0.0, 0.0, 0.0]).expect("state is finite");
-        let root = |kind, theta| super::LocalizedRoot {
-            kind,
-            candidates: vec![kind],
-            theta,
-            state,
-            bracket_width_m: 1.0e-12,
-            normalized_residual: 0.0,
-        };
-        let selected = select_earliest_event(
-            &[
-                Some(root(EventKind::Escape, 0.2)),
-                Some(root(EventKind::Horizon, 0.2 + 2.0e-11)),
-                Some(root(EventKind::EquatorialSurface, 0.4)),
-                None,
-            ],
-            1.0,
-            5.0e-11,
-        )
-        .expect("at least one root exists");
+    proptest! {
+        #[test]
+        fn same_step_event_selection_is_relative_to_the_global_affine_minimum(
+            optional_events in any::<[bool; 3]>(),
+            offsets in prop::array::uniform4(prop_oneof![Just(0.0), 0.0_f64..=2.0]),
+            step_magnitude in 0.005_f64..=8.0,
+            is_backward in any::<bool>(),
+            tie_tolerance_m in 1.0e-12_f64..=1.0e-6,
+        ) {
+            let state = GeodesicState::new([0.0; 4], [-1.0, 0.0, 0.0, 0.0])
+                .expect("state is finite");
+            let kinds = EventKind::ordered();
+            let step_m = if is_backward {
+                -step_magnitude
+            } else {
+                step_magnitude
+            };
+            let roots = std::array::from_fn(|index| {
+                let is_present = index == 0 || optional_events[index - 1];
+                is_present.then(|| super::LocalizedRoot {
+                    kind: kinds[index],
+                    candidates: vec![kinds[index]],
+                    theta: 0.25 + offsets[index] * tie_tolerance_m / step_magnitude,
+                    state,
+                    bracket_width_m: 1.0e-12,
+                    normalized_residual: 0.0,
+                })
+            });
+            let earliest_theta = roots
+                .iter()
+                .flatten()
+                .map(|root| root.theta)
+                .fold(f64::INFINITY, f64::min);
+            let expected_kind = roots
+                .iter()
+                .flatten()
+                .find(|root| root.theta.to_bits() == earliest_theta.to_bits())
+                .expect("the singularity guard is always present")
+                .kind;
+            let expected_candidates = roots
+                .iter()
+                .flatten()
+                .filter(|root| {
+                    (root.theta - earliest_theta).abs() * step_magnitude <= tie_tolerance_m
+                })
+                .map(|root| root.kind)
+                .collect::<Vec<_>>();
 
-        assert_eq!(selected.kind, EventKind::Escape);
-        assert_eq!(
-            selected.candidates,
-            vec![EventKind::Horizon, EventKind::Escape]
-        );
+            let selected = select_earliest_event(&roots, step_m, tie_tolerance_m)
+                .expect("the singularity guard is always present");
+
+            prop_assert_eq!(selected.theta.to_bits(), earliest_theta.to_bits());
+            prop_assert_eq!(selected.kind, expected_kind);
+            prop_assert_eq!(selected.candidates, expected_candidates);
+        }
     }
 }
