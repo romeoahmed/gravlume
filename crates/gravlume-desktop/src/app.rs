@@ -23,12 +23,14 @@ use winit::{
 };
 
 use crate::{
-    Launch,
     lifecycle::Lifecycle,
+    preview::DEFAULT_PREVIEW,
     schedule::{EventLoopSchedule, PendingResize, earliest},
-    ui::{default_observation, install_fonts, show_overlay},
+    ui::{install_fonts, show_overlay},
 };
 
+const WINDOW_TITLE: &str = "Gravlume";
+const INITIAL_RENDER_EXTENT: PhysicalSize<u32> = PhysicalSize::new(1280, 720);
 const RETRY_FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const SMOKE_ONCE_ENV: &str = "GRAVLUME_SMOKE_ONCE";
 
@@ -42,8 +44,8 @@ pub enum RunError {
     NativeDisplay(#[from] gravlume_native_display::MonitorError),
     #[error("failed to initialize the GPU renderer: {0}")]
     RenderInit(#[from] RendererInitError),
-    #[error("failed to construct the validated default observation: {0}")]
-    DefaultObservation(#[from] ValidationReport),
+    #[error("failed to construct the validated preview scene: {0}")]
+    Preview(#[from] ValidationReport),
     #[error("rendering failed: {0}")]
     RenderRuntime(#[from] RendererError),
     #[error("fatal resize failure: {0}")]
@@ -57,10 +59,10 @@ pub enum RunError {
 /// # Errors
 ///
 /// Returns an error when event-loop, window, renderer, or device initialization/runtime fails.
-pub fn run(launch: Launch) -> Result<(), RunError> {
+pub fn run() -> Result<(), RunError> {
     let mut builder = EventLoop::<AppEvent>::with_user_event();
     let event_loop = builder.build()?;
-    let mut app = DesktopApp::new(launch, event_loop.create_proxy());
+    let mut app = DesktopApp::new(event_loop.create_proxy());
     event_loop.run_app(&mut app)?;
     app.fatal_error.take().map_or(Ok(()), Err)
 }
@@ -80,7 +82,6 @@ enum AppEvent {
 }
 
 struct DesktopApp {
-    launch: Launch,
     lifecycle: Lifecycle,
     window: Option<WindowState>,
     renderer: Option<Renderer>,
@@ -98,11 +99,10 @@ struct DesktopApp {
 }
 
 impl DesktopApp {
-    fn new(launch: Launch, event_proxy: EventLoopProxy<AppEvent>) -> Self {
+    fn new(event_proxy: EventLoopProxy<AppEvent>) -> Self {
         let egui_context = egui::Context::default();
         install_fonts(&egui_context);
         Self {
-            launch,
             lifecycle: Lifecycle::default(),
             window: None,
             renderer: None,
@@ -125,13 +125,9 @@ impl DesktopApp {
         let window = if let Some(window_state) = &self.window {
             Arc::clone(&window_state.window)
         } else {
-            let window_preferences = self.launch.window();
             let attributes = Window::default_attributes()
-                .with_title(window_preferences.title())
-                .with_inner_size(PhysicalSize::new(
-                    window_preferences.width(),
-                    window_preferences.height(),
-                ));
+                .with_title(WINDOW_TITLE)
+                .with_inner_size(INITIAL_RENDER_EXTENT);
             let window = Arc::new(event_loop.create_window(attributes)?);
             let egui = egui_winit::State::new(
                 self.egui_context.clone(),
@@ -186,7 +182,7 @@ impl DesktopApp {
             return Ok(());
         }
         let size = window.inner_size();
-        let observation = default_observation(size.width, size.height)?;
+        let observation = DEFAULT_PREVIEW.observation(size.width, size.height)?;
         let mut renderer =
             pollster::block_on(Renderer::new(window.clone(), &observation, display_state))?;
         // Configuring extended-linear output can arm macOS EDR. Re-read the live snapshot after
@@ -221,7 +217,13 @@ impl DesktopApp {
             let resize_event = self.last_resize_event.as_ref();
             let raw_input = window_state.egui.take_egui_input(window);
             let output = self.egui_context.run_ui(raw_input, |root_ui| {
-                show_overlay(root_ui.ctx(), &diagnostics, device_event, resize_event);
+                show_overlay(
+                    root_ui.ctx(),
+                    &diagnostics,
+                    DEFAULT_PREVIEW,
+                    device_event,
+                    resize_event,
+                );
             });
             let egui::FullOutput {
                 platform_output,

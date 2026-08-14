@@ -95,7 +95,8 @@ impl Renderer {
 
 | 模块 | 所有权 |
 |---|---|
-| `renderer.rs` | surface/device/queue、extent generation、批调度、原子发布和 presentation |
+| `renderer.rs` | surface/device/queue、extent generation、submission、原子发布和 presentation |
+| `renderer/frame.rs` | frame bundle、trace batch、自适应预算和事务式资源准入 |
 | `ray_tracer.rs` | Observation→GPU DTO、主追迹与方向重建 pipeline、trace image |
 | `shadow_coverage.rs` | 边缘分类/refinement pipeline 与 scratch target |
 | `display.rs` | scene/UI 最终线性合成与 surface encoding |
@@ -104,6 +105,8 @@ impl Renderer {
 | `error.rs` | error scopes、device callbacks 与 typed errors |
 | `extent.rs` | 非零 extent 与 generation 转移 |
 | `benchmark.rs` | 仅在 `gpu-benchmarks` feature 下暴露给 Cargo benchmark crate 的 seam |
+
+领域状态与稳健浮点算子分别位于 `domain/state.rs`、`domain/numerics.rs`；极值分类使用的精确 binary64 算术是 `domain/spacetime/exact_binary.rs` 的私有实现。Reference 的公共 fixture 接口保留在 `fixture.rs`，v1 wire DTO 和 profile 规则位于 `fixture/v1.rs`。这些子模块使用 Rust 2018+ 的 `module.rs + module/child.rs` 布局，不引入同名 `mod.rs`。[Rust 模块文件](https://doc.rust-lang.org/stable/book/ch07-05-separating-modules-into-different-files.html)
 
 WGSL 与消费它的 renderer 放在 `src/shaders/`：`trace.wgsl` 是基线积分器，`direction_reconstruction.wgsl` 是保守 tile accelerator，`shadow_coverage.wgsl` 只解决 capture/escape 边界覆盖率，`display.wgsl` 负责输出。文件名描述数学职责，不使用 roadmap 阶段名。
 

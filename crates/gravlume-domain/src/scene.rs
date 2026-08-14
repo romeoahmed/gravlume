@@ -1,7 +1,7 @@
 use crate::{
     Extremality, GeodesicState, ImageSample, KerrNewmanSpacetime, KerrSchildChart, ObserverFrame,
     PerspectiveView, SpacetimeEvent, StationaryObserverInput, ValidationIssueCode,
-    ValidationReport, math::FourVector, observer::StationaryObserver,
+    ValidationReport, observer::StationaryObserver, state::FourVector,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;

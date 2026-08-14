@@ -1,6 +1,6 @@
 use crate::{
     KerrNewmanSpacetime, SpacetimeEvent, ValidationIssue, ValidationIssueCode, ValidationReport,
-    math::{FourVector, normalized_quadratic_form_residual},
+    numerics::normalized_quadratic_form_residual, state::FourVector,
     validation::validate_finite_array,
 };
 

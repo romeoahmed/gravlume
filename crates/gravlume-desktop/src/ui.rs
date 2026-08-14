@@ -1,10 +1,6 @@
-use std::num::NonZeroU32;
-
-use gravlume_domain::{
-    Angle, KerrNewmanSpacetime, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
-    PhysicalSceneInput, StationaryObserverInput, ValidationReport,
-};
 use gravlume_render::{DeviceEvent, RendererDiagnostics};
+
+use crate::preview::Preview;
 
 const FONT_NAME: &str = "Noto Sans SC";
 const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.otf");
@@ -28,6 +24,7 @@ pub fn install_fonts(context: &egui::Context) {
 pub fn show_overlay(
     context: &egui::Context,
     diagnostics: &RendererDiagnostics<'_>,
+    preview: Preview,
     device_event: Option<&DeviceEvent>,
     resize_event: Option<&DeviceEvent>,
 ) {
@@ -55,10 +52,15 @@ pub fn show_overlay(
                     ui.label("Full-resolution trace complete.");
                 }
             }
-            ui.label("a/M 0.8 | r_obs/M 30 | vertical FOV 45 deg");
+            ui.label(format!(
+                "a/M {} | r_obs/M {} | vertical FOV {} deg",
+                preview.spin_ratio(),
+                preview.observer_radius_ratio(),
+                preview.vertical_fov_degrees()
+            ));
             ui.label("Black: horizon shadow | Color: lensed sky");
             ui.label(format!(
-                "GPU RK4 geometry preview | Output: {}",
+                "GPU Kerr geodesics | Output: {}",
                 diagnostics.display_transfer()
             ));
             ui.weak("No accretion disk or radiative transfer.");
@@ -78,28 +80,4 @@ pub fn show_overlay(
                 );
             }
         });
-}
-
-pub fn default_observation(width: u32, height: u32) -> Result<Observation, ValidationReport> {
-    let spacetime = KerrNewmanSpacetime::new(1.0, 0.8, 0.0, KerrSchildChart::Outgoing)?;
-    let observer_xyz = spacetime.oblate_to_cartesian(30.0, std::f64::consts::FRAC_PI_3, 0.0);
-    let observer = StationaryObserverInput::new(
-        [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
-        [0.0; 4],
-        [0.0, 0.0, 1.0],
-        1.0,
-    );
-    let scene = PhysicalScene::new(PhysicalSceneInput::new(
-        1.0,
-        0.8,
-        0.0,
-        KerrSchildChart::Outgoing,
-        observer,
-    ))?;
-    let view = PerspectiveView::new(
-        NonZeroU32::new(width).unwrap_or(NonZeroU32::MIN),
-        NonZeroU32::new(height).unwrap_or(NonZeroU32::MIN),
-        Angle::from_radians(std::f64::consts::FRAC_PI_4)?,
-    )?;
-    Ok(Observation::new(scene, view))
 }
