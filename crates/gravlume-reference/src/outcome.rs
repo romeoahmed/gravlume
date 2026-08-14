@@ -2,7 +2,7 @@ use std::{fmt, sync::Arc};
 
 use gravlume_domain::{GeodesicState, GeometryError, KerrNewmanSpacetime};
 
-use crate::{EventKind, events::EventConfiguration};
+use crate::{EventKind, SurfaceObservable, events::EventConfiguration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AffineDirection {
@@ -270,6 +270,7 @@ pub struct ReferenceOutcome {
     pub(super) turning_radius_m: Option<f64>,
     pub(super) azimuth_advance_rad: f64,
     pub(super) travel_time_m: f64,
+    pub(super) surface_observable: Option<SurfaceObservable>,
     pub(super) diagnostics: TraceDiagnostics,
 }
 
@@ -324,6 +325,12 @@ impl ReferenceOutcome {
     #[must_use]
     pub const fn travel_time_m(&self) -> f64 {
         self.travel_time_m
+    }
+
+    /// Returns the physical source observable for a configured surface hit.
+    #[must_use]
+    pub const fn surface_observable(&self) -> Option<SurfaceObservable> {
+        self.surface_observable
     }
 
     #[must_use]
