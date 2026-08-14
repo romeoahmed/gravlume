@@ -13,6 +13,7 @@ const SCATTER_NEAR_CRITICAL: &str =
 const CAPTURE_NEAR_CRITICAL: &str =
     include_str!("../fixtures/v1/schwarzschild-capture-near-critical.toml");
 const DEFAULT_OBSERVATION: &str = include_str!("../fixtures/v1/default-kerr-observation.toml");
+const SURFACE_OBSERVABLE: &str = include_str!("../fixtures/v2/kerr-surface-observable.toml");
 
 fn edit_fixture(source: &str, edit: impl FnOnce(&mut toml::Value)) -> String {
     let mut document = toml::from_str(source).expect("repository fixture is valid TOML");
@@ -43,6 +44,7 @@ fn decimal(value: &str) -> toml::Value {
 #[test]
 fn fixture_envelope_is_strict_and_size_bounded() {
     let with_unknown = set_field(SCATTER_B6, &["undeclared"], toml::Value::Boolean(true));
+    let unsupported = set_field(SCATTER_B6, &["schema_version"], toml::Value::Integer(3));
     let oversized = "x".repeat(1024 * 1024 + 1);
 
     assert!(matches!(
@@ -50,8 +52,35 @@ fn fixture_envelope_is_strict_and_size_bounded() {
         Err(FixtureError::Toml(_))
     ));
     assert!(matches!(
+        FixtureDocument::parse_toml(&unsupported),
+        Err(FixtureError::UnsupportedSchema(3))
+    ));
+    assert!(matches!(
         FixtureDocument::parse_toml(&oversized),
         Err(FixtureError::TooLarge { .. })
+    ));
+}
+
+#[test]
+fn surface_fixture_requires_a_strict_canonical_artifact() {
+    let with_unknown = set_field(
+        SURFACE_OBSERVABLE,
+        &["undeclared"],
+        toml::Value::Boolean(true),
+    );
+    let drifted = set_field(
+        SURFACE_OBSERVABLE,
+        &["expected", "frequency_ratio"],
+        decimal("0.95"),
+    );
+
+    assert!(matches!(
+        FixtureDocument::parse_toml(&with_unknown),
+        Err(FixtureError::Toml(_))
+    ));
+    assert!(matches!(
+        FixtureDocument::parse_toml(&drifted),
+        Err(FixtureError::PresetMismatch { .. })
     ));
 }
 
