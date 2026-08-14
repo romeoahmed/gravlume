@@ -214,7 +214,11 @@ impl SurfaceObservable {
         if !emitted_bolometric_intensity.is_finite() || emitted_bolometric_intensity < 0.0 {
             return Err(SurfaceObservableError::InvalidEmittedBolometricIntensity);
         }
-        let observed = self.frequency_ratio.0.powi(4) * emitted_bolometric_intensity;
+        // Starting from intensity avoids an out-of-range g^4 when the final product is finite.
+        let mut observed = emitted_bolometric_intensity;
+        for _ in 0..4 {
+            observed *= self.frequency_ratio.0;
+        }
         if observed.is_finite() && observed >= 0.0 {
             Ok(observed)
         } else {
@@ -255,7 +259,10 @@ fn wrap_angle(angle: f64) -> f64 {
 mod tests {
     use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 
-    use super::{EquatorialCircularSurface, SurfaceObservableError, wrap_angle};
+    use super::{
+        EquatorialCircularSurface, EquatorialSurfaceAnchor, FrequencyRatio, SourceAnchor,
+        SurfaceObservable, SurfaceObservableError, wrap_angle,
+    };
 
     #[test]
     fn schwarzschild_frequency_ratio_matches_the_circular_orbit_closed_form() {
@@ -314,5 +321,32 @@ mod tests {
             .expect_err("the photon orbit is not a timelike emitter orbit");
 
         assert_eq!(error, SurfaceObservableError::CircularOrbitIsNotTimelike);
+    }
+
+    #[test]
+    fn bolometric_transport_avoids_spurious_intermediate_range_loss() {
+        for (frequency_ratio, emitted, expected) in [
+            (1.0e100, 1.0e-300, 1.0e100_f64),
+            (1.0e-100, 1.0e300, 1.0e-100),
+            (1.0e100, 0.0, 0.0),
+        ] {
+            let observable = SurfaceObservable {
+                source_anchor: SourceAnchor::EquatorialSurface(EquatorialSurfaceAnchor {
+                    radius_m: 6.0,
+                    azimuth_rad: 0.0,
+                }),
+                frequency_ratio: FrequencyRatio(frequency_ratio),
+            };
+
+            let observed = observable
+                .vacuum_observed_bolometric_intensity(emitted)
+                .expect("the final g^4 I_em value is representable");
+
+            if expected == 0.0 {
+                assert_eq!(observed.to_bits(), expected.to_bits());
+            } else {
+                assert!((observed - expected).abs() / expected <= 8.0 * f64::EPSILON);
+            }
+        }
     }
 }
