@@ -37,6 +37,7 @@ gravlume-reference
 ```text
 PhysicalSceneInput -> PhysicalScene
                           + EquatorialCircularEmitter
+                          + HomogeneousScalarSlab
                           + PerspectiveView -> Observation
 Observation + ImageSample -> InitialViewRay
 ```
@@ -44,10 +45,15 @@ Observation + ImageSample -> InitialViewRay
 `Observation::initial_ray` 针对自己的 view 验证 sample，并建立 future-directed、null 与 frequency 合同。`KerrSchildChart` 表示 chart convention；`Extremality` 表示 subextremal/extremal/superextremal 分类。
 
 `EquatorialCircularEmitter` 是 domain-owned validated source；它原子携带 inclusive radial
-interval 与 `inverse-cube-bolometric-v1` 的 $I_6$，但不携带 solver、pipeline 或 display policy。
+interval、`inverse-cube-bolometric-v1` 的 $I_6$，并可选择 `inverse-cube-blackbody-v1` 的 $T_6$，
+但不携带 solver、pipeline 或 display policy。`HomogeneousScalarSlab` 是解析、path-integrated
+transfer operator，只保存总 optical depth、integrated emission 与可选 emission temperature；它
+不伪装成空间变化的 volume medium。
 Reference 保留两个有意不同的接口：
 
-- `ObservationTracer`：从 validated `Observation` 的 Physical Scene 读取 emitter，并一次性构造规范化 backward trace、Source Anchor、Frequency Ratio、emitted intensity 与 vacuum-observed intensity；
+- `ObservationTracer`：从 validated `Observation` 读取 emitter/slab，并一次性构造规范化 backward
+  trace、branch key、Source Anchor、Frequency Ratio、vacuum/final bolometric intensity 与可选
+  blackbody bands；另以五条真实射线提供 branch-checked surface footprint；
 - `GeodesicTracer`：fixture、收敛研究和批处理使用 canonical state。
 
 `GeodesicTracer` 不猜测 canonical state 的 observer frequency，也不把所有 equatorial event 解释成 emitter。source event 只在能够证明 $M=\omega_{\rm obs}=1$ 的 Observation seam 安装；Physical Scene 无 emitter 时 sky outcome 不携带 source observable。
@@ -66,6 +72,9 @@ Reference 保留两个有意不同的接口：
 - `present` 只报告已提交或可恢复的 surface skip；
 - `suspend/resume` 幂等，并保留上一张完整 scene；
 - `update_output` 只换 display contract，不使 geometry generation 失效。
+- `capture_scene_linear` 是显式阻塞的 export 操作，只读取已原子发布的 surface generation；它返回
+  `Rgba16Float` binary16 words、逐 texel kind 与分开的 bolometric/final-spectral/LUT 模型误差
+  metadata，不经过 display 或 UI。
 
 ## Renderer modules
 
@@ -74,6 +83,8 @@ Reference 保留两个有意不同的接口：
 | `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
 | `ray_tracer.rs`      | Observation→GPU DTO、private sealed TracePlan、plan-specific pipeline/scratch 与 candidate image |
+| `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
+| `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind 与解释 metadata               |
 | `shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                            |
 | `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
 | `capabilities.rs`    | adapter baseline 与纯 surface-output resolver                                             |
@@ -90,8 +101,11 @@ WGSL 位于 `src/shaders/`：
 | `kerr_schild_trace.wgsl`     | 精确 Cartesian Kerr–Schild integration 与 observables     |
 | `geodesic_acceleration.wgsl` | interval capture、escape-direction map 与完整 KS fallback |
 | `lensing_preview.wgsl`       | termination/direction 到 scene-linear preview             |
-| `surface_preview.wgsl`       | equatorial Source Anchor/Frequency Ratio 的直接 bolometric transport |
+| `surface_transport.wgsl`     | inverse-cube source 与 homogeneous-slab bolometric helper           |
+| `surface_preview.wgsl`       | equatorial source 的直接 bolometric transport                        |
+| `spectral_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport         |
 | `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
+| `surface_footprint_capture.wgsl` | test-only branch-checked source-chart finite difference         |
 | `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
 | `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
 | `*_capture.wgsl`             | test-only scientific readback entry points                |
@@ -105,7 +119,8 @@ WGSL 位于 `src/shaders/`：
 ```text
 private TracePlan
   -> sky: escape-map -> reconstruct/full-KS trace -> final-batch shadow refine
-  -> surface: full-KS trace -> immediate bolometric transport
+  -> bolometric surface: full-KS trace -> immediate g^4 + slab transport
+  -> blackbody surface: full-KS trace -> gT + LUT bands + slab transport
   -> plan-sized timestamp readback
   -> generation check
   -> promote candidate texture view
@@ -117,6 +132,8 @@ private TracePlan
 - shadow classification 从不可变 candidate 读取 alpha tag，refinement 在后续 dispatch 写回真实 subpixel 平均；
 - incomplete candidate 永不进入 display bind group；stale completion 只能回收资源；
 - candidate 完成后直接提升 texture view，不做同尺寸 publication copy。
+- surface RGB 只有 alpha tag `2.0` 才是 metadata 所述 physical radiance；escape 的 `1.0` 是解析方向
+  preview、horizon 是零、负 alpha 是 failure。Display 忽略 scene alpha，scientific capture 必须分类。
 
 上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present，因此隐藏批次不会以扫描或低分辨率过渡暴露给用户。
 
@@ -150,7 +167,9 @@ Surface 不变量：
 
 ## GPU ABI 与错误
 
-GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。领域类型和 `glam` 不直接上传；因此当前不启用 `glam/bytemuck`。Host/WGSL size、offset、binding、access、format 与 discriminant 由 ABI/GPU contracts 验证。
+GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。领域类型和 `glam` 不直接上传；因此当前不启用 `glam/bytemuck`。`TraceUniforms` 是 11 个连续 `[f32;4]`/`vec4<f32>` block，
+共 176 byte；blackbody plan 另绑定 4097 个 `vec4<f32>` 的 read-only storage LUT。Host/WGSL
+size、offset、binding、access、format 与 discriminant 由 ABI/GPU contracts 验证。
 
 错误按处理者分类：
 
@@ -173,7 +192,13 @@ Production 不常驻每像素科学 records：
 - UI target：`4 B/pixel`；
 - published scene：`8 B/pixel`；
 - escape map 与 shadow scratch：按 extent 精确计算；
+- blackbody plan 的固定 spectral LUT：`65,552 B`；
 - 四个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
+
+显式 scientific export 临时分配 padded readback buffer，完成 map 后即释放；它不属于 steady frame
+resources。WebGPU texel copy 对正常有限值保证数值等价，但允许重新编码 zero、subnormal 与
+non-finite representation；export 因而提供 channel bit words 与 semantic kind，不声称所有异常 bit
+pattern 跨 backend 原样保存。[WebGPU texel copies](https://www.w3.org/TR/webgpu/#texel-copies)
 
 分配 replacement 前，renderer 计算 published + installed + replacement 的完整 core plan，并同时执行 3840×2160 pixel policy 与 256 MiB core-resource gate。Surface images、driver heap 和 alignment 不在该逻辑账本内；这项 gate 不是实测显存峰值。
 

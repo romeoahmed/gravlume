@@ -1,8 +1,9 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
-    PhysicalSceneInput, StationaryObserverInput, ValidationIssueCode,
+    Angle, EquatorialCircularEmitter, HomogeneousScalarSlab, KerrSchildChart, Observation,
+    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    ValidationIssueCode,
 };
 use proptest::prelude::*;
 
@@ -120,6 +121,83 @@ proptest! {
     }
 
     #[test]
+    fn blackbody_emitter_accepts_exactly_its_intrinsic_domain(
+        inner_radius_m in proptest::num::f64::ANY,
+        outer_radius_m in proptest::num::f64::ANY,
+        intensity_at_six_m in proptest::num::f64::ANY,
+        temperature_at_six_kelvin in proptest::num::f64::ANY,
+    ) {
+        let is_valid = inner_radius_m.is_finite()
+            && outer_radius_m.is_finite()
+            && inner_radius_m > 0.0
+            && outer_radius_m >= inner_radius_m
+            && intensity_at_six_m.is_finite()
+            && intensity_at_six_m >= 0.0
+            && temperature_at_six_kelvin.is_finite()
+            && temperature_at_six_kelvin > 0.0;
+
+        prop_assert_eq!(
+            EquatorialCircularEmitter::inverse_cube_blackbody_v1(
+                inner_radius_m,
+                outer_radius_m,
+                intensity_at_six_m,
+                temperature_at_six_kelvin,
+            )
+            .is_ok(),
+            is_valid,
+        );
+    }
+
+    #[test]
+    fn homogeneous_scalar_slab_accepts_exactly_its_intrinsic_domain(
+        optical_depth in proptest::num::f64::ANY,
+        source_intensity in proptest::num::f64::ANY,
+        source_temperature_kelvin in proptest::num::f64::ANY,
+    ) {
+        let scalar_domain = optical_depth.is_finite()
+            && optical_depth >= 0.0
+            && source_intensity.is_finite()
+            && source_intensity >= 0.0;
+        let blackbody_domain = scalar_domain
+            && source_temperature_kelvin.is_finite()
+            && source_temperature_kelvin > 0.0;
+
+        prop_assert_eq!(
+            HomogeneousScalarSlab::constant_bolometric_v1(optical_depth, source_intensity)
+                .is_ok(),
+            scalar_domain,
+        );
+        prop_assert_eq!(
+            HomogeneousScalarSlab::constant_blackbody_v1(
+                optical_depth,
+                source_intensity,
+                source_temperature_kelvin,
+            )
+            .is_ok(),
+            blackbody_domain,
+        );
+        prop_assert_eq!(
+            HomogeneousScalarSlab::pure_absorption_v1(optical_depth).is_ok(),
+            optical_depth.is_finite() && optical_depth >= 0.0,
+        );
+        prop_assert_eq!(
+            HomogeneousScalarSlab::pure_emission_bolometric_v1(source_intensity).is_ok(),
+            source_intensity.is_finite() && source_intensity >= 0.0,
+        );
+        prop_assert_eq!(
+            HomogeneousScalarSlab::pure_emission_blackbody_v1(
+                source_intensity,
+                source_temperature_kelvin,
+            )
+            .is_ok(),
+            source_intensity.is_finite()
+                && source_intensity >= 0.0
+                && source_temperature_kelvin.is_finite()
+                && source_temperature_kelvin > 0.0,
+        );
+    }
+
+    #[test]
     fn image_samples_produce_future_directed_null_rays(
         (width, height, x, y, offset_x, offset_y) in image_sample(),
     ) {
@@ -142,6 +220,19 @@ proptest! {
         prop_assert!((ray.observer_frequency() - 1.0).abs() < 2.0e-12);
         prop_assert!(ray.observer_frequency() > 0.0);
     }
+}
+
+#[test]
+fn physical_scene_owns_the_optional_scalar_slab_without_changing_geometry() {
+    let vacuum = default_scene();
+    let slab = HomogeneousScalarSlab::constant_bolometric_v1(0.75, 0.125)
+        .expect("the analytic slab is valid");
+    let transported = vacuum.clone().with_homogeneous_scalar_slab(slab);
+
+    assert_eq!(vacuum.spacetime(), transported.spacetime());
+    assert_eq!(vacuum.observer_event(), transported.observer_event());
+    assert_eq!(vacuum.homogeneous_scalar_slab(), None);
+    assert_eq!(transported.homogeneous_scalar_slab(), Some(slab));
 }
 
 #[test]

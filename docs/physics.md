@@ -477,14 +477,35 @@ I_{\rm obs}=g^4 I_{\rm em}.
 
 基础见 [Lindquist 1966](https://doi.org/10.1016/0003-4916%2866%2990207-7)。[P] 普通 RGB 不是光谱，不能同时作波长移动和 $g^3/g^4$ 定量解释。
 
-标量 emission/absorption 使用 optical-depth slab 的解析更新：
+`homogeneous-scalar-slab-v1` 是 source 与 observer 之间的 observer-frame、path-integrated
+灰度 transfer operator，不是沿任意 volume geodesic 采样 coefficient 的声明。它保存总 optical
+depth $\tau\ge0$ 与已经积分的非负 emission $E$：
 
 \[
-I_{\rm out}=I_{\rm in}e^{-\Delta\tau}
-+S\left(1-e^{-\Delta\tau}\right),
+I_{\rm out}=I_{\rm in}e^{-\tau}+E.
 \]
 
-并用 `expm1` 等稳定形式处理小 $\Delta\tau$。source function、frequency convention、affine orientation 和 invariant coefficient 的转换在一处推导，并以 vacuum、pure absorption、constant slab、optically thin/thick limits 验证。[Younsi et al. 2012](https://doi.org/10.1051/0004-6361/201219599) [P]
+constant-source 构造令 $E=S[-\operatorname{expm1}(-\tau)]$；pure-emission 构造直接令
+$\tau=0$ 并保存有限 $E$，不形成 $j/\alpha$。vacuum、pure absorption、constant slab、thin
+limit、pure-emission limit 和有序 partition 必须与解析式闭合。[Younsi et al. 2012](https://doi.org/10.1051/0004-6361/201219599) [P]
+
+`inverse-cube-blackbody-v1` 是具名 diluted-blackbody source：bolometric intensity 仍为
+$I_6(r/6M)^{-3}$，另定义
+
+\[
+T_{\rm em}(r)=T_6(r/6M)^{-3/4},\qquad T_{\rm obs}=gT_{\rm em}.
+\]
+
+两条径向律保持相同 dilution，但不把 $I_6$ 偷换成由 Stefan–Boltzmann 常数决定的绝对单位。
+`visible-boxcar-v1` 按输出 `R,G,B` 顺序固定 observer-frame 的 `600–700 nm`、`500–600 nm`
+和 `400–500 nm` 三个互不重叠 boxcar；每个 channel 是 Planck spectrum 对相应波段的积分除以
+$\pi^4/15$ 后乘 bolometric intensity。它不是 CIE color matching function，也不是 sRGB
+tristimulus；三通道之和通常小于 bolometric intensity。blackbody slab emission 用自己的温度将
+$E$ 分配到同一组 observer-frame bands，再逐 band 应用上式。
+
+当前 scalar slab 是上述解析边界模型。空间变化的 $j_\nu,\alpha_\nu$ 仍必须按 local
+$\nu=-p\cdot u$ 在 accepted path samples 上求值并以 invariant coefficient 有序累计；不得把
+这个 terminal operator 外推成已实现的 volume GRRT。
 
 ## 8. Equatorial circular emitter 与 disk 边界
 

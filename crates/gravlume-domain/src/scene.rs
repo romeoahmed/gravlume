@@ -1,7 +1,8 @@
 use crate::{
-    EquatorialCircularEmitter, Extremality, GeodesicState, ImageSample, KerrNewmanSpacetime,
-    KerrSchildChart, ObserverFrame, PerspectiveView, SpacetimeEvent, StationaryObserverInput,
-    ValidationIssueCode, ValidationReport, observer::StationaryObserver, state::FourVector,
+    EquatorialCircularEmitter, Extremality, GeodesicState, HomogeneousScalarSlab, ImageSample,
+    KerrNewmanSpacetime, KerrSchildChart, ObserverFrame, PerspectiveView, SpacetimeEvent,
+    StationaryObserverInput, ValidationIssueCode, ValidationReport, observer::StationaryObserver,
+    state::FourVector,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
@@ -39,6 +40,7 @@ pub struct PhysicalScene {
     spacetime: KerrNewmanSpacetime,
     observer: StationaryObserver,
     equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
+    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
 }
 
 impl PhysicalScene {
@@ -77,6 +79,7 @@ impl PhysicalScene {
             spacetime,
             observer,
             equatorial_circular_emitter: None,
+            homogeneous_scalar_slab: None,
         })
     }
 
@@ -110,6 +113,11 @@ impl PhysicalScene {
         self.equatorial_circular_emitter
     }
 
+    #[must_use]
+    pub const fn homogeneous_scalar_slab(&self) -> Option<HomogeneousScalarSlab> {
+        self.homogeneous_scalar_slab
+    }
+
     /// Returns an equivalent scene with the validated source installed.
     #[must_use]
     pub const fn with_equatorial_circular_emitter(
@@ -117,6 +125,13 @@ impl PhysicalScene {
         emitter: EquatorialCircularEmitter,
     ) -> Self {
         self.equatorial_circular_emitter = Some(emitter);
+        self
+    }
+
+    /// Returns an equivalent scene with the path-integrated scalar medium installed.
+    #[must_use]
+    pub const fn with_homogeneous_scalar_slab(mut self, slab: HomogeneousScalarSlab) -> Self {
+        self.homogeneous_scalar_slab = Some(slab);
         self
     }
 }

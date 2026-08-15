@@ -1,7 +1,13 @@
 use std::f64::consts::{PI, TAU};
 
 use gravlume_domain::{
-    EquatorialCircularEmitter, GeodesicState, GeometryError, KerrNewmanSpacetime, KerrSchildChart,
+    EquatorialCircularEmitter, GeodesicState, GeometryError, HomogeneousScalarSlab,
+    KerrNewmanSpacetime, KerrSchildChart,
+};
+
+use crate::radiation::{
+    SpectralTransportError, blackbody_band_intensities, transport_blackbody_bands,
+    transport_bolometric_intensity,
 };
 
 pub fn observable_at(
@@ -9,7 +15,78 @@ pub fn observable_at(
     spacetime: KerrNewmanSpacetime,
     state: GeodesicState,
     observer_frequency: f64,
+    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
 ) -> Result<SurfaceObservable, SurfaceObservableError> {
+    let (radius_m, frequency_ratio) =
+        surface_radius_and_frequency_ratio(emitter, spacetime, state, observer_frequency)?;
+    let mass_m = spacetime.mass_m();
+    let emitted_bolometric_intensity = emitted_bolometric_intensity(emitter, mass_m, radius_m)?;
+    let vacuum_observed_bolometric_intensity =
+        vacuum_observed_bolometric_intensity(emitted_bolometric_intensity, frequency_ratio)?;
+    let emitted_temperature_kelvin = emitted_blackbody_temperature(emitter, radius_m / mass_m)?;
+    let vacuum_observed_temperature_kelvin = emitted_temperature_kelvin
+        .map(|temperature| temperature * frequency_ratio)
+        .map(|temperature| {
+            if temperature.is_finite() && temperature > 0.0 {
+                Ok(temperature)
+            } else {
+                Err(SurfaceObservableError::NonRepresentableTemperature)
+            }
+        })
+        .transpose()?;
+    let vacuum_spectral_band_intensities = vacuum_observed_temperature_kelvin
+        .map(|temperature| {
+            blackbody_band_intensities(vacuum_observed_bolometric_intensity, temperature)
+                .ok_or(SurfaceObservableError::NonRepresentableSpectrum)
+        })
+        .transpose()?;
+    let (observed_bolometric_intensity, optical_depth, _) = transport_bolometric_intensity(
+        vacuum_observed_bolometric_intensity,
+        homogeneous_scalar_slab,
+    )
+    .ok_or(SurfaceObservableError::NonRepresentableObservedIntensity)?;
+    let observed_spectral_band_intensities = vacuum_spectral_band_intensities
+        .map(|bands| {
+            transport_blackbody_bands(bands, homogeneous_scalar_slab).map_err(|error| match error {
+                SpectralTransportError::UnresolvedSourceSpectrum => {
+                    SurfaceObservableError::UnresolvedSlabSourceSpectrum
+                }
+                SpectralTransportError::NonRepresentable => {
+                    SurfaceObservableError::NonRepresentableSpectrum
+                }
+            })
+        })
+        .transpose()?;
+
+    let [_, x, y, _] = state.event().to_txyz();
+    let chart_spin = match spacetime.chart() {
+        KerrSchildChart::Ingoing => spacetime.spin_m(),
+        KerrSchildChart::Outgoing => -spacetime.spin_m(),
+    };
+    let azimuth_rad = wrapped_angle_difference(y.atan2(x), chart_spin.atan2(radius_m));
+
+    Ok(SurfaceObservable {
+        source_anchor: SourceAnchor {
+            radius_m,
+            azimuth_rad,
+        },
+        frequency_ratio: FrequencyRatio(frequency_ratio),
+        emitted_bolometric_intensity,
+        vacuum_observed_bolometric_intensity,
+        observed_bolometric_intensity,
+        optical_depth,
+        emitted_temperature_kelvin,
+        vacuum_observed_temperature_kelvin,
+        observed_spectral_band_intensities,
+    })
+}
+
+fn surface_radius_and_frequency_ratio(
+    emitter: EquatorialCircularEmitter,
+    spacetime: KerrNewmanSpacetime,
+    state: GeodesicState,
+    observer_frequency: f64,
+) -> Result<(f64, f64), SurfaceObservableError> {
     let radius_m = spacetime.radius(state.event())?;
     if !(emitter.inner_radius_m()..=emitter.outer_radius_m()).contains(&radius_m) {
         return Err(SurfaceObservableError::HitOutsideConfiguredSurface);
@@ -17,8 +94,7 @@ pub fn observable_at(
 
     let mass_m = spacetime.mass_m();
     let spin_m = spacetime.spin_m();
-    let charge_m = spacetime.charge_m();
-    let charge_squared = charge_m * charge_m;
+    let charge_squared = spacetime.charge_m() * spacetime.charge_m();
     let circular_root_squared = mass_m.mul_add(radius_m, -charge_squared);
     if !circular_root_squared.is_finite() || circular_root_squared < 0.0 {
         return Err(SurfaceObservableError::CircularOrbitUnavailable);
@@ -75,26 +151,23 @@ pub fn observable_at(
     if !frequency_ratio.is_finite() || frequency_ratio <= 0.0 {
         return Err(SurfaceObservableError::NonRepresentableFrequencyRatio);
     }
-    let emitted_bolometric_intensity = emitted_bolometric_intensity(emitter, mass_m, radius_m)?;
-    let observed_bolometric_intensity =
-        vacuum_observed_bolometric_intensity(emitted_bolometric_intensity, frequency_ratio)?;
+    Ok((radius_m, frequency_ratio))
+}
 
-    let [_, x, y, _] = state.event().to_txyz();
-    let chart_spin = match spacetime.chart() {
-        KerrSchildChart::Ingoing => spin_m,
-        KerrSchildChart::Outgoing => -spin_m,
+pub fn emitted_blackbody_temperature(
+    emitter: EquatorialCircularEmitter,
+    radius_over_mass: f64,
+) -> Result<Option<f64>, SurfaceObservableError> {
+    let Some(temperature_at_six_kelvin) = emitter.blackbody_temperature_at_six_kelvin() else {
+        return Ok(None);
     };
-    let azimuth_rad = wrapped_angle_difference(y.atan2(x), chart_spin.atan2(radius_m));
-
-    Ok(SurfaceObservable {
-        source_anchor: SourceAnchor {
-            radius_m,
-            azimuth_rad,
-        },
-        frequency_ratio: FrequencyRatio(frequency_ratio),
-        emitted_bolometric_intensity,
-        observed_bolometric_intensity,
-    })
+    let radius_ratio = radius_over_mass / 6.0;
+    let temperature = temperature_at_six_kelvin / (radius_ratio * radius_ratio.sqrt()).sqrt();
+    if temperature.is_finite() && temperature > 0.0 {
+        Ok(Some(temperature))
+    } else {
+        Err(SurfaceObservableError::NonRepresentableTemperature)
+    }
 }
 
 pub fn emitted_bolometric_intensity(
@@ -167,7 +240,12 @@ pub struct SurfaceObservable {
     source_anchor: SourceAnchor,
     frequency_ratio: FrequencyRatio,
     emitted_bolometric_intensity: f64,
+    vacuum_observed_bolometric_intensity: f64,
     observed_bolometric_intensity: f64,
+    optical_depth: f64,
+    emitted_temperature_kelvin: Option<f64>,
+    vacuum_observed_temperature_kelvin: Option<f64>,
+    observed_spectral_band_intensities: Option<[f64; 3]>,
 }
 
 impl SurfaceObservable {
@@ -187,8 +265,33 @@ impl SurfaceObservable {
     }
 
     #[must_use]
+    pub const fn vacuum_observed_bolometric_intensity(self) -> f64 {
+        self.vacuum_observed_bolometric_intensity
+    }
+
+    #[must_use]
     pub const fn observed_bolometric_intensity(self) -> f64 {
         self.observed_bolometric_intensity
+    }
+
+    #[must_use]
+    pub const fn optical_depth(self) -> f64 {
+        self.optical_depth
+    }
+
+    #[must_use]
+    pub const fn emitted_temperature_kelvin(self) -> Option<f64> {
+        self.emitted_temperature_kelvin
+    }
+
+    #[must_use]
+    pub const fn vacuum_observed_temperature_kelvin(self) -> Option<f64> {
+        self.vacuum_observed_temperature_kelvin
+    }
+
+    #[must_use]
+    pub const fn observed_spectral_band_intensities(self) -> Option<[f64; 3]> {
+        self.observed_spectral_band_intensities
     }
 }
 
@@ -212,6 +315,12 @@ pub enum SurfaceObservableError {
     NonRepresentableEmittedIntensity,
     #[error("the observed bolometric intensity is not representable")]
     NonRepresentableObservedIntensity,
+    #[error("the emitted or observed blackbody temperature is not representable")]
+    NonRepresentableTemperature,
+    #[error("the versioned boxcar spectrum is not representable")]
+    NonRepresentableSpectrum,
+    #[error("a non-zero neutral slab source cannot be combined with a resolved blackbody spectrum")]
+    UnresolvedSlabSourceSpectrum,
 }
 
 pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
@@ -233,7 +342,7 @@ mod tests {
             .expect("Schwarzschild spacetime is valid");
         let state = GeodesicState::new([0.0, 6.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0])
             .expect("state is finite");
-        let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
+        let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0, None)
             .expect("the r = 6 M circular orbit is timelike");
 
         let expected = 0.5_f64.sqrt();
@@ -246,7 +355,7 @@ mod tests {
             .expect("Schwarzschild spacetime is valid");
         let state = GeodesicState::new([0.0, 3.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0])
             .expect("state is finite");
-        let error = observable_at(surface(3.0, 3.0), spacetime, state, 1.0)
+        let error = observable_at(surface(3.0, 3.0), spacetime, state, 1.0, None)
             .expect_err("the photon orbit is not a timelike emitter orbit");
 
         assert_eq!(error, SurfaceObservableError::CircularOrbitIsNotTimelike);
@@ -272,7 +381,7 @@ mod tests {
             );
             let state = GeodesicState::new([0.0, x, y, z], [-1.0, 0.0, 0.0, 0.0])
                 .expect("generated state is finite");
-            let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
+            let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0, None)
                 .expect("generated circular source orbit is timelike");
             let anchor = observable.source_anchor();
             let azimuth_difference = anchor.azimuth_rad() - azimuth_rad;

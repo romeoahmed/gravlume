@@ -7,8 +7,8 @@ use crate::{
     fixture::GeodesicFixture,
     integrator::{DenseOutput, attempt_step, derivative},
     outcome::{
-        GeodesicTrace, LocalizedEvent, NumericalFailure, ReferenceOutcome, Termination,
-        TraceDiagnostics,
+        GeodesicTrace, LocalizedEvent, NumericalFailure, PolarSide, ReferenceOutcome, Termination,
+        TraceBranchKey, TraceDiagnostics,
     },
     policy::ReferencePolicy,
 };
@@ -84,6 +84,10 @@ struct TraceExecution<'tracer> {
     drifts: InvariantDrifts,
     event_arming: EventArming,
     turning_radius_m: Option<f64>,
+    radial_turnings: u32,
+    equatorial_crossings: u32,
+    azimuth_winding: i32,
+    initial_polar_side: PolarSide,
     azimuth_advance_rad: f64,
     previous_azimuth_rad: f64,
     coordinate_time_delta_m: CompensatedSum,
@@ -112,6 +116,10 @@ impl<'tracer> TraceExecution<'tracer> {
             drifts: InvariantDrifts::default(),
             event_arming,
             turning_radius_m: None,
+            radial_turnings: 0,
+            equatorial_crossings: 0,
+            azimuth_winding: 0,
+            initial_polar_side: PolarSide::from_height(components[3]),
             azimuth_advance_rad: 0.0,
             previous_azimuth_rad: components[2].atan2(components[1]),
             coordinate_time_delta_m: CompensatedSum::default(),
@@ -184,6 +192,7 @@ impl<'tracer> TraceExecution<'tracer> {
             let committed_theta = event.as_ref().map_or(1.0, |event| event.theta);
             let committed_state = event.as_ref().map_or(end_state, |event| event.state);
             self.record_turning_point(&attempt.dense, end_state, committed_theta);
+            self.record_equatorial_crossing(&attempt.dense, end_state, committed_theta);
             self.coordinate_time_delta_m
                 .add(attempt.dense.time_increment(committed_theta));
             self.commit_observables(committed_state);
@@ -336,16 +345,43 @@ impl<'tracer> TraceExecution<'tracer> {
             .evaluate_rhs(|spacetime| spacetime.radial_velocity(end_state))
             .map(|velocity| traversal_sign * velocity);
         if let (Ok(start), Ok(end)) = (start_velocity, end_velocity)
-            && start < 0.0
-            && end >= 0.0
+            && ((start < 0.0 && end >= 0.0) || (start > 0.0 && end <= 0.0))
             && let Ok((theta, state)) = self.localize_turning_point(dense, start, end)
             && theta <= maximum_theta
-            && let Ok(radius) = self.tracer.spacetime.radius(state.event())
         {
-            self.turning_radius_m = Some(
-                self.turning_radius_m
-                    .map_or(radius, |minimum| minimum.min(radius)),
-            );
+            self.radial_turnings = self.radial_turnings.saturating_add(1);
+            if start < 0.0
+                && end >= 0.0
+                && let Ok(radius) = self.tracer.spacetime.radius(state.event())
+            {
+                self.turning_radius_m = Some(
+                    self.turning_radius_m
+                        .map_or(radius, |minimum| minimum.min(radius)),
+                );
+            }
+        }
+    }
+
+    fn record_equatorial_crossing(
+        &mut self,
+        dense: &DenseOutput,
+        end_state: GeodesicState,
+        maximum_theta: f64,
+    ) {
+        let start = self.state.components()[3];
+        let end = end_state.components()[3];
+        if crosses(EventKind::EquatorialSurface, start, end)
+            && let Ok(root) = localize_dense_root(
+                dense,
+                self.step_m,
+                self.tracer.policy.event_affine_tolerance_m(),
+                start,
+                end,
+                |state| Ok(state.components()[3]),
+            )
+            && root.theta <= maximum_theta
+        {
+            self.equatorial_crossings = self.equatorial_crossings.saturating_add(1);
         }
     }
 
@@ -373,7 +409,13 @@ impl<'tracer> TraceExecution<'tracer> {
     fn commit_observables(&mut self, state: GeodesicState) {
         let components = state.components();
         let azimuth = components[2].atan2(components[1]);
+        let raw_difference = azimuth - self.previous_azimuth_rad;
         self.azimuth_advance_rad += wrapped_angle_difference(azimuth, self.previous_azimuth_rad);
+        if raw_difference > PI {
+            self.azimuth_winding = self.azimuth_winding.saturating_sub(1);
+        } else if raw_difference < -PI {
+            self.azimuth_winding = self.azimuth_winding.saturating_add(1);
+        }
         self.previous_azimuth_rad = azimuth;
         self.update_invariants(state);
     }
@@ -411,6 +453,12 @@ impl<'tracer> TraceExecution<'tracer> {
             azimuth_advance_rad: self.azimuth_advance_rad,
             travel_time_m: self.request.affine_direction.sign()
                 * self.coordinate_time_delta_m.total(),
+            branch_key: TraceBranchKey::new(
+                self.initial_polar_side,
+                self.radial_turnings,
+                self.equatorial_crossings,
+                self.azimuth_winding,
+            ),
             surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: self.accepted_steps,

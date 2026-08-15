@@ -21,6 +21,10 @@ use crate::{
     },
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     ray_tracer::{RayTracer, TraceBatchOptions},
+    scientific_capture::{
+        ScientificCapture, ScientificCaptureError, ScientificCaptureMetadata, capture_texture,
+        metadata_for_observation,
+    },
     timing::GpuTimings,
 };
 
@@ -193,6 +197,7 @@ pub struct Renderer {
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
+    scientific_capture_metadata: Option<ScientificCaptureMetadata>,
     trace: RayTracer,
     display: DisplayPipeline,
     egui: egui_wgpu::Renderer,
@@ -254,6 +259,7 @@ impl Renderer {
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = RayTracer::new(&device, observation)?;
+        let scientific_capture_metadata = metadata_for_observation(observation);
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -273,6 +279,7 @@ impl Renderer {
             extent: ExtentTracker::default(),
             frame_resources: None,
             published_scene,
+            scientific_capture_metadata,
             trace,
             display,
             egui,
@@ -432,6 +439,36 @@ impl Renderer {
             self.reconfigure_surface(extent, true)?;
         }
         Ok(PresentResult::Presented)
+    }
+
+    /// Reads the latest complete physical surface image before display mapping or UI composition.
+    ///
+    /// This explicit export operation waits for its copy submission. The returned binary16 words
+    /// retain the published `Rgba16Float` texels and include per-pixel kind plus source, transport,
+    /// channel, and numerical metadata. Consumers must accept only `SurfaceRadiance` texels;
+    /// analytic escape RGB remains an orientation preview, not an unspecified spectrum.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error before the first complete generation, for an analytic-sky-only scene, or
+    /// when GPU copy, polling, or buffer mapping fails.
+    pub fn capture_scene_linear(&self) -> Result<ScientificCapture, ScientificCaptureError> {
+        let generation = self
+            .published_scene
+            .generation()
+            .ok_or(ScientificCaptureError::NoPublishedScene)?;
+        let metadata = self
+            .scientific_capture_metadata
+            .clone()
+            .ok_or(ScientificCaptureError::NoPhysicalSurfaceSource)?;
+        capture_texture(
+            &self.device,
+            &self.queue,
+            self.published_scene.view().texture(),
+            self.published_scene.extent(),
+            generation,
+            metadata,
+        )
     }
 
     /// Submits one hidden full-resolution trace batch without acquiring or presenting a surface.

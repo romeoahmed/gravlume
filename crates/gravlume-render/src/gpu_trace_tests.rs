@@ -1,11 +1,13 @@
 use std::num::NonZeroU32;
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, ImageSample, KerrNewmanSpacetime, KerrSchildChart,
-    Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    Angle, EquatorialCircularEmitter, HomogeneousScalarSlab, ImageSample, KerrNewmanSpacetime,
+    KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+    StationaryObserverInput,
 };
 use gravlume_reference::{
-    ObservationTrace, ObservationTracer, ReferencePolicy, Termination, TraceInputId,
+    ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy, SurfaceFootprintEstimate,
+    SurfaceParity, Termination, TraceInputId,
 };
 use num_traits::ToPrimitive as _;
 use proptest::prelude::*;
@@ -14,7 +16,8 @@ use crate::{
     gpu_capture::{
         capture_accelerated_trace, capture_accelerated_trace_in_batches,
         capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
-        capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
+        capture_refined_edge_count, capture_refined_trace, capture_surface_footprint_sample,
+        capture_trace, capture_trace_sample,
     },
     ray_tracer::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
 };
@@ -81,6 +84,13 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     );
     assert_eq!(gpu.metadata[1], 0, "surface trace failure flags");
     assert_eq!(gpu.event[..2], [EVENT_CANDIDATE_SURFACE, 0]);
+    let reference_branch = reference.branch_key();
+    assert_eq!(gpu.event[2] & 0xffff, reference_branch.radial_turnings());
+    assert_eq!(gpu.event[2] >> 16, reference_branch.equatorial_crossings());
+    assert_eq!(
+        i32::from_ne_bytes(gpu.event[3].to_ne_bytes()),
+        reference_branch.azimuth_winding()
+    );
     assert!((f64::from(gpu.source_time[0]) - reference_anchor.radius_m()).abs() <= 5.0e-3);
     let azimuth_error = (f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad())
         .sin()
@@ -101,6 +111,11 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
 
     let expected = reference_observable.observed_bolometric_intensity();
     let pixel = capture.hdr_pixel(index);
+    assert_eq!(
+        u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
+        0x4000,
+        "surface radiance alpha tag"
+    );
     for channel in pixel[..6].chunks_exact(2) {
         let actual = decode_f16(u16::from_le_bytes(
             channel.try_into().expect("half channel has two bytes"),
@@ -110,6 +125,122 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
             "surface radiance {actual:e}, expected {expected:e}"
         );
     }
+}
+
+#[test]
+fn versioned_blackbody_transport_fixtures_close_gpu_spectral_transport() {
+    const SURFACE_TRANSPORT: [&str; 4] = [
+        include_str!("../../gravlume-reference/fixtures/v3/kerr-blackbody-vacuum.toml"),
+        include_str!("../../gravlume-reference/fixtures/v3/kerr-blackbody-pure-absorption.toml"),
+        include_str!("../../gravlume-reference/fixtures/v3/kerr-blackbody-constant-slab.toml"),
+        include_str!("../../gravlume-reference/fixtures/v3/kerr-blackbody-pure-emission.toml"),
+    ];
+    for source in SURFACE_TRANSPORT {
+        let fixture = gravlume_reference::FixtureDocument::parse_toml(source)
+            .expect("repository transport fixture parses")
+            .into_surface_observation()
+            .expect("fixture is a surface observation");
+        let observation = fixture.observation();
+        let sample = fixture.sample();
+        let capture = capture_trace_sample(observation, sample);
+        let [pixel_x, pixel_y] = sample.pixel();
+        let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
+            .expect("fixture pixel index fits usize");
+        let reference = ObservationTracer::baseline_v1()
+            .trace(
+                fixture
+                    .trace_request(ReferencePolicy::regular_v1())
+                    .expect("fixture sample resolves"),
+            )
+            .expect("reference spectral transport succeeds");
+        let expected = reference
+            .surface_observable()
+            .and_then(gravlume_reference::SurfaceObservable::observed_spectral_band_intensities)
+            .expect("reference resolves the three instrument bands");
+        let pixel = capture.hdr_pixel(index);
+        assert_eq!(
+            u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
+            0x4000,
+            "spectral surface radiance alpha tag"
+        );
+
+        for (channel, expected) in pixel[..6].chunks_exact(2).zip(expected) {
+            let actual = decode_f16(u16::from_le_bytes(
+                channel.try_into().expect("half channel has two bytes"),
+            ));
+            assert!(
+                (f64::from(actual) - expected).abs() / expected <= 4.0e-3,
+                "spectral surface radiance {actual:e}, expected {expected:e}"
+            );
+        }
+    }
+}
+
+#[test]
+fn gpu_surface_footprint_matches_the_branch_checked_reference_jacobian() {
+    const SURFACE_TRANSPORT: &str =
+        include_str!("../../gravlume-reference/fixtures/v3/kerr-blackbody-vacuum.toml");
+    let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_TRANSPORT)
+        .expect("repository transport fixture parses")
+        .into_surface_observation()
+        .expect("fixture is a surface observation");
+    let observation = fixture.observation();
+    let sample = fixture.sample();
+    let SurfaceFootprintEstimate::Resolved(reference) = ObservationTracer::baseline_v1()
+        .surface_footprint_v1(observation, sample, ReferencePolicy::regular_v1())
+        .expect("reference footprint traces")
+    else {
+        panic!("canonical footprint must be branch-continuous");
+    };
+    let capture = capture_surface_footprint_sample(observation, sample);
+    let [pixel_x, pixel_y] = sample.pixel();
+    let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
+        .expect("fixture pixel index fits usize");
+    let gpu = capture.records[index];
+
+    assert_eq!(gpu.metadata[2], 1, "GPU footprint continuity flag");
+    let expected = reference.jacobian_source_m_per_pixel();
+    let actual = [
+        [gpu.invariant_drift[0], gpu.invariant_drift[1]],
+        [gpu.invariant_drift[2], gpu.invariant_drift[3]],
+    ];
+    let (maximum_error, maximum_reference_component) = actual
+        .into_iter()
+        .flatten()
+        .zip(expected.into_iter().flatten())
+        .fold(
+            (0.0_f64, 0.0_f64),
+            |(maximum_error, scale), (actual, expected)| {
+                (
+                    maximum_error.max((f64::from(actual) - expected).abs()),
+                    scale.max(expected.abs()),
+                )
+            },
+        );
+    assert!(
+        maximum_error / maximum_reference_component <= 3.0e-3,
+        "GPU footprint max-norm error {maximum_error:e} against scale \
+         {maximum_reference_component:e}"
+    );
+    let expected_parity = match reference.parity() {
+        SurfaceParity::Positive => 1,
+        SurfaceParity::Negative => 2,
+        SurfaceParity::Degenerate => 3,
+    };
+    assert_eq!(gpu.metadata[3], expected_parity);
+    let branch = reference.branch_key();
+    assert_eq!(gpu.event[0], branch.radial_turnings());
+    assert_eq!(gpu.event[1], branch.equatorial_crossings());
+    assert_eq!(
+        i32::from_ne_bytes(gpu.event[2].to_ne_bytes()),
+        branch.azimuth_winding()
+    );
+    let expected_initial_side = match branch.initial_polar_side() {
+        PolarSide::Negative => 0,
+        PolarSide::Equatorial => 1,
+        PolarSide::Positive => 2,
+    };
+    assert_eq!(gpu.event[3], expected_initial_side);
 }
 
 proptest! {
@@ -204,6 +335,55 @@ fn gpu_trace_rejects_surface_profiles_reaching_packed_escape_boundary() {
             "surface ending at {outer_radius_m} M escaped the GPU profile applicability check"
         );
     }
+}
+
+#[test]
+fn gpu_trace_rejects_transport_models_without_a_resolvable_spectral_contract() {
+    let base = default_observation(1, 1);
+    let slab = HomogeneousScalarSlab::constant_bolometric_v1(0.5, 0.1).expect("test slab is valid");
+    let slab_without_surface = Observation::new(
+        base.scene().clone().with_homogeneous_scalar_slab(slab),
+        *base.view(),
+    );
+    assert!(matches!(
+        TraceUniforms::from_observation(&slab_without_surface),
+        Err(crate::GpuTraceInputError::ScalarSlabRequiresSurface)
+    ));
+
+    let blackbody = EquatorialCircularEmitter::inverse_cube_blackbody_v1(6.0, 20.0, 1.0, 6_000.0)
+        .expect("test blackbody is valid");
+    let unresolved_spectrum = Observation::new(
+        base.scene()
+            .clone()
+            .with_equatorial_circular_emitter(blackbody)
+            .with_homogeneous_scalar_slab(slab),
+        *base.view(),
+    );
+    assert!(matches!(
+        TraceUniforms::from_observation(&unresolved_spectrum),
+        Err(crate::GpuTraceInputError::UnresolvedSlabSourceSpectrum)
+    ));
+}
+
+#[test]
+fn gpu_trace_rejects_a_blackbody_profile_that_leaves_the_spectral_lut() {
+    let base = default_observation(1, 1);
+    let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(1.0e-12, 20.0, 1.0, 6_000.0)
+        .expect("the intrinsic source profile is valid independently of the GPU LUT");
+    let observation = Observation::new(
+        base.scene()
+            .clone()
+            .with_equatorial_circular_emitter(emitter),
+        *base.view(),
+    );
+
+    assert!(matches!(
+        TraceUniforms::from_observation(&observation),
+        Err(crate::GpuTraceInputError::TemperatureOutsideSpectralLut {
+            field: "equatorial_circular_emitter.inner_temperature_kelvin",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -599,7 +779,7 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
 }
 
 #[test]
-fn accelerated_trace_preserves_full_trace_branches_and_escape_directions() {
+fn accelerated_trace_preserves_full_trace_terminals_and_escape_directions() {
     let profiles = [
         ("default", 0.8, 0.0, 30.0, std::f64::consts::FRAC_PI_4),
         (
@@ -626,8 +806,11 @@ fn accelerated_trace_preserves_full_trace_branches_and_escape_directions() {
                 actual.metadata[0], expected.metadata[0],
                 "{label}: transfer changed the terminal branch at pixel {index}"
             );
+            // Escape-map reconstruction promises terminal/event ambiguity and direction. It does
+            // not manufacture the surface-only source branch key stored in the remaining lanes.
             assert_eq!(
-                actual.event, expected.event,
+                actual.event[..2],
+                expected.event[..2],
                 "{label}: transfer changed event diagnostics at pixel {index}"
             );
             if TraceTermination::try_from(expected.metadata[0]) != Ok(TraceTermination::Escape) {
@@ -750,7 +933,7 @@ fn decode_f16(bits: u16) -> f32 {
     }
 }
 
-fn default_observation(width: u32, height: u32) -> Observation {
+pub fn default_observation(width: u32, height: u32) -> Observation {
     observation_at_scale(width, height, 1.0)
 }
 

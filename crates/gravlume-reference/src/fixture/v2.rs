@@ -79,6 +79,7 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
         frequency_ratio_relative_tolerance: raw.tolerance.frequency_ratio_rel.value,
         travel_time_absolute_tolerance_m: raw.tolerance.travel_time_abs_m.value,
         bolometric_intensity_absolute_tolerance: raw.tolerance.bolometric_intensity_abs.value,
+        transport: None,
     };
     Ok(FixtureDocument::SurfaceObservation(
         SurfaceObservationFixture {

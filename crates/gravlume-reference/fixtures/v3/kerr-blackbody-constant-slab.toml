@@ -1,0 +1,58 @@
+schema_version = 3
+profile = "surface-transport-v1"
+id = "kerr-blackbody-constant-slab-v1"
+kind = "surface-observation"
+evidence = "algebraic-high-precision-and-reference-convergence"
+base_observation_id = "kerr-exterior-observation-v1"
+
+[producer]
+method = "reference-strict-v1 geometry with independent 80-digit invariant-transfer and Planck integrals"
+precision_digits = 80
+
+[sample]
+x = 640
+y = 16
+subpixel = ["0.5", "0.5"]
+
+[surface]
+inner_radius_m = "6"
+outer_radius_m = "20"
+rotation = "prograde-circular"
+
+[emission]
+model = "inverse-cube-blackbody-v1"
+intensity_at_6m = "1"
+temperature_at_6m_kelvin = "6000"
+
+[transport]
+model = "constant-blackbody"
+optical_depth = "0.35"
+source_bolometric_intensity = "0.05"
+source_temperature_kelvin = "4500"
+
+[expected]
+termination = "equatorial-surface"
+source_radius_m = "19.6506789846041094"
+source_azimuth_rad = "3.08715626242367058"
+frequency_ratio = "0.953264138194626409"
+travel_time_m = "54.9024742476313605"
+emitted_bolometric_intensity = "0.0284656475672362998"
+vacuum_observed_bolometric_intensity = "0.0235057486961945464"
+observed_bolometric_intensity = "0.0313298166601938021296201260073"
+optical_depth = "0.35"
+emitted_temperature_kelvin = "2464.51529289635753216252617536"
+vacuum_observed_temperature_kelvin = "2349.33404675032354761871906613"
+observed_spectral_band_intensities = [
+    "0.00175210295332720395745827363008",
+    "0.00151036174164612056817236905452",
+    "0.00107431589633350787353154399525",
+]
+
+[tolerance]
+source_coordinate_abs_m = "2e-9"
+source_azimuth_abs_rad = "1e-10"
+frequency_ratio_rel = "2e-9"
+travel_time_abs_m = "2e-8"
+bolometric_intensity_abs = "1e-12"
+temperature_rel = "2e-12"
+spectral_intensity_abs = "1e-12"

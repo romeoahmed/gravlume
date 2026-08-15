@@ -23,6 +23,7 @@ fn write_invariant_gate_cases(@builtin(global_invocation_id) global_id: vec3<u32
         vec3<f32>(1.0, 0.0, 0.0),
         1.0,
         drift,
+        vec4<u32>(0u),
     );
     store_trace_record(index, result);
     store_scene_result(pixel, result.termination, result.source_coordinates);

@@ -1,5 +1,6 @@
 mod v1;
 mod v2;
+mod v3;
 
 use std::fmt;
 
@@ -40,6 +41,7 @@ impl FixtureDocument {
         match version.schema_version {
             1 => v1::parse(source),
             2 => v2::parse(source),
+            3 => v3::parse(source),
             unsupported => Err(FixtureError::UnsupportedSchema(unsupported)),
         }
     }
@@ -270,6 +272,19 @@ struct ExpectedSurfaceOutcome {
     frequency_ratio_relative_tolerance: f64,
     travel_time_absolute_tolerance_m: f64,
     bolometric_intensity_absolute_tolerance: f64,
+    transport: Option<ExpectedSurfaceTransport>,
+}
+
+#[derive(Clone, Debug)]
+struct ExpectedSurfaceTransport {
+    vacuum_observed_bolometric_intensity: f64,
+    optical_depth: f64,
+    emitted_temperature_kelvin: f64,
+    vacuum_observed_temperature_kelvin: f64,
+    observed_spectral_band_intensities: [f64; 3],
+    scalar_absolute_tolerance: f64,
+    temperature_relative_tolerance: f64,
+    spectral_intensity_absolute_tolerance: f64,
 }
 
 impl ExpectedSurfaceOutcome {
@@ -294,11 +309,53 @@ impl ExpectedSurfaceOutcome {
         {
             return false;
         }
-        (observable.emitted_bolometric_intensity() - self.emitted_bolometric_intensity).abs()
+        let bolometric_matches = (observable.emitted_bolometric_intensity()
+            - self.emitted_bolometric_intensity)
+            .abs()
             <= self.bolometric_intensity_absolute_tolerance
             && (observable.observed_bolometric_intensity() - self.observed_bolometric_intensity)
                 .abs()
-                <= self.bolometric_intensity_absolute_tolerance
+                <= self.bolometric_intensity_absolute_tolerance;
+        bolometric_matches
+            && self
+                .transport
+                .as_ref()
+                .is_none_or(|expected| expected.accepts(observable))
+    }
+}
+
+impl ExpectedSurfaceTransport {
+    fn accepts(&self, observable: crate::SurfaceObservable) -> bool {
+        let Some(emitted_temperature) = observable.emitted_temperature_kelvin() else {
+            return false;
+        };
+        let Some(observed_temperature) = observable.vacuum_observed_temperature_kelvin() else {
+            return false;
+        };
+        let Some(observed_bands) = observable.observed_spectral_band_intensities() else {
+            return false;
+        };
+        let emitted_temperature_relative_error =
+            (emitted_temperature - self.emitted_temperature_kelvin).abs()
+                / self.emitted_temperature_kelvin;
+        let observed_temperature_relative_error =
+            (observed_temperature - self.vacuum_observed_temperature_kelvin).abs()
+                / self.vacuum_observed_temperature_kelvin;
+
+        (observable.vacuum_observed_bolometric_intensity()
+            - self.vacuum_observed_bolometric_intensity)
+            .abs()
+            <= self.scalar_absolute_tolerance
+            && (observable.optical_depth() - self.optical_depth).abs()
+                <= self.scalar_absolute_tolerance
+            && emitted_temperature_relative_error <= self.temperature_relative_tolerance
+            && observed_temperature_relative_error <= self.temperature_relative_tolerance
+            && observed_bands
+                .into_iter()
+                .zip(self.observed_spectral_band_intensities)
+                .all(|(actual, expected)| {
+                    (actual - expected).abs() <= self.spectral_intensity_absolute_tolerance
+                })
     }
 }
 

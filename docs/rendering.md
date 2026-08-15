@@ -172,7 +172,12 @@ J=\frac{\partial y}{\partial s}
 \end{bmatrix}.
 \]
 
-从 $J$ 的 singular values/ellipse 推导 texture LOD、anisotropy 与 refine signal。差分只在 termination、branch、source chart、parity 和 generation 相同的邻域有效；否则标为 discontinuity，而不是跨边界求一个巨大梯度。
+从 $J$ 的 singular values/ellipse 推导 texture LOD、anisotropy 与 refine signal。surface branch key
+v1 包含 initial polar side、radial turning count、equatorial crossing count 与 signed azimuth winding；
+crossing 只在 accepted、且位于 terminal fraction 之前时提交。当前五射线 footprint 固定同一
+Observation/generation 与 equatorial source chart，并先要求 termination、ambiguity 与该 key 一致，
+再求 $J$ 和 parity；否则返回 discontinuity。未来 reconstruction 还必须在邻域间比较已求得的
+parity、source kind/chart 与 generation，不能跨边界求一个巨大梯度。
 
 escape sky 使用 seam-aware spherical/cubemap differential；surface disk 使用局部 tangent chart；volume footprint 还取决于沿路径的 beam/medium scale，不能由最终单点 Jacobian 完整表达。
 
@@ -184,7 +189,11 @@ escape sky 使用 seam-aware spherical/cubemap differential；surface disk 使�
 - ordinary image region 的 texture footprint；
 - coarse tile 的保守 refine bound。
 
-在 caustic/Jacobian singularity、branch split、multiple images 与强曲率长路径处，一阶模型失效。此时增加真实 samples、分 branch 或执行完整 trace；不能把 cone 无限扩张后平均不同物理像。
+在 caustic/Jacobian singularity、branch split、multiple images 与强曲率长路径处，一阶模型失效。
+2×2 Jacobian 的小 singular value 用 $\sigma_{min}=|\det J|/\sigma_{max}$ 稳定计算，避免
+$\|J\|_F^2-\sqrt{\|J\|_F^4-4\det(J)^2}$ 在 near-degenerate 区域消减；这不把临界点变成可安全
+过滤区域。此时仍须增加真实 samples、分 branch 或执行完整 trace，不能把 cone 无限扩张后平均
+不同物理像。
 
 ### 6.3 Footprint 验收
 
