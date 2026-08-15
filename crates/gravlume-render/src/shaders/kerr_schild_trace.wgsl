@@ -15,6 +15,8 @@ struct TraceUniforms {
     event_surfaces: vec4<f32>,
     // (surface inner radius, outer radius, intensity at 6 M, arming band in M)
     surface_emitter: vec4<f32>,
+    // (emitter T at 6 M, slab source T, transmittance, weighted source intensity)
+    surface_transport: vec4<f32>,
     // (radial step scale, minimum step, maximum step, invariant drift limit)
     step_policy: vec4<f32>,
 }
@@ -75,6 +77,8 @@ struct GeometricSample {
     source_coordinates: vec3<f32>,
     travel_time: f32,
     maximum_drift: vec4<f32>,
+    // (radial turnings, equatorial crossings, bitcast azimuth winding, initial polar side)
+    branch_key: vec4<u32>,
 }
 
 const TERMINATION_HORIZON: u32 = 1u;
@@ -884,6 +888,57 @@ fn invariant_budget_exceeded(maximum_drift: vec4<f32>) -> bool {
     return any(maximum_drift > vec4<f32>(trace_uniforms.step_policy.w));
 }
 
+fn polar_side(height: f32) -> u32 {
+    if height > 0.0 {
+        return 2u;
+    }
+    return select(0u, 1u, height == 0.0);
+}
+
+fn increment_branch_count(value: u32) -> u32 {
+    if value == 0xffffffffu {
+        return value;
+    }
+    return value + 1u;
+}
+
+fn radial_traversal_velocity(geometry: Geometry, rhs: RhsResult) -> f32 {
+    return -dot(geometry.radius_gradient, rhs.spacetime.yzw);
+}
+
+fn turning_fraction(start_velocity: f32, end_velocity: f32) -> f32 {
+    let denominator = abs(start_velocity) + abs(end_velocity);
+    if denominator <= 0.0 {
+        return 2.0;
+    }
+    return abs(start_velocity) / denominator;
+}
+
+fn update_azimuth_winding(previous: f32, position: vec3<f32>, winding: i32) -> i32 {
+    let difference = atan2(position.y, position.x) - previous;
+    if difference > 3.141592653589793 {
+        return winding - 1i;
+    }
+    if difference < -3.141592653589793 {
+        return winding + 1i;
+    }
+    return winding;
+}
+
+fn trace_branch_key(
+    radial_turnings: u32,
+    equatorial_crossings: u32,
+    azimuth_winding: i32,
+    initial_polar_side: u32,
+) -> vec4<u32> {
+    return vec4<u32>(
+        radial_turnings,
+        equatorial_crossings,
+        bitcast<u32>(azimuth_winding),
+        initial_polar_side,
+    );
+}
+
 fn failure_result(flags: u32, steps: u32, travel_time: f32, maximum_drift: vec4<f32>) -> GeometricSample {
     return GeometricSample(
         TERMINATION_NUMERICAL_FAILURE,
@@ -894,6 +949,7 @@ fn failure_result(flags: u32, steps: u32, travel_time: f32, maximum_drift: vec4<
         vec3<f32>(0.0),
         travel_time,
         maximum_drift,
+        vec4<u32>(0u),
     );
 }
 
@@ -904,6 +960,11 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
     var state_rhs = initial.rhs;
     var maximum_drift = vec4<f32>(initial_invariants.values.x, 0.0, 0.0, 0.0);
     var travel_time = 0.0;
+    var radial_turnings = 0u;
+    var equatorial_crossings = 0u;
+    var azimuth_winding = 0i;
+    var previous_azimuth = atan2(state.position.y, state.position.x);
+    let initial_polar_side = polar_side(state.position.z);
     let escape_radius = trace_uniforms.event_surfaces.x;
     let singularity_guard = trace_uniforms.event_surfaces.y;
     let horizon_radius = trace_uniforms.event_surfaces.z;
@@ -932,6 +993,12 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
                 vec3<f32>(0.0),
                 travel_time,
                 maximum_drift,
+                trace_branch_key(
+                    radial_turnings,
+                    equatorial_crossings,
+                    azimuth_winding,
+                    initial_polar_side,
+                ),
             );
         }
 
@@ -963,6 +1030,15 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
             );
         }
         let signed_step = -step_magnitude;
+        let start_radial_velocity = radial_traversal_velocity(start_geometry, state_rhs);
+        let end_radial_velocity = radial_traversal_velocity(next_geometry, next_rhs);
+        let crosses_radial_turning = (start_radial_velocity < 0.0
+                && end_radial_velocity >= 0.0)
+            || (start_radial_velocity > 0.0 && end_radial_velocity <= 0.0);
+        let radial_turning_fraction = turning_fraction(
+            start_radial_velocity,
+            end_radial_velocity,
+        );
         var event_candidates = no_event_candidates();
         if next_geometry.singularity_measure <= singularity_guard {
             event_candidates[EVENT_INDEX_SINGULARITY] = event_fraction(
@@ -1023,10 +1099,12 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
                 ),
             );
         }
+        // Arming controls whether a crossing may terminate on the configured surface. The branch
+        // key still commits every accepted plane crossing, including one inside the initial band.
         let crosses_equatorial_plane = SURFACE_EVENTS_ENABLED != 0u
-            && surface_armed
             && ((state.position.z > 0.0 && stepped.state.position.z <= 0.0)
                 || (state.position.z < 0.0 && stepped.state.position.z >= 0.0));
+        var equatorial_crossing_fraction = 2.0;
         if crosses_equatorial_plane {
             let surface_fraction = event_fraction(
                 state.position.z,
@@ -1034,27 +1112,30 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
                 signed_step * state_rhs.spacetime.w,
                 signed_step * next_rhs.spacetime.w,
             );
-            let surface_weights = cubic_dense_weights(signed_step, surface_fraction);
-            let surface_state = dense_state_at(
-                state,
-                stepped.state,
-                state_rhs,
-                next_rhs,
-                surface_weights,
-            );
-            let surface_geometry = event_geometry_at(surface_state.position);
-            if surface_geometry.flags != 0u {
-                return failure_result(
-                    surface_geometry.flags,
-                    step_index + 1u,
-                    travel_time,
-                    maximum_drift,
+            equatorial_crossing_fraction = surface_fraction;
+            if surface_armed {
+                let surface_weights = cubic_dense_weights(signed_step, surface_fraction);
+                let surface_state = dense_state_at(
+                    state,
+                    stepped.state,
+                    state_rhs,
+                    next_rhs,
+                    surface_weights,
                 );
-            }
-            if surface_geometry.radius >= trace_uniforms.surface_emitter.x
-                && surface_geometry.radius <= trace_uniforms.surface_emitter.y
-            {
-                event_candidates[EVENT_INDEX_SURFACE] = surface_fraction;
+                let surface_geometry = event_geometry_at(surface_state.position);
+                if surface_geometry.flags != 0u {
+                    return failure_result(
+                        surface_geometry.flags,
+                        step_index + 1u,
+                        travel_time,
+                        maximum_drift,
+                    );
+                }
+                if surface_geometry.radius >= trace_uniforms.surface_emitter.x
+                    && surface_geometry.radius <= trace_uniforms.surface_emitter.y
+                {
+                    event_candidates[EVENT_INDEX_SURFACE] = surface_fraction;
+                }
             }
         }
 
@@ -1154,6 +1235,21 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
             if selection.ambiguous != 0u || invariant_budget_exceeded(committed_maximum_drift) {
                 termination = TERMINATION_UNCERTAIN;
             }
+            var committed_radial_turnings = radial_turnings;
+            if crosses_radial_turning && radial_turning_fraction <= selection.fraction {
+                committed_radial_turnings = increment_branch_count(committed_radial_turnings);
+            }
+            var committed_equatorial_crossings = equatorial_crossings;
+            if equatorial_crossing_fraction <= selection.fraction {
+                committed_equatorial_crossings = increment_branch_count(
+                    committed_equatorial_crossings,
+                );
+            }
+            let committed_azimuth_winding = update_azimuth_winding(
+                previous_azimuth,
+                localized.position,
+                azimuth_winding,
+            );
             return GeometricSample(
                 termination,
                 0u,
@@ -1163,6 +1259,12 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
                 source_coordinates,
                 committed_travel_time,
                 committed_maximum_drift,
+                trace_branch_key(
+                    committed_radial_turnings,
+                    committed_equatorial_crossings,
+                    committed_azimuth_winding,
+                    initial_polar_side,
+                ),
             );
         }
         let current_invariants = invariants_from_geometry_rhs(
@@ -1184,6 +1286,18 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
             maximum_drift,
             invariant_drift(initial_invariants.values, current_invariants.values),
         );
+        if crosses_radial_turning && radial_turning_fraction <= 1.0 {
+            radial_turnings = increment_branch_count(radial_turnings);
+        }
+        if equatorial_crossing_fraction <= 1.0 {
+            equatorial_crossings = increment_branch_count(equatorial_crossings);
+        }
+        azimuth_winding = update_azimuth_winding(
+            previous_azimuth,
+            stepped.state.position,
+            azimuth_winding,
+        );
+        previous_azimuth = atan2(stepped.state.position.y, stepped.state.position.x);
         if SURFACE_EVENTS_ENABLED != 0u {
             surface_armed = update_surface_event_arming(surface_armed, stepped.state.position.z);
         }
@@ -1201,6 +1315,12 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
         vec3<f32>(0.0),
         travel_time,
         maximum_drift,
+        trace_branch_key(
+            radial_turnings,
+            equatorial_crossings,
+            azimuth_winding,
+            initial_polar_side,
+        ),
     );
 }
 

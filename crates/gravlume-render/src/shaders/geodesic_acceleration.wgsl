@@ -306,6 +306,7 @@ fn trace_pixel_with_radial_capture_at(
             vec3<f32>(0.0),
             0.0,
             vec4<f32>(invariants.values.x, 0.0, 0.0, 0.0),
+            vec4<u32>(0u),
         );
     }
     return trace_initialized(initial, invariants);
@@ -555,6 +556,7 @@ fn escape_map_result(
             escape_map_interpolate_direction(local_id),
             0.0,
             vec4<f32>(0.0),
+            vec4<u32>(0u),
         );
     }
 
@@ -576,6 +578,7 @@ fn escape_map_result(
                 stencil.xyz,
                 0.0,
                 vec4<f32>(0.0),
+                vec4<u32>(0u),
             );
         }
     }

@@ -1,6 +1,6 @@
 use gravlume_domain::{
-    EquatorialCircularEmitter, ImageSample, InitialViewRay, KerrNewmanSpacetime, Observation,
-    ValidationReport,
+    EquatorialCircularEmitter, HomogeneousScalarSlab, ImageSample, InitialViewRay,
+    KerrNewmanSpacetime, Observation, ValidationReport,
 };
 
 use crate::{
@@ -16,6 +16,7 @@ pub struct ObservationTrace {
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
     equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
+    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
 }
 
 impl ObservationTrace {
@@ -37,6 +38,7 @@ impl ObservationTrace {
             initial_ray,
             policy,
             equatorial_circular_emitter: observation.scene().equatorial_circular_emitter(),
+            homogeneous_scalar_slab: observation.scene().homogeneous_scalar_slab(),
         })
     }
 }
@@ -68,7 +70,11 @@ impl ObservationTracer {
             initial_ray,
             policy,
             equatorial_circular_emitter,
+            homogeneous_scalar_slab,
         } = request;
+        if homogeneous_scalar_slab.is_some() && equatorial_circular_emitter.is_none() {
+            return Err(ObservationTraceError::ScalarSlabRequiresSurface);
+        }
         if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
             return Err(ObservationTraceError::NonNormalizedReferenceInput);
         }
@@ -93,6 +99,7 @@ impl ObservationTracer {
                 spacetime,
                 outcome.state(),
                 observer_frequency,
+                homogeneous_scalar_slab,
             )?);
         }
         Ok(outcome)
@@ -103,6 +110,8 @@ impl ObservationTracer {
 pub enum ObservationTraceError {
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
+    #[error("a homogeneous scalar slab requires a resolved equatorial surface source")]
+    ScalarSlabRequiresSurface,
     #[error(transparent)]
     EventConfiguration(#[from] EventConfigurationError),
     #[error(transparent)]

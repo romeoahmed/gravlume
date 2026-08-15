@@ -36,6 +36,7 @@ pub enum ComparisonIssue {
     EscapeDirectionBudgetExceeded,
     TravelTimeBudgetExceeded,
     SurfaceObservableUnavailable,
+    SurfaceBranchMismatch,
     SourceAnchorBudgetExceeded,
     FrequencyRatioBudgetExceeded,
     NullDriftBudgetExceeded,
@@ -233,6 +234,9 @@ fn compare_surface_observables(
     candidate: &ReferenceOutcome,
     issues: &mut Vec<ComparisonIssue>,
 ) -> (Option<f64>, Option<f64>) {
+    if baseline.branch_key() != candidate.branch_key() {
+        issues.push(ComparisonIssue::SurfaceBranchMismatch);
+    }
     let (Some(baseline_observable), Some(candidate_observable)) = (
         baseline.surface_observable(),
         candidate.surface_observable(),
@@ -375,6 +379,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn surface_convergence_rejects_a_discrete_branch_mismatch() {
+        let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
+        baseline.termination = Termination::EquatorialSurface;
+        baseline.escape_direction_xyz = None;
+        let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
+        candidate.termination = Termination::EquatorialSurface;
+        candidate.escape_direction_xyz = None;
+        candidate.branch_key = crate::TraceBranchKey::new(crate::PolarSide::Equatorial, 1, 0, 0);
+
+        let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
+            .expect("policy roles and input identity match");
+
+        assert!(
+            comparison
+                .issues()
+                .contains(&ComparisonIssue::SurfaceBranchMismatch)
+        );
+    }
+
     fn escape_outcome(policy_id: &'static str, spatial_momentum: [f64; 3]) -> ReferenceOutcome {
         ReferenceOutcome {
             input_id: TraceInputId::new("same-input"),
@@ -396,6 +420,7 @@ mod tests {
             turning_radius_m: None,
             azimuth_advance_rad: 0.0,
             travel_time_m: 1.0,
+            branch_key: crate::TraceBranchKey::new(crate::PolarSide::Equatorial, 0, 0, 0),
             surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: 1,

@@ -71,6 +71,10 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 - 频率由 $-p\cdot u>0$ 定义，负值不能取绝对值后继续解释；
 - 默认 fast-light；slow-light 是另一种 source 数据语义，不是质量开关；
 - physical result 在 display transform 前保持 scene-linear；普通 RGB 色相移动属于 Appearance。
+- `visible-boxcar-v1` 的 RGB 是三个具名 observer-frame 波段，不是 sRGB/CIE color；只有 surface
+  radiance texel 可按该 metadata 解释，analytic sky 与 failure 仍是明确的预览/诊断类别。
+- homogeneous slab 只声明总 optical depth 的解析 scalar transfer；空间变化 volume、scattering、
+  稳定吸积盘与完整 GRRT 必须各自满足独立合同后才能宣称。
 
 具体连续模型和阈值分别由[数学物理合同](physics.md)与[验证合同](validation.md)定义。
 

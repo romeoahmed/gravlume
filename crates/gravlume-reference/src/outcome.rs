@@ -157,6 +157,70 @@ pub enum Termination {
     NumericalFailure(NumericalFailure),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PolarSide {
+    Negative,
+    Equatorial,
+    Positive,
+}
+
+impl PolarSide {
+    pub(super) const fn from_height(height_m: f64) -> Self {
+        if height_m > 0.0 {
+            Self::Positive
+        } else if height_m < 0.0 {
+            Self::Negative
+        } else {
+            Self::Equatorial
+        }
+    }
+}
+
+/// Discrete path semantics that must agree before source-space differencing or reconstruction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TraceBranchKey {
+    initial_polar_side: PolarSide,
+    radial_turnings: u32,
+    equatorial_crossings: u32,
+    azimuth_winding: i32,
+}
+
+impl TraceBranchKey {
+    pub(super) const fn new(
+        initial_polar_side: PolarSide,
+        radial_turnings: u32,
+        equatorial_crossings: u32,
+        azimuth_winding: i32,
+    ) -> Self {
+        Self {
+            initial_polar_side,
+            radial_turnings,
+            equatorial_crossings,
+            azimuth_winding,
+        }
+    }
+
+    #[must_use]
+    pub const fn initial_polar_side(self) -> PolarSide {
+        self.initial_polar_side
+    }
+
+    #[must_use]
+    pub const fn radial_turnings(self) -> u32 {
+        self.radial_turnings
+    }
+
+    #[must_use]
+    pub const fn equatorial_crossings(self) -> u32 {
+        self.equatorial_crossings
+    }
+
+    #[must_use]
+    pub const fn azimuth_winding(self) -> i32 {
+        self.azimuth_winding
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct LocalizedEvent {
     pub(super) kind: EventKind,
@@ -270,6 +334,7 @@ pub struct ReferenceOutcome {
     pub(super) turning_radius_m: Option<f64>,
     pub(super) azimuth_advance_rad: f64,
     pub(super) travel_time_m: f64,
+    pub(super) branch_key: TraceBranchKey,
     pub(super) surface_observable: Option<SurfaceObservable>,
     pub(super) diagnostics: TraceDiagnostics,
 }
@@ -325,6 +390,11 @@ impl ReferenceOutcome {
     #[must_use]
     pub const fn travel_time_m(&self) -> f64 {
         self.travel_time_m
+    }
+
+    #[must_use]
+    pub const fn branch_key(&self) -> TraceBranchKey {
+        self.branch_key
     }
 
     /// Returns the physical source observable for a configured surface hit.

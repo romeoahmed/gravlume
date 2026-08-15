@@ -6,15 +6,17 @@ Gravlume 是一个以可验证物理量为核心的原生黑洞可视化工具�
 
 ## 当前能力
 
-| 已进入主线                                                             | 尚未形成产品闭环                                  |
-| ---------------------------------------------------------------------- | ------------------------------------------------- |
-| validated Kerr–Newman domain、observer frame 与 viewport ray           | 物理吸积盘、频率比成像与辐射传输                  |
-| 独立 DP5(4) CPU reference、版本化 fixture 与误差报告                   | source-space 自适应重建与 temporal reuse          |
-| Cartesian Kerr–Schild GPU trace、保守加速与完整 KS fallback            | 科学导出、研究工作台与资产闭包                    |
-| 完整帧原子发布、shadow coverage 与 resize 生命周期                     | near-critical、Kerr–Newman 与未验证平台的更广证据 |
-| macOS HDR/EDR、Windows/Wayland display-state 接入与 typed SDR fallback | Windows 与 Wayland 的具名设备实机发布矩阵         |
+| 已进入主线                                                                  | 尚未形成产品闭环                                      |
+| --------------------------------------------------------------------------- | ----------------------------------------------------- |
+| validated Kerr–Newman domain、observer frame 与 viewport ray                | branch-aware source reconstruction 与 temporal reuse  |
+| 独立 DP5(4) CPU reference、版本化 transport fixture 与误差报告              | 空间变化体介质、scattering、polarization 与 slow-light |
+| Cartesian Kerr–Schild GPU trace、薄表面频移、标量 slab 与固定光谱波段       | near-critical、near-axis 与 near-extreme 的更广证据   |
+| 完整 KS fallback、完整帧原子发布、shadow coverage 与 resize 生命周期        | 稳定磁盘/喷流模型、研究工作台与资产闭包               |
+| tagged scene-linear scientific readback 与 macOS/Windows/Wayland 显示状态接入 | Windows 与 Wayland 的具名设备实机发布矩阵             |
 
-当前画面使用解析方向天空验证几何、HDR 和失败可见性，不代表吸积盘或完整广义相对论辐射传输。已验证范围见 [Reference 证据](docs/reference-implementation.md)与 [GPU 证据](docs/gpu-renderer.md)。
+默认画面使用简化的 equatorial circular bolometric surface 验证几何、频移、HDR 和失败可见性；
+blackbody/boxcar 与 homogeneous scalar slab 也有独立证据，但都不代表稳定吸积盘或完整 GRRT。
+已验证范围见 [Reference 证据](docs/reference-implementation.md)与 [GPU 证据](docs/gpu-renderer.md)。
 
 ## 快速开始
 

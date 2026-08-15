@@ -155,9 +155,24 @@ reference surface fixture 增加 equatorial surface：
 $r_{\rm out}<R_{\rm esc}=200M$。触碰或越过数值 escape boundary 的合法 Physical Scene 必须在
 CPU/GPU trace seam 返回 typed error，不能静默先终止为 Escape。
 
-这是规定的 surface-radiance fixture，不声称 Novikov–Thorne/Page–Thorne accretion physics。blackbody/spectral LUT 是另一 fixture；不得为让默认图更漂亮而改变这一合同。
+这是规定的 neutral surface-radiance fixture，不声称 Novikov–Thorne/Page–Thorne accretion
+physics；不得为让默认图更漂亮而改变这一合同。
 
 版本化 artifact 位于 [`fixtures/v2/kerr-surface-observable.toml`](../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)，引用 v1 canonical Observation 而不复制 scene 参数。它固定 source、image sample、emission profile、strict expected observable 与 tolerance；v1 schema/profile 不原地扩展。CPU regular/strict reference 先独立闭环；GPU full Cartesian Kerr–Schild test 再按本页 GPU gate 比较 termination、Source Anchor、Frequency Ratio、travel time 与最终 `RGBA16F` radiance。
+
+`surface-transport-v1` 使用独立 schema v3，保持同一 geometry sample，另固定：
+
+- diluted-blackbody source：$T_6=6000\,\mathrm K$ 与数学物理合同的 $T(r)$；
+- observer-frame `visible-boxcar-v1` 三 bands；
+- vacuum、$\tau=0.75$ pure absorption、$\tau=0.35$ constant blackbody source，以及
+  $\tau=0$ pure blackbody emission 四种解析边界；
+- emitted/vacuum/final bolometric intensity、emitted/observer temperature、optical depth 与三 band
+  final intensity。
+
+四份 canonical artifact 位于 [`fixtures/v3/`](../crates/gravlume-reference/fixtures/v3/)。几何
+expected 来自 strict reference convergence；transfer identity、Planck normalization、band integral
+与 cancellation-sensitive limit 由 80 位独立计算生成。CPU regular/strict 均须接受 artifact；GPU
+比较最终 `RGBA16F` scene-linear bands，不能经过 tone mapping。
 
 ## 4. Reference Policy
 
@@ -169,8 +184,6 @@ CPU/GPU trace seam 返回 typed error，不能静默先终止为 Escape。
 | position/time `atol`         |                       `2e-13` |
 | covariant momentum `rtol`    |                       `2e-12` |
 | covariant momentum `atol`    |                       `2e-13` |
-| scalar transport `rtol`      |                       `1e-11` |
-| scalar transport `atol`      |                       `1e-13` |
 | initial step magnitude       |                      `1e-3 M` |
 | minimum step magnitude       |                    $2^{-40}M$ |
 | maximum step magnitude       |                       `0.5 M` |
@@ -210,7 +223,8 @@ regular fixture 的 baseline/strict comparison 必须满足：
 
 | observable                                   |             v1 gate |
 | -------------------------------------------- | ------------------: |
-| termination / Image Branch                   | exact enum equality |
+| termination                                  | exact enum equality |
+| surface branch key                           |      exact equality |
 | escape-direction angle                       |          `2e-9 rad` |
 | localized event position                     |            `2e-9 M` |
 | Frequency Ratio relative error               |              `2e-9` |
@@ -230,6 +244,11 @@ equatorial Source Anchor 以数学物理合同定义的 $(r,\phi_s)$ 比较。su
 
 near-critical fixture 不套一个全局 angle tolerance。它必须给成对的 escape/capture 或两侧 branch 样本、distance-to-critical 标签和独立高精度 observable；discrete classification 必须正确，continuous tolerance 由 fixture 自身给出。
 
+surface branch key v1 固定为 initial polar side、已提交 radial turning count、已提交 equatorial
+crossing count 与 signed azimuth winding。若 terminal 位于一步内部，只提交 terminal fraction 之前的
+crossing；rejected step 不改变 key。regular/strict key 不同即 comparison 失败，即使最终 source
+coordinates 接近。
+
 ### 5.3 GPU renderer agreement
 
 下列是当前 GPU 实现的初始、可否证门槛 `[X]`；实现数据只能通过新 profile 调整，不能原地放宽：
@@ -248,6 +267,8 @@ sticky state，只在已提交 endpoint 离开 band 后置位。
 | recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift |                                            each `0.05` |
 | Frequency Ratio relative error                        |                                                 `2e-3` |
 | surface event position                                |                                               `5e-3 M` |
+| bolometric surface `RGBA16F` relative error            |                                                 `2e-3` |
+| final spectral surface band relative error             |                                                 `4e-3` |
 | numerical failure on regular matrix                   |                                                    `0` |
 | stale history after generation/resize/cut             |                                   `0` accepted samples |
 
@@ -265,11 +286,26 @@ event residual，而不是只比较 cubic polynomial residual。
 
 落入 near-critical uncertainty band 的 sample 只有经过满足同一预算的 refine 才能输出确定 branch；没有这样的第二遍求解时必须保持 `Uncertain`，数值失败则输出 `NumericalFailure`。null/Carter drift 是诊断与 classifier 输入，不可单独替代 observable agreement。
 
+`visible-boxcar-v1` 的 4097-entry LUT 以 $\log_2T\in[-8,24]$、每 octave 128 intervals 线性
+插值。相对 80 位 Planck oracle，全部 midpoint 的 band-fraction absolute error 必须不超过 `3e-6`；
+当 expected fraction 至少为 `1e-6` 时 relative error 不超过 `2e-3`。最终 spectral fixture 同时包含
+geometry/transport 与 FP16 rounding，因此使用上表 `4e-3` gate，而不是把 LUT 单项预算误作总误差。
+
+surface-footprint GPU capture 是 test-only 证据路径：中心与真实 `±0.25 pixel` 四邻域必须全部为
+无歧义 surface terminal，且完整 branch key exact equality，才输出 source chart
+$(r,r_c\Delta\phi)$ 的 central-difference $J$ 与 parity。canonical ordinary sample 使用更细的
+diagnostic step policy，GPU/CPU Jacobian 的 matrix max-norm relative error gate 为 `3e-3`；任一
+semantic mismatch 输出 discontinuity。该证据不等于 production reconstruction 已实现。
+
 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过 travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入常规测试。
 
 ## 6. Fixture envelope
 
-fixture 使用 UTF-8 TOML，未知字段和未知 enum 一律拒绝。`schema_version` 管结构，`profile` 管阈值；两者不能互相替代。输入/期望的高精度十进制以字符串保存，解析器必须明确转换精度，不能先经 `f64` 再声称 80 位来源；固定 v1 preset 的十进制原文是规范 artifact，必须在舍入到 `f64` 前精确核对。
+fixture 使用 UTF-8 TOML，未知字段和未知 enum 一律拒绝。`schema_version` 管结构，`profile` 管阈值；两者不能互相替代。输入/期望的高精度十进制以字符串保存，解析器必须明确转换精度，不能先经 `f64` 再声称 80 位来源；固定 canonical preset 的十进制原文是规范 artifact，必须在舍入到 `f64` 前精确核对。
+
+v1 保存 geometry/Observation，v2 保存 neutral surface observable，v3 保存 blackbody/slab transport；
+旧 schema 的字段与 profile 含义不原地扩展。每个 parser 只接受仓库内具名 canonical preset，修改
+任一 expected、producer 或 applicability 字段都必须以新 artifact identity/version 进入。
 
 ```toml
 schema_version = 1

@@ -8,7 +8,9 @@ mod error;
 mod extent;
 mod ray_tracer;
 mod renderer;
+mod scientific_capture;
 mod shadow_coverage;
+mod spectral_lut;
 mod timing;
 
 #[cfg(feature = "gpu-benchmarks")]
@@ -25,6 +27,11 @@ pub use capabilities::CapabilityError;
 pub use error::{DeviceEvent, DeviceEventKind, RendererError, RendererInitError, ResizeError};
 pub use ray_tracer::GpuTraceInputError;
 pub use renderer::{PresentResult, PresentSkip, Renderer, RendererDiagnostics, RendererUpdate};
+pub use scientific_capture::{
+    ScientificCapture, ScientificCaptureError, ScientificCaptureMetadata, ScientificChannelModel,
+    ScientificEmissionModel, ScientificNumericalMetadata, ScientificPixelKind,
+    ScientificTransportMetadata,
+};
 pub use timing::TimingError;
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

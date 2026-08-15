@@ -6,6 +6,7 @@ pub struct EquatorialCircularEmitter {
     inner_radius: f64,
     outer_radius: f64,
     intensity_at_six: f64,
+    temperature_at_six_kelvin: Option<f64>,
 }
 
 impl EquatorialCircularEmitter {
@@ -73,6 +74,51 @@ impl EquatorialCircularEmitter {
             inner_radius: inner_radius_m,
             outer_radius: outer_radius_m,
             intensity_at_six: intensity_at_six_m,
+            temperature_at_six_kelvin: None,
+        })
+    }
+
+    /// Creates the versioned inverse-cube diluted-blackbody surface profile.
+    ///
+    /// Bolometric intensity follows the same inverse-cube law as the neutral fixture. Temperature
+    /// follows `T(r) = T_6 (r / 6 M)^(-3/4)`, so the dilution relative to `T^4` is constant. The
+    /// spectral response is selected by the observation instrument, not stored in this source.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the bolometric profile's invalid inputs and a non-finite or non-positive
+    /// temperature.
+    pub fn inverse_cube_blackbody_v1(
+        inner_radius_m: f64,
+        outer_radius_m: f64,
+        intensity_at_six_m: f64,
+        temperature_at_six_kelvin: f64,
+    ) -> Result<Self, ValidationReport> {
+        let mut report = match Self::inverse_cube_bolometric_v1(
+            inner_radius_m,
+            outer_radius_m,
+            intensity_at_six_m,
+        ) {
+            Ok(_) => ValidationReport::default(),
+            Err(report) => report,
+        };
+        validate_finite(
+            &mut report,
+            temperature_at_six_kelvin,
+            "equatorial_circular_emitter.temperature_at_six_kelvin",
+        );
+        if temperature_at_six_kelvin.is_finite() && temperature_at_six_kelvin <= 0.0 {
+            report.push(ValidationIssue::error(
+                ValidationIssueCode::NonPositive,
+                "equatorial_circular_emitter.temperature_at_six_kelvin",
+                "blackbody temperature must be positive",
+            ));
+        }
+        report.into_result(Self {
+            inner_radius: inner_radius_m,
+            outer_radius: outer_radius_m,
+            intensity_at_six: intensity_at_six_m,
+            temperature_at_six_kelvin: Some(temperature_at_six_kelvin),
         })
     }
 
@@ -89,5 +135,11 @@ impl EquatorialCircularEmitter {
     #[must_use]
     pub const fn intensity_at_six_m(self) -> f64 {
         self.intensity_at_six
+    }
+
+    /// Returns the blackbody temperature at `6 M`, or `None` for the neutral bolometric profile.
+    #[must_use]
+    pub const fn blackbody_temperature_at_six_kelvin(self) -> Option<f64> {
+        self.temperature_at_six_kelvin
     }
 }

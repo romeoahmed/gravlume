@@ -22,7 +22,14 @@ fn store_trace_record(index: u32, result: GeometricSample) {
         bitcast<u32>(result.event_residual),
     );
     let event_ambiguous = select(0u, 1u, countOneBits(result.event_candidates) > 1u);
-    trace_event[index] = vec4<u32>(result.event_candidates, event_ambiguous, 0u, 0u);
+    let packed_branch_counts = min(result.branch_key.x, 0xffffu)
+        | (min(result.branch_key.y, 0xffffu) << 16u);
+    trace_event[index] = vec4<u32>(
+        result.event_candidates,
+        event_ambiguous,
+        packed_branch_counts,
+        result.branch_key.z,
+    );
 }
 
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)

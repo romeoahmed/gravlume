@@ -10,9 +10,11 @@ validated Observation
   -> private sealed TracePlan
   -> hidden native-resolution candidate
        sky: escape-map + reconstruction/full-KS fallback + shadow refine
-       surface: full KS + local GeometricSample + immediate g^4 transport
+       bolometric surface: full KS + local GeometricSample + immediate g^4/slab transport
+       blackbody surface: full KS + gT + spectral LUT/slab transport
   -> timestamp + generation check
   -> atomic texture-view publication
+  -> optional tagged scientific readback before display
   -> linear scene/UI composition
   -> HDR/scRGB or SDR surface
 ```
@@ -21,10 +23,10 @@ validated Observation
 
 ### 输入与 ABI
 
-- `Renderer::new` 只接受 validated `Observation`。Host 按 $M$ 无量纲化，并受检转换为 binary32；不可表示字段、未归一化 observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正 intensity 下溢为零，或 source 未严格落在 numerical escape boundary 内，都会返回 `GpuTraceInputError`。
+- `Renderer::new` 只接受 validated `Observation`。Host 按 $M$ 无量纲化，并受检转换为 binary32；不可表示字段、未归一化 observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正 intensity 下溢为零、source 未严格落在 numerical escape boundary 内、blackbody radial temperature 超出 LUT，或 slab/source spectrum 不闭合，都会返回 `GpuTraceInputError`。
 - Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。
-- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 10 个连续 16-byte block；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Production ABI 只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；四个 scientific record planes 仅由 test capture 创建。
-- Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。
+- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 11 个连续 16-byte block、共 176 byte；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Blackbody plan 独占 binding 8 的 4097-entry read-only `array<vec4<f32>>`；WGSL array stride 为 16 byte。Production ABI 只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；四个 diagnostic record planes 仅由 test capture 创建。
+- Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。Surface sample 另携带 initial polar side、radial/equatorial crossing counts 与 signed azimuth winding 的 exact branch key。
 - Renderer 从 Physical Scene 解析 private sealed `TracePlan`，并用 WGSL pipeline override 固化 surface-event capability。Surface plan 在 shader、bindings、timing 与 target 上都不含 escape map 或 shadow refinement scratch；caller 不选择 accelerator。
 
 ### 数值基线
@@ -45,12 +47,19 @@ validated Observation
 
 Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例从 production 删除。性能与否决证据只在[加速研究账本](research/gpu-geodesic-acceleration.md)和 [Mino 决策记录](research/mino-step-selection.md)维护。
 
-### Thin surface transport
+### Thin surface transport 与 scientific capture
 
 - Surface event 使用 $z=0$ 双向 crossing；dense-localized radius 必须位于 source inclusive interval。
 - Localized state 独立求 Kerr–Newman prograde circular emitter、oblate chart azimuth 与 $g=\nu_{\rm obs}/\nu_{\rm em}$；非法 orbit/frequency 产生 visible numerical failure。
-- `GeometricSample` 只在 invocation-local function value 中存在；event ambiguity 从 candidate bitset 派生，不复制进该值。Production 不创建 G-buffer；`I_{\rm em}=I_6(r/6M)^{-3}` 经逐次 $g^4$ transport 后直接写现有 `RGBA16F` candidate。
-- 当前 transport 是 neutral bolometric scene-linear intensity；不冒充 blackbody、spectral shift、absorption 或 Novikov–Thorne/Page–Thorne disk。
+- `GeometricSample` 只在 invocation-local function value 中存在；event ambiguity 从 candidate bitset 派生，不复制进该值。Production 不创建 G-buffer；neutral plan 将 $I_{\rm em}=I_6(r/6M)^{-3}$ 经 $g^4$ 与解析 slab 后直接写 `RGBA16F` candidate。
+- Blackbody plan 使用 $T_{\rm obs}=gT_6(r/6M)^{-3/4}$，在固定 $\log_2T$ LUT 中插值 observer-frame `600–700/500–600/400–500 nm` boxcar fractions。三 channel 是具名 band-integrated intensity，不是 CIE/sRGB，也不覆盖剩余 bolometric power。
+- `HomogeneousScalarSlab` 预先保存 $\tau$ 与稳定计算的 integrated emission；GPU 执行 $I_{out}=I_{vac}e^{-\tau}+E$。非零 spectral slab source 必须带自己的 blackbody temperature；neutral bolometric source 不被猜成 spectrum。它是 path-integrated 解析边界，不是 arbitrary volume integration。
+- `Renderer::capture_scene_linear` 显式等待 copy/map，读取已发布、tone-map/UI 之前的 scene。
+  Surface alpha tag `2.0` 才表示 metadata 所述 radiance；escape tag `1.0` 仍是 analytic
+  orientation preview，zero 是 horizon，negative tag 是 trace failure。API 返回 RGBA binary16
+  words、texel kind、source/transport/channel，以及 bolometric `2e-3`、final spectral `4e-3` 与
+  LUT 分项误差 metadata，避免调用者把 preview RGB 当成光谱或把 LUT 预算误当成最终预算。
+- 该 source 只声称运动学 circular thin surface 与 diluted blackbody；不声称 orbit radial stability、Novikov–Thorne/Page–Thorne disk 或完整 GRRT。
 
 ### Publication 与 display
 
@@ -70,6 +79,9 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | initial ray       | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                         |
 | solver            | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming |
 | surface           | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance    |
+| scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets  |
+| branch/footprint  | committed full branch key；五条真实 quarter-pixel ray 的 exact-key gate、parity 与 CPU/GPU Jacobian max-norm |
+| scientific export | raw normal binary16 values、row unpadding、surface/sky/horizon/failure texel kind 与解释 metadata             |
 | dispatch          | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap      |
 | acceleration      | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback |
 | coverage          | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                |
@@ -83,7 +95,9 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - Regular matrix 仍以默认 exterior Kerr Observation 为主；KN accelerator equality 只覆盖严格亚极端的具名样本，不是完整 charge sweep。
 - Near-critical、高绕转、near-axis 与 near-extreme 的 GPU/reference ladder 尚未闭合。
 - RK4 使用固定 radius-scaled step policy；当前没有 `Uncertain` ray 的第二遍更高精度追迹。
-- Surface footprint、多像/near-critical surface ladder、absorption、spectral output 与 scientific export 尚未实现。
+- CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
+- Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
+- Scientific capture 是内存 readback API，不是稳定的磁盘 container；它给出声明预算与 texel kind，不是每像素独立误差 certificate。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。

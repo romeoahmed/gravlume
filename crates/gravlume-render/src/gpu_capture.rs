@@ -32,15 +32,35 @@ impl TraceCapture {
 
 pub fn capture_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute =
-        RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
+    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+        .expect("observation packs for GPU");
     capture(gpu, observation, &compute, false)
 }
 
 pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
+    let compute = RayTracer::for_trace_capture(&gpu.device, observation, sample.subpixel())
+        .expect("observation packs for GPU");
+    let [pixel_x, pixel_y] = sample.pixel();
+    let tile = TileRegion::new([pixel_x / 8, pixel_y / 8], [1, 1]);
+    capture_region(gpu, observation, &compute, tile)
+}
+
+pub fn capture_surface_footprint_sample(
+    observation: &Observation,
+    sample: ImageSample,
+) -> TraceCapture {
+    assert!(
+        sample
+            .subpixel()
+            .into_iter()
+            .all(|coordinate| (0.25..=0.75).contains(&coordinate)),
+        "surface footprint stencil must remain inside one pixel"
+    );
+    let gpu = crate::test_device::native_gpu();
     let compute =
-        RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
+        RayTracer::for_surface_footprint_capture(&gpu.device, observation, sample.subpixel())
+            .expect("surface observation packs for GPU footprint capture");
     let [pixel_x, pixel_y] = sample.pixel();
     let tile = TileRegion::new([pixel_x / 8, pixel_y / 8], [1, 1]);
     capture_region(gpu, observation, &compute, tile)
@@ -55,16 +75,16 @@ pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
 
 pub fn capture_refined_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute =
-        RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
+    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+        .expect("observation packs for GPU");
     capture(gpu, observation, &compute, true)
 }
 
 pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -> u32 {
     assert!(repetitions > 0, "at least one refinement is required");
     let gpu = crate::test_device::native_gpu();
-    let compute =
-        RayTracer::for_trace_capture(&gpu.device, observation).expect("observation packs for GPU");
+    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+        .expect("observation packs for GPU");
     let extent = observation_extent(observation);
     let target = compute.create_target(&gpu.device, extent);
     let mut encoder = gpu

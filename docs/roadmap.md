@@ -7,6 +7,11 @@
 - validated domain 与独立 CPU `f64` reference；
 - CPU equatorial circular surface 的 Source Anchor、Frequency Ratio 与 vacuum bolometric fixture；
 - scene-owned equatorial emitter 与 GPU full-KS `g^4 I_em` 直接 HDR transport；
+- path-integrated homogeneous scalar slab、diluted-blackbody $gT$、固定 observer-frame boxcar LUT
+  与四份 v3 analytic/high-precision transport fixtures；
+- committed branch key、CPU 五射线 source footprint，以及 ordinary-region GPU diagnostic
+  Jacobian/parity gate；
+- tone-map/UI 之前的 tagged scientific scene-linear readback 与 source/transport/channel/error metadata；
 - native winit/egui/wgpu 生命周期；
 - Metal/Vulkan Cartesian Kerr–Schild GPU trace；
 - escape-direction map、interval radial capture 与完整 KS fallback；
@@ -14,17 +19,6 @@
 - typed errors、GPU timing、versioned fixture 与 CPU/GPU observable gate。
 
 Windows 和 Wayland 仍缺具名 OS、adapter、driver 与 compositor 的实机发布矩阵。
-
-## 可解释物理图像
-
-**交付：** scalar emission/absorption、blackbody/spectral LUT、surface footprint 与 scientific scene-linear capture。
-
-**退出条件：**
-
-- `I_nu/nu^3`、frequency ratio、constant slab 与 optical-depth 解析回归通过；
-- Physical、Appearance 与 Quality controls 不能互相绕过；
-- numerical failure 不伪装成物理黑色；
-- 科学输出绕过 display tone mapping，并携带模型、单位和误差 metadata。
 
 ## 重建与交互预算
 

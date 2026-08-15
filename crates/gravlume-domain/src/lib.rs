@@ -5,6 +5,7 @@
 mod emission;
 mod numerics;
 mod observer;
+mod radiation;
 mod scene;
 mod spacetime;
 mod state;
@@ -13,6 +14,7 @@ mod view;
 
 pub use emission::EquatorialCircularEmitter;
 pub use observer::{ObserverFrame, StationaryObserverInput};
+pub use radiation::{HomogeneousScalarSlab, SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
 pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput};
 pub use spacetime::{
     Extremality, GeodesicInvariants, GeometryError, KerrNewmanSpacetime, KerrSchildChart,
