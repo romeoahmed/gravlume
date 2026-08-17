@@ -31,7 +31,9 @@
 - source-space differential 至少需要保存哪些离散 branch key 与连续 observable；
 - Carlson 路线在哪些受限域能够成为 conservative accelerator，而不重复已否决的 fixed-step Mino 外推。
 
-方法是对当前 Rust/WGSL、v2 fixture 和规范做静态核对，再与原始论文、W3C 标准及作者代码交叉检查。本轮没有修改 production、没有运行 benchmark，也没有生成新的性能数字；下文的 fixture 是待实现的验证设计，不是已通过证据。
+方法是对当前 Rust/WGSL、v2 fixture 和规范做静态核对，再与原始论文、W3C 标准及作者代码交叉检查。
+一手资料核对阶段没有修改 production；其后的 reconstruction 候选实验及 benchmark 单列在第 5.6 节，
+最终没有保留候选代码。除此之外，下文的 fixture 是待实现的验证设计，不是已通过证据。
 
 配套的 80 位 SymPy/mpmath 复算脚本是
 [`verify_scalar_transport.py`](scripts/verify_scalar_transport.py)。它验证 invariant/blackbody
@@ -43,10 +45,10 @@ uv run --isolated --project docs/research/scripts --locked \
   python -B docs/research/scripts/verify_scalar_transport.py
 ```
 
-| 能力 | 基线提交中的证据 | 本轮确认的缺口 |
+| 能力 | 基线/后续采用证据 | 本轮确认的缺口 |
 | --- | --- | --- |
 | source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml) | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins |
-| GPU surface | [`kerr_schild_trace.wgsl`](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl) 产生 invocation-local sample；[`surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/surface_preview.wgsl) 即时做 $g^4$ | 没有 optical depth、emissivity/absorptivity sampling、branch/parity/Jacobian |
+| GPU surface | [`kerr_schild_trace.wgsl`](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl) 产生 invocation-local sample；[`surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有持久化 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
 | execution seam | [`ray_tracer.rs`](../../crates/gravlume-render/src/ray_tracer.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
 | appearance/reconstruction | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向 | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现 |
 | analytic acceleration | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino | 尚无 root-aware Carlson implementation 或 accepted-domain classifier |
@@ -192,6 +194,19 @@ layout，不需要为了 Rust packing 把其 `vec3` 拆掉；反过来，也不�
 - 解码后的 source、$g$、time、Jacobian 和 branch exactness/error gate；
 - Metal 与 Vulkan 上的 bandwidth/timestamp A/B。
 
+当前 [`Cargo.lock`](../../Cargo.lock) 固定 `wgpu 30.0.0`。该版本
+[`Limits::defaults`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html) 的相关值是：每 shader
+stage 最多 8 个 storage-buffer binding、单 binding 最多 128 MiB、单 buffer 最多 256 MiB、
+workgroup storage 16 KiB、每 workgroup 256 invocations、每 dispatch dimension 65535
+workgroups；device 只能使用创建时实际请求到的 limits，不能因 adapter 报告更高值就默认可用。由此可直接算出：
+3840×2160 的一个 16 B/pixel plane 是 132,710,400 B（126.5625 MiB），距默认单 binding
+上限只剩 1.4375 MiB；4096×2160 的同类 plane 是 135 MiB，已经越界；三个同尺寸 plane
+若合并进一个 UHD buffer 则是 379.6875 MiB，也超过默认 `maxBufferSize`。所以“每个 semantic plane 都是
+`array<vec4<_>>` 且全分辨率常驻”不是 portable design：resource admission 必须按 requested device
+limits 与实际 extent 决定使用 coarse nodes、tile/split binding、texture 或拒绝该 mode，不能在
+allocation 失败后静默降精度。`minStorageBufferOffsetAlignment = 256` 只约束 dynamic binding
+offset，不会把 WGSL element stride 改成 256 byte。
+
 ### 4.2 Workgroup、branch 与 vector type
 
 WebGPU 要求 `workgroup_size` 各维及乘积不超过 requested device limits；当前 8×8 即 64 invocations，低于 WebGPU guaranteed `maxComputeInvocationsPerWorkgroup` 基线，且与二维相邻 pixel store 相容。[WebGPU compute limits](https://www.w3.org/TR/webgpu/#limits) AMD 的 [RDNA performance guide](https://gpuopen.com/learn/rdna-performance-guide/) 也把 8×8/64-thread tile 和 coherent memory access 列为常见起点，但那只是 vendor heuristic，不是 Metal/Vulkan/WGSL contract。
@@ -203,25 +218,84 @@ WebGPU 要求 `workgroup_size` 各维及乘积不超过 requested device limits�
 - WGSL [`select`](https://www.w3.org/TR/WGSL/#select-builtin) 没有 short-circuit 语义，不能用它藏住 invalid division、sqrt 或 out-of-bounds access；domain guard 应先成立；
 - `vec4` 是明确的语言与存储类型，不承诺编译成一次四宽 hardware instruction。vector expression 可保留可读性与 ABI 一致性，性能结论仍需 backend profile。
 
-当前一 invocation 一 pixel、8×8 tile、局部 `GeometricSample`、只写 production `RGBA16F` 的结构与这些边界一致。现阶段更大的风险是增加未被 consumer 使用的 per-pixel state，而不是缺少另一个向量 wrapper。
+当前一 invocation 一 pixel、8×8 tile、局部 `GeometricSample`、只写 production `RGBA16F` 的结构与这些边界一致。8×8 的 64 invocations 明确低于 `wgpu 30` 默认 256 上限；若 reconstruction 为 tile halo 增加 `var<workgroup>`，其静态总量仍须纳入 16 KiB 上限，而 dispatch batching 仍须封闭 65535 workgroups/dimension。[`wgpu 30 Limits`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html) 现阶段更大的风险是增加未被 consumer 使用的 per-pixel state，而不是缺少另一个向量 wrapper。
+
+### 4.3 Workgroup barrier 与跨 dispatch 可见性
+
+WGSL 的内存模型采用 Vulkan memory model；所有 synchronization built-in 的 execution scope
+和 memory scope 都是 `Workgroup`。`workgroupBarrier()` 是 `AcquireRelease + WorkgroupMemory`，
+`storageBarrier()` 是 `AcquireRelease + UniformMemory`，且所有 barrier 必须位于 compute shader
+的 uniform control flow。[WGSL memory model](https://www.w3.org/TR/WGSL/#memory-model)
+[WGSL synchronization built-ins](https://www.w3.org/TR/WGSL/#barrier-builtin-functions) 因而它们只能在
+**同一 workgroup** 内发布对应 address space 的写入；二者都不是跨 workgroup 或全 dispatch
+barrier。当前 [`geodesic_acceleration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_acceleration.wgsl)
+的两次 `workgroupBarrier()` 用于共享
+`var<workgroup>` stencil，且所有 invocation 都会到达，属于规范覆盖的用法。
+
+WGSL storage atomic 的 ordering 是 `Relaxed`：只对同一 atomic memory location 的 atomic
+operations 给出 ordering，不会给 payload 的 non-atomic store 或另一 atomic location 建立发布关系。
+[WGSL atomic built-ins](https://www.w3.org/TR/WGSL/#atomic-builtin-functions) 所以 atomic append
+counter 可以分配 queue slot，但不能让另一个 workgroup 在**同一 dispatch** 中把“counter 已增加”
+当作 payload 已发布或全局第一阶段已结束的信号。
+
+跨 workgroup 的 producer/consumer 应编码成有序的不同 dispatch（或 pass），而不是在 WGSL 中模拟
+grid barrier。WebGPU 把 compute pass 中的每个 `dispatchWorkgroups` 定义为一个独立 usage scope；
+一个 scope 内的 operations 可并发执行。[WebGPU synchronization](https://gpuweb.github.io/gpuweb/#synchronization)
+`wgpu 30` 对正常 binding 自动插入 resource barrier；
+[`ComputePass::transition_resources`](https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePass.html#method.transition_resources)
+明确是 native-only interoperability 高级 API，并说明其 semantics/granularity 与 binding 的自动 barrier
+相同。`wgpu-hal 30` 还保证同一 queue 上 command buffer 按提交顺序执行、后者可观察前者结果。
+[`wgpu-hal Queue`](https://wgpu.rs/doc/wgpu_hal/trait.Queue.html) 因此正常 reconstruction 路径应让
+trace dispatch 写 map、后续 classify/reconstruct dispatch 读 map；这项 GPU→GPU dependency 不要求
+CPU wait，也不要求在两个 dispatch 之间调用 WGSL `storageBarrier()`。显式 transition 只在绕过普通
+binding tracking 的 native interop 场景才有理由出现。
 
 ## 5. Source-space footprint 与 branch-aware reconstruction
 
 ### 5.1 需要求导的映射
 
-[Igehy 1999](https://graphics.stanford.edu/papers/trd/) 的 ray differentials 用邻近 primary ray 的导数估计 texture footprint；[DNGR](https://arxiv.org/abs/1502.03808) 则直接积分 geodesic deviation，以 elliptical ray bundle 处理 Kerr lensing 的过滤和 critical curves。这两项证据共同支持对
+[Igehy 1999](https://graphics.stanford.edu/papers/trd/) 的 ray differentials 用邻近 primary ray 的导数估计 texture footprint；[DNGR](https://arxiv.org/html/1502.03808) 则直接积分 geodesic deviation，以 elliptical ray bundle 处理 Kerr lensing 的过滤和 critical curves。这两项证据共同支持先对 source map 求导，但 production consumer 真正需要的是它所查询坐标 $q=U(s)$ 的 Jacobian：
 
 \[
-J=\frac{\partial s}{\partial(x,y)}
+J_q=\frac{\partial (U\circ s)}{\partial(x,y)}.
 \]
 
-求导，其中 $(x,y)$ 是 screen coordinate，$s$ 是 source chart，而不是对最终 RGB 求导。给定 pixel covariance $C_p$，局部 source footprint 可写成 $C_s=JC_pJ^T$；singular values 给出各向异性轴，$\operatorname{sign}(\det J)$ 给出 regular region 的 parity。接近 $\det J=0$ 时 parity 不稳定且映射穿过 critical curve，应标为 refine/discontinuous，而不是把退化或跨 branch 跳变的 stencil 解释成可过滤 ellipse。
+其中 $(x,y)$ 是 screen coordinate，$s$ 是几何 source chart，$U$ 才是 texture UV、sky tangent
+coordinate 或其他 consumer lookup transform。给定 pixel covariance $C_p$，局部 lookup footprint 是
+$C_q=J_qC_pJ_q^T$；singular values 的数值依赖坐标单位与 chart metric，不能把 test-only
+$(r,r_c\Delta\phi)$ Jacobian 不经 transform 就当成 texture-UV gradient。
+[Heckbert 1989](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1989/5504.html) 对 arbitrary mapping
+的 space-variant resampling 给出同一条“先明确 mapping，再构造 filter”边界。
+
+在固定 oriented charts 的 regular region，$\operatorname{sign}(\det J_q)$ 给出 orientation/parity，而
+critical curve 是
+**精确满足** $\det J_q=0$ 的 locus；这不是“$|\det J_q|$ 较小就已证明一个有限 pixel 穿过
+critical curve”。[Daněk 与 Heyrovský 2015](https://arxiv.org/abs/1501.02722) 将 Jacobian 零等值线定义为
+critical curve；[DNGR](https://arxiv.org/html/1502.03808) 展示 caustic crossing 时 image pair 在
+critical curve 上产生或湮灭。小 determinant 只说明局部映射 ill-conditioned。可执行 gate 应在
+determinant 的离散化/舍入 uncertainty interval 包含零、邻点 parity 改变、branch key 改变或
+nonlinear consistency 超预算时 `refine`；只有 analytic bound 或更密采样真正 bracket 零点时，才能
+声称 footprint crosses a critical curve。
 
 disk 的 $(r,\phi)$ 必须先做 periodic unwrap，再在局部 tangent chart 中 differencing；sky 要用 spherical tangent/cubemap seam-aware chart。volume emission 的 footprint 随路径和 medium scale 演化，terminal 单点 Jacobian 不足以代表整条 beam。
 
+过滤的对象也不能止于 source texel。最终 pixel observable 是 footprint 内 **scene-linear observed
+radiance** 的积分，schematically
+
+\[
+\bar L_p=\int_P W_p(x,y)\,L_{\rm obs}(s(x,y),g(x,y),\tau(x,y),\ldots)\,dx\,dy.
+\]
+
+因此“先平均 source，再乘中心 ray 的 $g^4$/transmittance/visibility”一般不等于上式；DNGR 的
+formal filtering 同时包含 beam、filter 与 occlusion，并明确指出只在 beam centre 评估 visibility
+会在穿过 shadow 时给出错误硬边。[DNGR Appendix A.3](https://arxiv.org/html/1502.03808) 候选实现要么
+在 footprint samples 上重算 transport 后平均最终 radiance，要么重建 source、$g$、time、$\tau$ 等
+连续量并证明它们在 accepted footprint 内的 variation 均低于预算。tone-mapped RGB 与 discrete
+branch tag 都不得作为插值对象。
+
 ### 5.2 离散 semantic key 先于连续差分
 
-[AART](https://arxiv.org/abs/2211.07469) 把不同 lensing band 分开构造，并在 transfer function 中保存 source $r,t,\phi$ 和 emitted radial-momentum sign；其[作者代码](https://github.com/iAART/aart)展示了 branch information 不是从相似颜色可靠恢复的。DNGR 也以 ray-bundle/caustic 结构说明不同 image branch 不能无条件插值。
+[AART](https://arxiv.org/html/2211.07469) 把不同 lensing band 分开构造，并在 transfer function 中保存 source $r,t,\phi$；其[作者代码](https://github.com/iAART/aart)还保存 emitted radial-momentum sign，展示 branch information 不是从相似颜色可靠恢复的。DNGR 也以 ray-bundle/caustic 结构说明不同 image branch 不能无条件插值。
 
 一个可测试的最小候选 key/observable 是：
 
@@ -231,20 +305,162 @@ disk 的 $(r,\phi)$ 必须先做 periodic unwrap，再在局部 tangent chart �
 | branch key | radial/polar momentum sign、turning count、equatorial crossing/lensing order、winding | 区分同一 source anchor 的多像路径；具体最小集由反例缩减 |
 | orientation | parity 或可稳定复算 parity 的 sign | 阻止跨 critical curve 重建 |
 | continuous | unwrapped source coordinate、travel/emission time、$g$ | source lookup、slow-light 与 transport |
-| differential | $J$ 或 conservative ellipse/singular values | anisotropic filtering 与 adaptive sampling |
+| differential | $J_q$ 或 conservative ellipse/singular values | anisotropic filtering 与 adaptive sampling |
 | confidence | event residual、Jacobian consistency、near-critical/near-seam flag | conservative accept/refine |
 
-当前 shader 的 `source_coordinates = (r, phi, g)` 和 termination 已经是有用起点，但没有 turning/winding/parity/Jacobian；shadow alpha 只覆盖 Horizon/Escape silhouette，不能推出 surface branch continuity。
+当前 [`surface_footprint_capture.wgsl`](../../crates/gravlume-render/src/shaders/surface_footprint_capture.wgsl)
+已经用中心与真实 `±0.25 pixel` 四邻 ray、完整 production branch key、periodic $\phi$ unwrap 和
+$(r,r_c\Delta\phi)$ central difference 产生 test-only Jacobian/parity；对应准入由
+[`validation.md`](../validation.md#53-gpu-renderer-agreement) 定义。这修正了“当前完全没有 branch/Jacobian”的旧判断，
+但不改变 production 缺口：production 仍没有持久化 semantic/footprint map、tile classifier、source
+texture consumer 或 branch-aware reconstruct/fallback pass。shadow alpha 也仍只覆盖
+Horizon/Escape silhouette，不能推出 surface branch continuity。
 
-### 5.3 最小可执行验证
+### 5.3 局部近似、filter 与 refinement 边界
 
-1. 对每个中心 pixel 追 `center, ±x, ±y` 五条 full rays；仅当所有 exact/branch key 相同且 chart 可 unwrap 时做 central difference。任一 key 不同，expected result 是 `refine`，不是任意 Jacobian。
-2. 在 ordinary region 比较 finite-difference $J$ 与更小 step、九点 stencil 或 CPU geodesic-deviation oracle；同时比较 singular values、parity 和 source displacement，不只比较 determinant。
-3. 固定至少四类命名 scene：smooth disk、不同 winding 的 higher-order image、critical curve 两侧、sky/cubemap seam。再加 high-frequency source texture 检验 filtered scene-linear radiance。
-4. reconstruction 与高倍率 full-trace/supersample oracle 比较 termination/branch exactness、source coordinate、$g$、time、radiance 和 temporal stability。PSNR/SSIM 只能补充画质，不能替代 branch gate。
-5. 对每个 accepted reconstruction 保存“为何可插值”的 condition signal；classifier mutation test 必须证明去掉任一 key 或 seam check 会出现固定反例。
+五射线 exact-key equality 是必要条件，不是连续性的证明：有限 sparse stencil 仍可能在两采样点之间
+漏掉 branch boundary、critical curve 或 source-domain edge。DNGR 明确说明 elliptical beam filter 假设
+终端 ellipse 足够小、相邻 pixel 间 beam shape 变化不大；极端情况会出现 distortion、flicker 和 aliasing，
+其处理是增加每 pixel beam 并 resample。[DNGR filtering](https://arxiv.org/html/1502.03808)
+AART 同样指出 unresolved source/image feature 会被漏掉或经 interpolation 产生 spurious feature。
+[AART resolution requirements](https://arxiv.org/html/2211.07469) 因而 accepted tile 至少还需通过：
+
+- center/neighbor 的完整 exact/branch key 相同，且 periodic/chart transform 唯一；
+- half-step、九点 stencil 或 child-tile 对 $J_q$、source displacement、$g$/time/transport variation 的
+  nonlinear consistency 在预算内；
+- determinant uncertainty interval 不含零，且样本 parity 不变；
+- source-domain/shadow/chart seam 没有被 footprint support 触及；不能只检查 sample center。
+
+若 source 是 filterable texture，WGSL
+[`textureSampleGrad`](https://www.w3.org/TR/WGSL/#texturesamplegrad) 接受显式 `ddx`/`ddy`，没有
+implicit derivative 的 fragment-only 限制，因此 compute reconstruction 可以把 $J_q$ 的两列直接作为
+lookup gradient；显式 EWA 或 bounded supersampling 可用
+[Heckbert 1989](https://www2.eecs.berkeley.edu/Pubs/TechRpts/1989/5504.html) 作为独立 oracle。
+WebGPU `maxAnisotropy > 1` 会启用平台支持的 anisotropic filtering，但实际值会被 clamp，精确过滤行为
+是 implementation-dependent，且 min/mag/mipmap filter 必须全为 `linear`。
+[WebGPU sampler](https://gpuweb.github.io/gpuweb/#dom-gpusamplerdescriptor-maxanisotropy) 因而
+`textureSampleGrad + hardware anisotropy` 是性能/画质候选，不是可跨 Metal/Vulkan 固定的科学算法；
+不能用它替代 scene-linear radiance oracle。
+
+AART 还在 pure-Kerr、distant-observer、equatorial-source 的适用域内给出更强的 scale boundary：
+第 $n$ 个 higher-order image 的 feature 尺度约按 $e^{-\gamma n}$ 缩小，image grid 需相应加密；
+该 scaling 只是启发式，论文最终以所有 source/image
+resolution 加倍后的 observable convergence 验证。[AART lensing-band resolution](https://arxiv.org/html/2211.07469)
+该指数律不能直接外推到 Kerr–Newman 或任意 observer/source geometry，但足以否决“固定 tile/node
+spacing 对所有 winding/lensing order 都无条件充分”；classifier 必须按 branch/order refine，或把
+未解析的高阶 image 保守地送回 full trace。
 
 先用 reconstruction pass 的邻近 full samples 建立该证据，比立即在每条 geodesic 中积分 geodesic-deviation tensor 更小。只有 finite difference 的额外 ray cost 或 near-critical failure 已被量化，才有理由把 analytic differential 加入 hot loop。
+
+### 5.4 Production 候选数据流
+
+在不引入公开 solver trait 或 render graph 的前提下，最小可证伪候选可以保持 private staged pipeline：
+
+1. **Trace nodes：** 在 coarse/adaptive nodes 记录 packed exact branch key、continuous source/time/$g$、
+   transport/quality signals；不要先承诺全分辨率多 plane。
+2. **Classify tiles：** 带 halo 读取 nodes，做 exact-key、periodic unwrap、determinant uncertainty、
+   curvature/half-step、source-domain 与 transport-variation gates；输出 accepted、refine 或 full-trace。
+3. **Reconstruct/transport：** 仅对 accepted tile 在 consumer lookup chart 中构造 $J_q$、采样 source，
+   并在 scene-linear domain 评价/积分 transport；refine/full-trace queue 在后续 dispatch 处理。
+
+若用 atomic counter compact refine queue，producer dispatch 可以用 atomic 分配 slot 后写 payload，但
+consumer 必须是第 4.3 节所述的后续 dispatch/pass；不得在同一 dispatch 的其他 workgroup 中读取。
+coarse grid、AoS/SoA、packed key、8×8/halo、buffer/texture、dispatch fusion 或拆分都只是性能假设。
+它们要在 correctness-approved workload 上比较总 trace + classify + reconstruct + fallback timestamp 和
+resident/rebuild memory，不能把较少 dispatch、较高 accept ratio 或“连续内存”本身当作收益证据。
+
+### 5.5 规范保证、假设与可证伪验收
+
+| 结论 | 性质 | 不能外推的内容 |
+| --- | --- | --- |
+| host-shared alignment/stride、requested limits 与每 dispatch 一个 usage scope | WGSL/WebGPU/`wgpu 30` 保证 | 不说明 bandwidth/residency，也不保证全分辨率 `vec4` planes 合理 |
+| barrier 只同步同 workgroup；storage atomic 为 relaxed | WGSL 保证 | 不存在 portable same-dispatch grid barrier 或 counter→payload 发布协议 |
+| 有序 dispatch/pass + 普通 binding tracking 形成 GPU producer/consumer 路径 | WebGPU usage-scope + `wgpu 30`/`wgpu-hal` 保证 | 不代表 backend 会 fusion，也不需要 CPU wait/手写 transition |
+| `textureSampleGrad` 接受显式 gradient；anisotropy 精确行为 implementation-dependent | WGSL/WebGPU 保证 | 不保证与 explicit EWA、Metal 与 Vulkan 逐值一致 |
+| finite-difference ellipse 在 smooth regular branch 可近似 footprint | Igehy/DNGR 支持的局部模型 | exact key 相同仍不能证明有限 tile 内无未采样 discontinuity |
+| coarse nodes、SoA、packed key、8×8 halo、hardware anisotropy 更快 | 待测性能假设 | 只能由端到端 paired benchmark 接受或否决 |
+
+建议把下一轮 admission 固定为以下可复现 gates：
+
+1. **ABI/limits：** Rust/WGSL offset、size、stride 与 canary round-trip 全等；在 requested limits 下分别
+   对 3840×2160、4096×2160 做 resource plan，越限必须 tile/split/texture 或 typed reject；branch
+   pack/unpack bit-exact。
+2. **同步：** producer 写确定性 payload/counter，consumer 分别放在同 compute pass 的下一 dispatch、
+   下一 pass、同 submit 的下一 command buffer；在 odd extent、workgroup boundary 与 multi-batch 上做
+   checksum，Metal/Vulkan 重复运行均与 CPU expected 相等且无 CPU wait。counter→payload 的同 dispatch
+   variant 即使偶然通过也不得成为 acceptance evidence；静态检查保证不存在这种 consumer。每个 shader
+   barrier 都由 WGSL validation 证明处于 uniform control flow。
+3. **classifier：** 命名 corpus 覆盖 smooth disk、disk/source edge、periodic/cubemap seam、至少两个
+   winding/higher-order branch、critical curve 两侧；accepted pixel 必须全部通过更密 full-ray oracle 的
+   branch exactness、source/$g$/time/transport variation 与 Jacobian/radiance budgets，任一 false accept
+   都是 blocker。删除每项 gate 的 mutation 必须暴露固定 witness。
+4. **scale convergence：** node spacing/finite-difference step 逐次减半并把 source/image resolution
+   加倍；按 branch/lensing order 比 accepted mask、fallback mask、scene-linear radiance 与 temporal
+   stability，直到预先固定的预算内收敛。不能用同一 sparse stencil 自证。
+5. **filter/radiance：** high-frequency/checkerboard source、sharp disk/shadow edge、steep $g$ 与 optical
+   depth gradient 分别比较 `textureSampleGrad`、explicit EWA/bounded sampling 与 4×/8× full-trace pixel
+   integral；hardware anisotropy 只有在 Metal/Vulkan 都满足同一 observable budget 时才能进入该 profile。
+6. **性能：** 在同一 correctness-approved scene/extent/profile 下记录总 GPU timestamp、fallback ratio、
+   steady/rebuild memory，并与 all-full-KS baseline paired A/B；只有最终 observable 同预算且总时间/显存
+   达到预先阈值，才接受任一 layout、tile 或 fusion 假设。
+
+### 5.6 两个 reconstruction 候选的拒绝证据
+
+在 `8145b24` 基线上做过两个未提交候选，均已从工作区删除。测试机为 Apple M5、Metal、integrated
+GPU；固定 workload 是 1280×720 bolometric surface，命令为：
+
+```text
+cargo bench -p gravlume-render --bench trace_gpu \
+  --features gpu-benchmarks --locked -- --noplot
+```
+
+两个候选都用独立 prepass 在不同 dispatch 生成 2-pixel-spacing semantic map，map node 是 8 个
+`u32`（source $r,\phi,g,t$、packed branch/termination、winding、step count、event residual）。map node
+直接替代同 pixel 的 full trace；reconstruction 只在 exact branch 相同、event phase 可接受且 parity
+不退化时发生，其他 pixel 走原 full Cartesian KS。该布局在 1280×720 占 7,404,832 byte；即使它未触及
+单 binding limit，端到端时间仍是决定性 gate。
+
+1. **额外 edge validator 候选：** 对 cell edge 再发 full rays，并用它们校正 center。所有 accepted
+   center 对独立 binary64 CPU reference 的最大误差为 source `4.076e-5 M`、$g$ relative
+   `2.641e-6`、travel time `4.313e-5 M`，但 GPU 时间为
+   `[36.094, 36.469, 36.850] ms`。correctness 通过不能抵消重复 geodesic 的成本。
+2. **无额外 ray 的 stencil 候选：** 简单 bilinear 曾接受 30,863 个 center；1,517 个确定性分层、
+   rejection-boundary 和 full-GPU-discrepancy 样本的 CPU oracle 给出最大 source `3.174e-2 M`、
+   travel time `3.582e-2 M`、spectral budget ratio `4.395`，因此直接 false-accept。改为 3×3
+   same-branch/same-step-phase、bilinear/biquadratic consistency 后只接受 3,735 个 center；1,389 个同类
+   CPU 样本通过 source `1e-3 M`、$g$ relative `2.5e-4`、time `1e-3 M` 与 FP16 scene-linear
+   spectral budget，但 GPU 时间仍为 `[32.233, 32.574, 32.908] ms`。
+
+删除候选后，同机立即复测的 all-full-KS 基线为 `[19.765, 19.975, 20.191] ms`；Criterion 给出的
+候选相对基线回归约 63%。这里的 CPU 分层样本只能支持“该候选未在样本中 false-accept”，不能替代第
+5.5 节要求的按 branch/order 全域收敛；性能结果则已经足以否决候选，无需用更昂贵 oracle 为其建立
+production 准入证据。
+
+因此不能靠放宽 certificate 或把 validator 融进同一 megakernel 恢复该设计。重开条件是提出能显著减少
+总 geodesic 数的 coarse/adaptive node、stationary transfer-map amortization 或等价方案，并重新通过
+independent CPU/supersample correctness、Metal/Vulkan 总时间与 resource admission；不得只报告 accept
+ratio、dispatch 数或相对另一个已失败候选的改善。
+
+### 5.7 Surface full-KS 的 binary32 phase 边界
+
+reconstruction 失败分析还暴露出一个与 interpolation 无关的边界：production radius-scaled RK4 的
+默认 step scale `0.1` 只在 canonical v2/v3 pixel 通过连续 observable gate，不能据此声称整个 surface
+frame 都满足同一预算。新增的 64×36 branch matrix 在 Schwarzschild、positive/negative-spin Kerr 与
+Kerr–Newman 四个场景各分层抽取最多 24 个 surface pixel；terminal 与 radial/equatorial/winding key
+全部和独立 CPU reference 精确一致。该测试只准入离散语义，不把连续误差隐藏在“branch 正确”之下。
+
+同一矩阵的未提交连续量扫描以 `[source M, g relative, time M, radiance relative]` 记录最大值。默认
+Schwarzschild profile 为 `[2.482e-2, 2.539e-4, 3.161e-2, 2.175e-3]`，超过 source、time 与
+radiance gate。仅缩小 step 没有形成可采用解：scale `0.04` 的 source 已降到 `3.965e-3 M`，但 time
+仍是 `5.473e-3 M`；`0.01` 的 time 为 `1.205e-3 M`；`0.008` 在 Schwarzschild 达到
+`8.454e-4 M`，但 positive-spin-wide 仍为 `1.745e-3 M`；继续到 `0.005` 又因 binary32 trajectory
+roundoff 退化为 `2.269e-3 M`。对正 coordinate-time increments 使用 compensated summation 没有改变
+结果，说明主误差来自 trajectory/event phase，而不是最终标量累加。
+
+这些 step 候选与 compensated hot-loop 均已删除，production 保持已基准化的 `0.1` policy；当前连续
+GPU 证据仍严格限于 canonical v2/v3 fixture。恢复条件不是放宽 `1e-3 M`，而是更高阶/自适应且
+binary32-stable 的 integrator、受限 analytic terminal solver 或显式 science-quality profile，并同时
+通过这组矩阵、near-critical/branch-order corpus 和端到端性能测试。
 
 ## 6. Carlson/椭圆积分作为受限 accelerator
 
@@ -299,8 +515,13 @@ Carlson duplication 本身较规整，不代表前后的 root sorting、case sel
 | 对普通 RGB 直接应用 spectral redshift | **拒绝** | 引入具名 spectrum/bandpass 与频率轴后才可讨论；bolometric 继续只用 $g^4$ |
 | 把 timelike circular existence 当 stable disk | **拒绝** | 独立 effective-potential/epicyclic gate 和 ISCO fixture 通过，且产品确实需要 stable disk 语义 |
 | 持久化完整 `GeometricSample` G-buffer | **暂不采用** | branch-aware reconstruction 证明有 consumer，并通过 layout、显存、误差与 Metal/Vulkan A/B |
-| source-space finite-difference footprint | **下一阶段可实验** | exact semantic key、seam/critical fallback 和 supersampled oracle 先落地 |
+| test-only source-space finite-difference footprint | **已有 ordinary-region 证据，不等于 production** | 继续保留完整 branch key 与 CPU/GPU Jacobian gate；不得将五射线 equality 解释成全 tile 连续性证明 |
+| branch-aware production reconstruction | **当前 2-pixel map 候选已实验并拒绝** | 换用能显著减少总 geodesic 的 coarse/adaptive 或 stationary-amortized 方案，再通过 requested-limit admission、跨 dispatch producer/consumer、按 branch/order 收敛、scene-linear supersample oracle 与端到端 A/B |
 | 所有 Kerr/KN ray 全量改成 Carlson | **拒绝** | 不存在 unsupported/ill-conditioned accepted ray，或始终保留可观测上等价的 KS fallback；端到端收益成立 |
 | pure-Kerr exterior Carlson terminal accelerator | **保留为受限候选** | root-aware classifier、80+ bit oracle、KS observable gate、false-accept sweep 与总 GPU A/B 全部通过 |
 
-推荐的实现顺序是：标量 invariant transport 与解析 slab fixture → spectral/blackbody fixture → 最小 branch key 与 source-space finite-difference footprint → branch-aware reconstruction → pure-Kerr root-aware Carlson CPU oracle/transfer-map candidate。每一步只引入当下 consumer 需要的字段，并继续让 full-KS 定义 unsupported domain 的行为。
+后续采用记录显示，标量 invariant transport、spectral/blackbody fixture、最小 branch key 与 test-only
+finite-difference footprint 已完成；第 5.6 节的 production reconstruction 候选未通过端到端 A/B，
+所以当前生产路径仍保持 full KS。下一轮只能从新的 coarse/adaptive 或 stationary-amortized transfer-map
+设计重开，再考虑 pure-Kerr root-aware Carlson CPU oracle/transfer-map candidate。每一步只引入当下
+consumer 需要的字段，并继续让 full-KS 定义 unsupported domain 的行为。
