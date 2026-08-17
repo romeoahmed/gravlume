@@ -194,11 +194,6 @@ fn pack_surface_transport(
                 slab.emission_temperature_kelvin(),
             )
         });
-    let transmittance = if transmittance < f64::from(f32::MIN_POSITIVE) {
-        0.0
-    } else {
-        transmittance
-    };
     let source_temperature = if emitter_temperature.is_some() && weighted_source_intensity > 0.0 {
         let temperature =
             source_temperature.ok_or(GpuTraceInputError::UnresolvedSlabSourceSpectrum)?;
@@ -219,8 +214,14 @@ fn pack_surface_transport(
         ],
         "surface_transport",
     )?;
+    let transmittance_underflowed = slab.is_some_and(|slab| {
+        slab.optical_depth() > 0.0 && (transmittance == 0.0 || packed[2] == 0.0)
+    });
     let source_underflowed = weighted_source_intensity > 0.0 && packed[3] == 0.0;
-    if source_underflowed || packed.iter().any(|value| value.is_subnormal()) {
+    if transmittance_underflowed
+        || source_underflowed
+        || packed.iter().any(|value| value.is_subnormal())
+    {
         return Err(GpuTraceInputError::NotRepresentable {
             field: "surface_transport",
         });
