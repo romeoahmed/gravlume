@@ -490,12 +490,12 @@ mod tests {
     #[test]
     fn texture_readback_preserves_raw_scene_linear_half_bits() {
         let gpu = crate::test_device::native_gpu();
-        let extent = RenderExtent::new(2, 1).expect("test extent is nonzero");
+        let extent = RenderExtent::new(2, 2).expect("test extent is nonzero");
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("scientific capture raw-bit fixture"),
             size: wgpu::Extent3d {
                 width: 2,
-                height: 1,
+                height: 2,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -505,10 +505,18 @@ mod tests {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let bytes = [
+        let first_row = [
             0x00, 0x3c, 0x00, 0x38, 0x00, 0x00, 0x00, 0x40, 0x00, 0x40, 0x00, 0x42, 0x00, 0x44,
             0x00, 0xc5,
         ];
+        let second_row = [
+            0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00,
+        ];
+        let mut bytes = vec![0_u8; 2 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize];
+        bytes[..first_row.len()].copy_from_slice(&first_row);
+        let second_row_start = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+        bytes[second_row_start..second_row_start + second_row.len()].copy_from_slice(&second_row);
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -519,16 +527,16 @@ mod tests {
             &bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(16),
-                rows_per_image: Some(1),
+                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                rows_per_image: Some(2),
             },
             wgpu::Extent3d {
                 width: 2,
-                height: 1,
+                height: 2,
                 depth_or_array_layers: 1,
             },
         );
-        let mut observation = default_observation(2, 1);
+        let mut observation = default_observation(2, 2);
         let emitter =
             gravlume_domain::EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
                 .expect("test surface is valid");
@@ -545,13 +553,15 @@ mod tests {
         let capture = capture_texture(&gpu.device, &gpu.queue, &texture, extent, 17, metadata)
             .expect("raw texture capture succeeds");
 
-        assert_eq!(capture.extent(), [2, 1]);
+        assert_eq!(capture.extent(), [2, 2]);
         assert_eq!(capture.generation(), 17);
         assert_eq!(
             capture.rgba16_float_bits(),
             [
                 [0x3c00, 0x3800, 0x0000, 0x4000],
-                [0x4000, 0x4200, 0x4400, 0xc500]
+                [0x4000, 0x4200, 0x4400, 0xc500],
+                [0x3c00, 0x0000, 0x0000, 0x3c00],
+                [0x0000, 0x0000, 0x0000, 0x0000],
             ]
         );
         assert_eq!(
@@ -564,7 +574,12 @@ mod tests {
                 termination_code: 5
             })
         );
-        assert_eq!(capture.pixel_kind(2), None);
+        assert_eq!(
+            capture.pixel_kind(2),
+            Some(ScientificPixelKind::AnalyticEscapePreview)
+        );
+        assert_eq!(capture.pixel_kind(3), Some(ScientificPixelKind::Horizon));
+        assert_eq!(capture.pixel_kind(4), None);
     }
 
     #[test]

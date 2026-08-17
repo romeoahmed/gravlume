@@ -297,6 +297,11 @@ $(r,r_c\Delta\phi)$ 的 central-difference $J$ 与 parity。canonical ordinary s
 diagnostic step policy，GPU/CPU Jacobian 的 matrix max-norm relative error gate 为 `3e-3`；任一
 semantic mismatch 输出 discontinuity。该证据不等于 production reconstruction 已实现。
 
+离散 surface branch matrix 另覆盖 Schwarzschild、正/负自旋 Kerr 与 Kerr–Newman 四个 64×36
+profile，每个 profile 对最多 24 个分层 surface pixel 要求 CPU/GPU terminal、radial turnings、
+equatorial crossings 与 signed winding exact equality。该 matrix 不改变上表连续预算，也不把尚未通过
+同预算的非 canonical source/time 样本登记为连续 agreement evidence。
+
 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过 travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入常规测试。
 
 ## 6. Fixture envelope

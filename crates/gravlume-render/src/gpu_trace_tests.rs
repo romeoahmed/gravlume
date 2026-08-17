@@ -243,6 +243,99 @@ fn gpu_surface_footprint_matches_the_branch_checked_reference_jacobian() {
     assert_eq!(gpu.event[3], expected_initial_side);
 }
 
+#[test]
+fn gpu_surface_branch_keys_match_the_reference_profile_matrix() {
+    let profiles = [
+        ("schwarzschild", 0.0, 0.0, 30.0, std::f64::consts::FRAC_PI_4),
+        (
+            "positive-spin-wide",
+            0.8,
+            0.0,
+            30.0,
+            std::f64::consts::FRAC_PI_2,
+        ),
+        (
+            "negative-spin-near",
+            -0.8,
+            0.0,
+            12.0,
+            std::f64::consts::FRAC_PI_4,
+        ),
+        ("kerr-newman", 0.6, 0.5, 30.0, std::f64::consts::FRAC_PI_4),
+    ];
+    let oracle = ObservationTracer::baseline_v1();
+    for (label, spin, charge, observer_radius, vertical_fov) in profiles {
+        let base = transfer_profile_extent(spin, charge, observer_radius, vertical_fov, 64, 36);
+        let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
+            .expect("matrix surface is valid");
+        let observation = Observation::new(
+            base.scene()
+                .clone()
+                .with_equatorial_circular_emitter(emitter),
+            *base.view(),
+        );
+        let capture = capture_trace(&observation);
+        let surface_indices = capture
+            .records
+            .iter()
+            .enumerate()
+            .filter_map(|(index, record)| {
+                (record.metadata[0] == u32::from(TraceTermination::EquatorialSurface))
+                    .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !surface_indices.is_empty(),
+            "{label}: matrix profile must resolve surface pixels"
+        );
+
+        let sample_count = surface_indices.len().min(24);
+        for stratum in 0..sample_count {
+            let index = surface_indices[stratum * surface_indices.len() / sample_count];
+            let pixel_x = u32::try_from(index % 64).expect("matrix x fits u32");
+            let pixel_y = u32::try_from(index / 64).expect("matrix y fits u32");
+            let reference = oracle
+                .trace(
+                    ObservationTrace::new(
+                        TraceInputId::new(format!("surface-branch-{label}-{index}")),
+                        &observation,
+                        sample(&observation, pixel_x, pixel_y, 0.5, 0.5),
+                        ReferencePolicy::regular_v1(),
+                    )
+                    .expect("matrix trace request resolves"),
+                )
+                .expect("matrix reference trace succeeds");
+            assert_eq!(
+                reference.termination(),
+                Termination::EquatorialSurface,
+                "{label}: terminal mismatch at pixel {index}"
+            );
+            let branch = reference.branch_key();
+            let gpu = capture.records[index];
+            assert_eq!(
+                gpu.event[2] & 0xffff,
+                branch.radial_turnings(),
+                "{label}: radial branch at pixel {index}"
+            );
+            assert_eq!(
+                gpu.event[2] >> 16,
+                branch.equatorial_crossings(),
+                "{label}: equatorial branch at pixel {index}"
+            );
+            assert_eq!(
+                i32::from_ne_bytes(gpu.event[3].to_ne_bytes()),
+                branch.azimuth_winding(),
+                "{label}: winding branch at pixel {index}"
+            );
+            assert_eq!(
+                branch.initial_polar_side(),
+                PolarSide::Positive,
+                "{label}: observer is above the source plane"
+            );
+        }
+    }
+}
+
 proptest! {
     #[test]
     fn non_boundary_unknown_trace_termination_discriminants_are_rejected(
@@ -363,6 +456,32 @@ fn gpu_trace_rejects_transport_models_without_a_resolvable_spectral_contract() {
         TraceUniforms::from_observation(&unresolved_spectrum),
         Err(crate::GpuTraceInputError::UnresolvedSlabSourceSpectrum)
     ));
+}
+
+#[test]
+fn gpu_trace_rejects_a_positive_transmittance_that_binary32_cannot_preserve_normally() {
+    let base = default_observation(1, 1);
+    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0e38)
+        .expect("the high dynamic-range surface is intrinsically valid");
+
+    for optical_depth in [92.0, 1_000.0] {
+        let slab = HomogeneousScalarSlab::pure_absorption_v1(optical_depth)
+            .expect("the high optical-depth slab is intrinsically valid");
+        let observation = Observation::new(
+            base.scene()
+                .clone()
+                .with_equatorial_circular_emitter(emitter)
+                .with_homogeneous_scalar_slab(slab),
+            *base.view(),
+        );
+
+        assert!(matches!(
+            TraceUniforms::from_observation(&observation),
+            Err(crate::GpuTraceInputError::NotRepresentable {
+                field: "surface_transport"
+            })
+        ));
+    }
 }
 
 #[test]
