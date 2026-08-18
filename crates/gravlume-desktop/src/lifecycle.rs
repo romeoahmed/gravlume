@@ -59,7 +59,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn lifecycle_matches_its_small_transition_model(events in prop::collection::vec(event(), 0..64)) {
+        fn lifecycle_matches_its_small_transition_model(events in prop::collection::vec(event(), 1..=64)) {
             let mut lifecycle = Lifecycle::default();
             let mut active = false;
             let mut fatal = false;

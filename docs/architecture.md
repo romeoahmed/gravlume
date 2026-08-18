@@ -210,6 +210,6 @@ semantic kind，不声称所有异常 bit pattern 跨 backend 原样保存。[We
 
 ## 验证与 benchmark
 
-测试保护 observable、生命周期、数值预算、ABI 与 GPU resource semantics；不冻结错误文案、private helper、pass 数量或未经证明的性能阈值。当前覆盖见 [GPU 证据](gpu-renderer.md)。
+测试保护 observable、生命周期、数值预算、ABI 与 GPU resource semantics；不冻结错误文案、private helper、pass 数量或未经证明的性能阈值。浮点 observable 按具名 absolute/relative budget 比较；值的二进制身份本身是合同时，如 artifact identity、ABI field 或 exact representability，才使用 exact-bit equality。当前覆盖见 [GPU 证据](gpu-renderer.md)。
 
 Cargo `benches/` target 只能使用 library public interface，因此 feature-gated `gravlume_render::benchmark::register` 是一个有真实第二消费者的窄 seam。[Cargo benchmark targets](https://doc.rust-lang.org/cargo/reference/cargo-targets.html#benchmarks) Benchmark 方法与历史数据只在[研究记录](research/gpu-benchmark-methodology.md)维护。

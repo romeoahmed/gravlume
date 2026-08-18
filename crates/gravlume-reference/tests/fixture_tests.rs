@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 
+use approx::assert_abs_diff_eq;
 use gravlume_reference::{
     AffineDirection, ComparisonError, EscapeDirection, FixtureDocument, FixtureError,
     GeodesicBatch, GeodesicFixture, GeodesicTrace, GeodesicTracer, ObservationFixture,
@@ -305,7 +306,11 @@ fn turning_radius_is_dense_localized_for_negative_affine_traversal() {
     assert_eq!(backward.termination(), Termination::Escape);
     let forward_turning_radius = forward.turning_radius_m().expect("forward ray turns");
     let backward_turning_radius = backward.turning_radius_m().expect("backward ray turns");
-    assert!((backward_turning_radius - forward_turning_radius).abs() <= 5.0e-11);
+    assert_abs_diff_eq!(
+        backward_turning_radius,
+        forward_turning_radius,
+        epsilon = 5.0e-11
+    );
 }
 
 #[test]
@@ -326,7 +331,11 @@ fn travel_time_is_independent_of_the_coordinate_time_origin() {
 
     assert_eq!(shifted.termination(), baseline.termination());
     assert!(shifted.travel_time_m() > 0.0);
-    assert!((shifted.travel_time_m() - baseline.travel_time_m()).abs() <= 2.0e-8);
+    assert_abs_diff_eq!(
+        shifted.travel_time_m(),
+        baseline.travel_time_m(),
+        epsilon = 2.0e-8
+    );
 }
 
 #[test]
@@ -405,7 +414,7 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
         escape_direction[0],
         terminal[2].mul_add(escape_direction[1], terminal[3] * escape_direction[2]),
     );
-    assert!((direction_norm - 1.0).abs() <= 8.0 * f64::EPSILON);
+    assert_abs_diff_eq!(direction_norm, 1.0, epsilon = 8.0 * f64::EPSILON);
     assert!(radial_dot > 0.0, "escape traversal must point outward");
 
     let strict_request =

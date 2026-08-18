@@ -258,6 +258,7 @@ impl<C> GpuTimings<C> {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_abs_diff_eq;
     use num_traits::ToPrimitive as _;
     use proptest::prelude::*;
 
@@ -299,7 +300,7 @@ mod tests {
             },
             1_000.0,
         );
-        assert!((ordinary.compute_ms() - 0.012).abs() <= f64::EPSILON);
+        assert_abs_diff_eq!(ordinary.compute_ms(), 0.012, epsilon = f64::EPSILON);
 
         let saturated = TimingSample::from_ticks(
             QueryTicks {
@@ -309,7 +310,11 @@ mod tests {
             1.0,
         );
         let expected = u64::MAX.to_f64().expect("u64 converts to finite f64") / 1_000_000.0;
-        assert!((saturated.compute_ms() - expected).abs() <= expected * f64::EPSILON);
+        assert_abs_diff_eq!(
+            saturated.compute_ms(),
+            expected,
+            epsilon = expected * f64::EPSILON
+        );
     }
 
     #[test]

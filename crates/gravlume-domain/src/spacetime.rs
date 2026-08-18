@@ -772,6 +772,7 @@ fn dot_components(left: [f64; 4], right: [f64; 4]) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use approx::{abs_diff_eq, assert_abs_diff_eq};
     use proptest::prelude::*;
 
     use super::{KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent};
@@ -862,7 +863,11 @@ mod tests {
                         );
                         let scale = term_norm.max(expected[row][column].abs()).max(1.0);
                         prop_assert!(
-                            (actual - expected[row][column]).abs() <= 128.0 * f64::EPSILON * scale,
+                            abs_diff_eq!(
+                                actual,
+                                expected[row][column],
+                                epsilon = 128.0 * f64::EPSILON * scale
+                            ),
                             "{chart:?}, a={spin}: g[{row},{column}] was {actual:e}, expected {:e}",
                             expected[row][column]
                         );
@@ -885,13 +890,15 @@ mod tests {
                 .expect("fixture parameters are valid");
             let geometry = spacetime.geometry(event).expect("axis geometry is regular");
 
-            assert!(
-                (geometry.null_vector_gradient[0][2] + expected_spin_derivative).abs()
-                    <= 8.0 * f64::EPSILON
+            assert_abs_diff_eq!(
+                geometry.null_vector_gradient[0][2],
+                -expected_spin_derivative,
+                epsilon = 8.0 * f64::EPSILON
             );
-            assert!(
-                (geometry.null_vector_gradient[1][1] - expected_spin_derivative).abs()
-                    <= 8.0 * f64::EPSILON
+            assert_abs_diff_eq!(
+                geometry.null_vector_gradient[1][1],
+                expected_spin_derivative,
+                epsilon = 8.0 * f64::EPSILON
             );
         }
     }

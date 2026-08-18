@@ -14,7 +14,7 @@ Gravlume 是原生 Rust 2024 桌面应用。支持 macOS/Metal、Windows/Vulkan 
 | domain/ABI           | glam、bytemuck、num-traits                               | domain math 与显式 GPU DTO 分离                  |
 | reference/fixtures   | serde、toml、rayon                                       | `gravlume-reference`                             |
 | errors/diagnostics   | thiserror、tracing、pollster                             | typed crate interfaces；root 安装唯一 subscriber |
-| verification         | proptest、optional Criterion                             | contract/property tests 与显式 GPU bench target  |
+| verification         | approx、proptest、optional Criterion                     | 浮点断言、property tests 与显式 GPU bench target |
 
 平台 Cargo features 只在对应 target 增量启用：macOS 只启用 Metal，Windows/Linux 只启用 Vulkan，Linux 只启用 Wayland。Dependency 必须属于直接消费者。修改依赖后运行 `cargo tree -e features`，确认 X11 和未授权 backend 没有进入闭包。
 

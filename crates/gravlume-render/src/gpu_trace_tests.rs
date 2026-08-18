@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use approx::assert_abs_diff_eq;
 use gravlume_domain::{
     Angle, EquatorialCircularEmitter, EquatorialSurface, ImageSample, KerrNewmanSpacetime,
     KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
@@ -92,7 +93,11 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
         i32::from_ne_bytes(gpu.event[3].to_ne_bytes()),
         reference_branch.azimuth_winding()
     );
-    assert!((f64::from(gpu.source_time[0]) - reference_anchor.radius_m()).abs() <= 5.0e-3);
+    assert_abs_diff_eq!(
+        f64::from(gpu.source_time[0]),
+        reference_anchor.radius_m(),
+        epsilon = 5.0e-3
+    );
     let azimuth_error = (f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad())
         .sin()
         .atan2((f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad()).cos())
@@ -102,13 +107,16 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
         "source azimuth error {azimuth_error:e}"
     );
     let reference_ratio = reference_observable.frequency_ratio().value();
-    let ratio_relative_error =
-        (f64::from(gpu.source_time[2]) - reference_ratio).abs() / reference_ratio;
-    assert!(
-        ratio_relative_error <= 2.0e-3,
-        "frequency-ratio error {ratio_relative_error:e}"
+    assert_abs_diff_eq!(
+        f64::from(gpu.source_time[2]),
+        reference_ratio,
+        epsilon = 2.0e-3 * reference_ratio
     );
-    assert!((f64::from(gpu.source_time[3]) - reference.travel_time_m()).abs() <= 1.0e-3);
+    assert_abs_diff_eq!(
+        f64::from(gpu.source_time[3]),
+        reference.travel_time_m(),
+        epsilon = 1.0e-3
+    );
 
     let expected = reference_observable.observed_bolometric_intensity();
     let pixel = capture.hdr_pixel(index);
@@ -121,10 +129,7 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
         let actual = decode_f16(u16::from_le_bytes(
             channel.try_into().expect("half channel has two bytes"),
         ));
-        assert!(
-            (f64::from(actual) - expected).abs() / expected <= 2.0e-3,
-            "surface radiance {actual:e}, expected {expected:e}"
-        );
+        assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 2.0e-3 * expected);
     }
 }
 

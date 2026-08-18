@@ -345,14 +345,6 @@ const fn encode_initial_polar_side(height_m: f64) -> u32 {
     }
 }
 
-#[cfg(test)]
-#[test]
-fn initial_polar_side_is_encoded_before_binary32_packing() {
-    for (height_m, expected) in [(-1.0e-50, 0), (0.0, 1), (1.0e-50, 2)] {
-        assert_eq!(encode_initial_polar_side(height_m), expected);
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum GpuTraceInputError {
     #[error("validated observation failed to resolve its initial ray: {0}")]
@@ -1408,6 +1400,53 @@ impl TryFrom<u32> for TraceTermination {
             6 => Ok(Self::Uncertain),
             7 => Ok(Self::EquatorialSurface),
             unknown => Err(UnknownTraceTermination(unknown)),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::num::NonZeroU32;
+
+    use gravlume_domain::{
+        Angle, KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+        StationaryObserverInput,
+    };
+
+    use super::TraceUniforms;
+
+    #[test]
+    fn trace_uniforms_preserve_polar_side_before_binary32_packing() {
+        for (observer_z, expected_side) in [(-1.0e-50, 0.0_f32), (0.0, 1.0_f32), (1.0e-50, 2.0_f32)]
+        {
+            let observer = StationaryObserverInput::new(
+                [0.0, 30.0, 0.0, observer_z],
+                [0.0; 4],
+                [0.0, 0.0, 1.0],
+                1.0,
+            );
+            let scene = PhysicalScene::new(PhysicalSceneInput::new(
+                1.0,
+                0.0,
+                0.0,
+                KerrSchildChart::Outgoing,
+                observer,
+            ))
+            .expect("the generated observer is stationary");
+            let view = PerspectiveView::new(
+                NonZeroU32::MIN,
+                NonZeroU32::MIN,
+                Angle::from_radians(std::f64::consts::FRAC_PI_4)
+                    .expect("the test field of view is finite"),
+            )
+            .expect("the test view is valid");
+            let uniforms = TraceUniforms::from_observation(&Observation::new(scene, view))
+                .expect("the observation is representable by the GPU contract");
+
+            assert_eq!(
+                uniforms.observer_event[0].to_bits(),
+                expected_side.to_bits()
+            );
         }
     }
 }
