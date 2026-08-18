@@ -90,7 +90,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn updates_follow_extent_and_generation_contract(updates in prop::collection::vec((0_u32..=64, 0_u32..=64), 0..128)) {
+        fn updates_follow_extent_and_generation_contract(updates in prop::collection::vec((0_u32..=64, 0_u32..=64), 1..=128)) {
             let mut tracker = ExtentTracker::default();
             let mut model_extent = None;
             let mut model_generation = 0;

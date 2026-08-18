@@ -1,3 +1,4 @@
+use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_domain::{
     Extremality, GeometryError, KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent,
     ValidationIssueCode,
@@ -16,7 +17,11 @@ fn extremality_and_horizon_are_classified_without_clamping() {
     assert_eq!(subextremal.extremality(), Extremality::Subextremal);
     assert_eq!(extremal.extremality(), Extremality::Extremal);
     assert_eq!(superextremal.extremality(), Extremality::Superextremal);
-    assert!((subextremal.outer_horizon_radius().expect("horizon exists") - 1.6).abs() < 2.0e-15);
+    assert_abs_diff_eq!(
+        subextremal.outer_horizon_radius().expect("horizon exists"),
+        1.6,
+        epsilon = 2.0e-15
+    );
     assert_eq!(extremal.outer_horizon_radius(), Some(1.0));
     assert_eq!(superextremal.outer_horizon_radius(), None);
 }
@@ -92,8 +97,12 @@ proptest! {
         let radial_denominator = spin.mul_add(spin, radius * radius);
         let identity = transverse_squared / radial_denominator + z * z / radius.powi(2);
 
-        prop_assert!((radius / (mass * radius_fraction) - 1.0).abs() < 4.0e-14);
-        prop_assert!((identity - 1.0).abs() < 2.0e-13);
+        prop_assert!(abs_diff_eq!(
+            radius / (mass * radius_fraction),
+            1.0,
+            epsilon = 4.0e-14
+        ));
+        prop_assert!(abs_diff_eq!(identity, 1.0, epsilon = 2.0e-13));
         prop_assert!(
             spacetime
                 .metric_inverse_residual(event)
@@ -116,7 +125,11 @@ fn kerr_schild_branch_reverses_the_radial_direction_and_oblate_twist() {
         .hamiltonian_rhs(state)
         .expect("geometry is regular");
 
-    assert!((ingoing_rhs[1] + outgoing_rhs[1]).abs() < 4.0 * f64::EPSILON);
+    assert_abs_diff_eq!(
+        ingoing_rhs[1],
+        -outgoing_rhs[1],
+        epsilon = 4.0 * f64::EPSILON
+    );
 
     let polar = std::f64::consts::FRAC_PI_3;
     let ingoing_position = ingoing.oblate_to_cartesian(30.0, polar, 0.0);
@@ -125,7 +138,11 @@ fn kerr_schild_branch_reverses_the_radial_direction_and_oblate_twist() {
         ingoing_position[0].to_bits(),
         outgoing_position[0].to_bits()
     );
-    assert!((ingoing_position[1] + outgoing_position[1]).abs() < 4.0 * f64::EPSILON);
+    assert_abs_diff_eq!(
+        ingoing_position[1],
+        -outgoing_position[1],
+        epsilon = 4.0 * f64::EPSILON
+    );
     assert_eq!(
         ingoing_position[2].to_bits(),
         outgoing_position[2].to_bits()
@@ -162,14 +179,17 @@ fn schwarzschild_limit_is_spherical_and_stationary() {
         .expect("parameters are valid");
     let event = SpacetimeEvent::from_txyz([7.0, 3.0, 4.0, 12.0]).expect("event is finite");
 
-    assert!((spacetime.radius(event).expect("radius exists") - 13.0).abs() < f64::EPSILON);
-    assert!(
-        (spacetime
+    assert_abs_diff_eq!(
+        spacetime.radius(event).expect("radius exists"),
+        13.0,
+        epsilon = f64::EPSILON
+    );
+    assert_abs_diff_eq!(
+        spacetime
             .metric_component_tt(event)
-            .expect("metric is finite")
-            + 9.0 / 13.0)
-            .abs()
-            < 2.0e-15
+            .expect("metric is finite"),
+        -9.0 / 13.0,
+        epsilon = 2.0e-15
     );
 }
 
@@ -220,24 +240,22 @@ fn reissner_nordstrom_and_minkowski_limits_match_closed_form_g_tt() {
     let reissner_nordstrom = KerrNewmanSpacetime::new(1.0, 0.0, 0.6, KerrSchildChart::Ingoing)
         .expect("parameters are valid");
     let expected_g_tt = -1.0 + 2.0 / 10.0 - 0.6_f64.powi(2) / 10.0_f64.powi(2);
-    assert!(
-        (reissner_nordstrom
+    assert_abs_diff_eq!(
+        reissner_nordstrom
             .metric_component_tt(event)
-            .expect("metric is finite")
-            - expected_g_tt)
-            .abs()
-            < 4.0 * f64::EPSILON
+            .expect("metric is finite"),
+        expected_g_tt,
+        epsilon = 4.0 * f64::EPSILON
     );
 
     let minkowski_limit = KerrNewmanSpacetime::new(1.0e-12, 0.0, 0.0, KerrSchildChart::Ingoing)
         .expect("positive mass is valid");
-    assert!(
-        (minkowski_limit
+    assert_abs_diff_eq!(
+        minkowski_limit
             .metric_component_tt(event)
-            .expect("metric is finite")
-            + 1.0)
-            .abs()
-            < 2.1e-13
+            .expect("metric is finite"),
+        -1.0,
+        epsilon = 2.1e-13
     );
     assert!(
         minkowski_limit

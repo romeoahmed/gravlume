@@ -1,5 +1,6 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
+use approx::abs_diff_eq;
 use gravlume_domain::{
     Angle, EquatorialCircularEmitter, EquatorialEmissionModel, EquatorialSurface,
     HomogeneousScalarSlab, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
@@ -223,7 +224,11 @@ proptest! {
 
         prop_assert!(normalized_emission > 0.0);
         prop_assert!(normalized_emission <= 1.0);
-        prop_assert!((normalized_emission - 1.0).abs() <= optical_depth);
+        prop_assert!(abs_diff_eq!(
+            normalized_emission,
+            1.0,
+            epsilon = optical_depth
+        ));
     }
 
     #[test]
@@ -246,7 +251,11 @@ proptest! {
             .expect("sample remains valid for the observation view");
 
         prop_assert!(ray.normalized_null_residual() < 2.0e-12);
-        prop_assert!((ray.observer_frequency() - 1.0).abs() < 2.0e-12);
+        prop_assert!(abs_diff_eq!(
+            ray.observer_frequency(),
+            1.0,
+            epsilon = 2.0e-12
+        ));
         prop_assert!(ray.observer_frequency() > 0.0);
     }
 }

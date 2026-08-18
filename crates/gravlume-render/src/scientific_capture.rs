@@ -380,7 +380,7 @@ mod tests {
             ScientificChannelModel::BolometricRepeated,
         );
 
-        assert_f64_contract(metadata.mass_m(), 1.0);
+        assert_eq!(metadata.mass_m().to_bits(), 1.0_f64.to_bits());
         assert_eq!(metadata.surface(), bolometric_surface);
         assert_eq!(
             metadata.channels(),
@@ -552,13 +552,15 @@ mod tests {
     fn assert_numerical_contract(metadata: ScientificNumericalMetadata, has_spectrum: bool) {
         let spectral = |value| has_spectrum.then_some(value);
 
-        assert_f64_contract(
-            f64::from(metadata.invariant_relative_drift_limit()),
-            f64::from(INVARIANT_DRIFT_LIMIT),
+        assert_eq!(
+            metadata.invariant_relative_drift_limit().to_bits(),
+            INVARIANT_DRIFT_LIMIT.to_bits()
         );
-        assert_f64_contract(
-            metadata.bolometric_surface_relative_error_budget(),
-            BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
+        assert_eq!(
+            metadata
+                .bolometric_surface_relative_error_budget()
+                .to_bits(),
+            BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET.to_bits()
         );
         assert_eq!(
             metadata.spectral_surface_relative_error_budget(),
@@ -575,14 +577,6 @@ mod tests {
         assert_eq!(
             metadata.spectral_lut_relative_error_fraction_floor(),
             spectral(SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR)
-        );
-    }
-
-    fn assert_f64_contract(actual: f64, expected: f64) {
-        let tolerance = f64::EPSILON * expected.abs().max(1.0);
-        assert!(
-            (actual - expected).abs() <= tolerance,
-            "{actual:e} differs from {expected:e} by more than {tolerance:e}"
         );
     }
 

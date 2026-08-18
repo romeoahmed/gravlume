@@ -1,3 +1,4 @@
+use approx::assert_abs_diff_eq;
 use gravlume_domain::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart};
 use gravlume_reference::{
     AffineDirection, EventConfiguration, EventConfigurationError, GeodesicConfigurationError,
@@ -105,7 +106,7 @@ fn weak_field_scattering_converges_to_the_leading_four_m_over_b_deflection() {
     );
     let deflection = outcome.azimuth_advance_rad() - flat_boundary_angle;
     let leading_order = 4.0 * mass_m / impact_parameter_m;
-    assert!((deflection - leading_order).abs() / leading_order < 0.08);
+    assert_abs_diff_eq!(deflection, leading_order, epsilon = 0.08 * leading_order);
 }
 
 #[test]
@@ -126,7 +127,7 @@ fn equatorial_surface_is_localized_as_a_distinct_terminal_event() {
         ));
 
     assert_eq!(outcome.termination(), Termination::EquatorialSurface);
-    assert!(outcome.state().components()[3].abs() < 2.0e-11);
+    assert_abs_diff_eq!(outcome.state().components()[3], 0.0, epsilon = 2.0e-11);
 }
 
 #[test]

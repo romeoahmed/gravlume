@@ -139,6 +139,8 @@ fn planck_kernel(x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use approx::assert_abs_diff_eq;
+
     use super::{blackbody_band_log2_fractions, blackbody_log2_fraction_lut};
 
     #[test]
@@ -163,7 +165,7 @@ mod tests {
         ];
 
         for (actual, expected) in actual.into_iter().zip(expected) {
-            assert!((actual - expected).abs() <= 2.0e-14);
+            assert_abs_diff_eq!(actual, expected, epsilon = 2.0e-14);
         }
     }
 }

@@ -19,6 +19,7 @@ rust-version = "1.97"
 publish = false
 
 [workspace.dependencies]
+approx = { version = "0.5.1", default-features = false, features = ["std"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 block2 = { version = "0.6", default-features = false, features = ["alloc"] }
 criterion = { version = "0.8.2", default-features = false, features = [

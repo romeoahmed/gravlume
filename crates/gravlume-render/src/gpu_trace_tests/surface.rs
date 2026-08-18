@@ -1,3 +1,4 @@
+use approx::assert_abs_diff_eq;
 use gravlume_domain::{
     EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, Observation,
     SurfaceTransport,
@@ -60,10 +61,7 @@ fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
             let actual = decode_f16(u16::from_le_bytes(
                 channel.try_into().expect("half channel has two bytes"),
             ));
-            assert!(
-                (f64::from(actual) - expected).abs() / expected <= 4.0e-3,
-                "spectral surface radiance {actual:e}, expected {expected:e}"
-            );
+            assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
         }
     }
 }
@@ -107,10 +105,10 @@ fn gpu_surface_footprint_matches_the_branch_checked_reference_jacobian() {
                 )
             },
         );
-    assert!(
-        maximum_error / maximum_reference_component <= 3.0e-3,
-        "GPU footprint max-norm error {maximum_error:e} against scale \
-         {maximum_reference_component:e}"
+    assert_abs_diff_eq!(
+        maximum_error,
+        0.0,
+        epsilon = 3.0e-3 * maximum_reference_component
     );
     let expected_parity = match reference.parity() {
         SurfaceParity::Positive => 1,
@@ -374,10 +372,7 @@ fn high_absorption_keeps_a_representable_outgoing_surface_intensity() {
         pixel[..2].try_into().expect("red channel has two bytes"),
     ));
     let expected = emitted_intensity * (-79.0_f64).exp() * 1.1_f64.powi(4);
-    assert!(
-        (f64::from(actual) - expected).abs() / expected <= 2.0e-3,
-        "surface radiance {actual:e}, expected {expected:e}",
-    );
+    assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 2.0e-3 * expected);
 }
 
 #[test]
@@ -405,10 +400,7 @@ fn low_temperature_diluted_spectrum_preserves_gpu_radiance() {
         let actual = decode_f16(u16::from_le_bytes(
             channel.try_into().expect("half channel has two bytes"),
         ));
-        assert!(
-            (f64::from(actual) - expected).abs() / expected <= 4.0e-3,
-            "surface radiance {actual:e}, expected {expected:e}",
-        );
+        assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
     }
 }
 

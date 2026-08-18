@@ -321,13 +321,17 @@ pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use approx::{abs_diff_eq, assert_abs_diff_eq};
     use gravlume_domain::{
         EquatorialCircularEmitter, EquatorialSurface, GeodesicState, KerrNewmanSpacetime,
         KerrSchildChart, SurfaceTransport,
     };
     use proptest::prelude::*;
 
-    use super::{SurfaceObservableError, observable_at, vacuum_observed_bolometric_intensity};
+    use super::{
+        SurfaceObservableError, observable_at, vacuum_observed_bolometric_intensity,
+        wrapped_angle_difference,
+    };
 
     #[test]
     fn schwarzschild_frequency_ratio_matches_the_circular_orbit_closed_form() {
@@ -339,7 +343,11 @@ mod tests {
             .expect("the r = 6 M circular orbit is timelike");
 
         let expected = 0.5_f64.sqrt();
-        assert!((observable.frequency_ratio().value() - expected).abs() <= 4.0 * f64::EPSILON);
+        assert_abs_diff_eq!(
+            observable.frequency_ratio().value(),
+            expected,
+            epsilon = 4.0 * f64::EPSILON
+        );
     }
 
     #[test]
@@ -377,13 +385,38 @@ mod tests {
             let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
                 .expect("generated circular source orbit is timelike");
             let anchor = observable.source_anchor();
-            let azimuth_difference = anchor.azimuth_rad() - azimuth_rad;
-            let azimuth_error = azimuth_difference.sin().atan2(azimuth_difference.cos()).abs();
+            let azimuth_error =
+                wrapped_angle_difference(anchor.azimuth_rad(), azimuth_rad).abs();
 
-            prop_assert!(
-                (anchor.radius_m() - radius_m).abs() <= 64.0 * f64::EPSILON * radius_m
-            );
+            prop_assert!(abs_diff_eq!(
+                anchor.radius_m(),
+                radius_m,
+                epsilon = 64.0 * f64::EPSILON * radius_m
+            ));
             prop_assert!(azimuth_error <= 64.0 * f64::EPSILON);
+        }
+
+        #[test]
+        fn wrapped_angle_difference_is_principal_and_periodic(
+            left in -std::f64::consts::PI..=std::f64::consts::PI,
+            right in -std::f64::consts::PI..=std::f64::consts::PI,
+            turns in -8_i32..=8,
+        ) {
+            let raw = left - right;
+            let shifted_right = f64::from(turns).mul_add(std::f64::consts::TAU, right);
+            let wrapped = wrapped_angle_difference(left, shifted_right);
+
+            prop_assert!((-std::f64::consts::PI..std::f64::consts::PI).contains(&wrapped));
+            prop_assert!(abs_diff_eq!(
+                wrapped.sin(),
+                raw.sin(),
+                epsilon = 256.0 * f64::EPSILON
+            ));
+            prop_assert!(abs_diff_eq!(
+                wrapped.cos(),
+                raw.cos(),
+                epsilon = 256.0 * f64::EPSILON
+            ));
         }
 
         #[test]

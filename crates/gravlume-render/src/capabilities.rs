@@ -294,6 +294,7 @@ mod tests {
         required_device_limits, select_surface,
     };
     use gravlume_native_display::{DynamicRange, UnknownDisplayState};
+    use proptest::prelude::*;
 
     #[test]
     fn device_limits_do_not_copy_adapter_buffer_capacity() {
@@ -340,6 +341,35 @@ mod tests {
         }
     }
 
+    // Keep the contract boundaries first so failures shrink toward the acceptance seam.
+    // Source: https://docs.rs/proptest/1.11.0/proptest/macro.prop_oneof.html
+    fn tone_map_headroom() -> impl Strategy<Value = f32> {
+        prop_oneof![
+            Just(1.0),
+            Just(1.0_f32.next_down()),
+            Just(1.0_f32.next_up()),
+            Just(0.0),
+            Just(-0.0),
+            Just(f32::INFINITY),
+            Just(f32::NEG_INFINITY),
+            Just(f32::NAN),
+            any::<f32>(),
+        ]
+    }
+
+    fn reference_white_scale() -> impl Strategy<Value = f32> {
+        prop_oneof![
+            Just(f32::from_bits(1)),
+            Just(0.0),
+            Just(-0.0),
+            Just(f32::MAX),
+            Just(f32::INFINITY),
+            Just(f32::NEG_INFINITY),
+            Just(f32::NAN),
+            any::<f32>(),
+        ]
+    }
+
     #[test]
     fn output_resolver_selects_hdr_or_preserves_the_sdr_fallback_reason() {
         let caps = capabilities(&[
@@ -370,19 +400,10 @@ mod tests {
         assert_eq!(selected.output_mode(), OutputMode::Hdr);
         assert_eq!(selected.present_mode(), wgpu::PresentMode::Fifo);
         assert_eq!(selected.alpha_mode(), wgpu::CompositeAlphaMode::Opaque);
-        assert!((selected.tone_map_headroom() - 4.0).abs() <= f32::EPSILON);
-        assert!((selected.reference_white_scale() - 2.5).abs() <= f32::EPSILON);
-        let invalid = select_surface(
-            &caps,
-            DynamicRange::Hdr {
-                tone_map_headroom: f32::NAN,
-                reference_white_scale: 1.0,
-            },
-        )
-        .expect("invalid HDR metadata has a color-correct SDR fallback");
+        assert_eq!(selected.tone_map_headroom().to_bits(), 4.0_f32.to_bits());
         assert_eq!(
-            invalid.output_mode(),
-            OutputMode::Sdr(SdrReason::DisplayStateQueryFailed)
+            selected.reference_white_scale().to_bits(),
+            2.5_f32.to_bits()
         );
         let fallback =
             select_surface(&caps, DynamicRange::Suppressed).expect("an SDR fallback is available");
@@ -412,6 +433,56 @@ mod tests {
             manual.output_mode(),
             OutputMode::Sdr(SdrReason::DisplayReportedSdr)
         );
+    }
+
+    proptest! {
+        #[test]
+        fn hdr_parameters_are_accepted_exactly_on_their_valid_domain(
+            tone_map_headroom in tone_map_headroom(),
+            reference_white_scale in reference_white_scale(),
+        ) {
+            let caps = capabilities(&[
+                (
+                    wgpu::TextureFormat::Rgba16Float,
+                    wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+                ),
+                (
+                    wgpu::TextureFormat::Bgra8UnormSrgb,
+                    wgpu::SurfaceColorSpaces::SRGB,
+                ),
+            ]);
+            let selected = select_surface(
+                &caps,
+                DynamicRange::Hdr {
+                    tone_map_headroom,
+                    reference_white_scale,
+                },
+            )
+            .expect("the generated capabilities always provide an SDR fallback");
+            let valid = tone_map_headroom.is_finite()
+                && tone_map_headroom >= 1.0
+                && reference_white_scale.is_finite()
+                && reference_white_scale > 0.0;
+
+            if valid {
+                prop_assert_eq!(selected.output_mode(), OutputMode::Hdr);
+                prop_assert_eq!(
+                    selected.tone_map_headroom().to_bits(),
+                    tone_map_headroom.to_bits()
+                );
+                prop_assert_eq!(
+                    selected.reference_white_scale().to_bits(),
+                    reference_white_scale.to_bits()
+                );
+            } else {
+                prop_assert_eq!(
+                    selected.output_mode(),
+                    OutputMode::Sdr(SdrReason::DisplayStateQueryFailed)
+                );
+                prop_assert_eq!(selected.tone_map_headroom().to_bits(), 1.0_f32.to_bits());
+                prop_assert_eq!(selected.reference_white_scale().to_bits(), 1.0_f32.to_bits());
+            }
+        }
     }
 
     #[test]

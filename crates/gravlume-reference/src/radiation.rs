@@ -191,6 +191,7 @@ fn planck_kernel(x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use approx::{abs_diff_eq, assert_abs_diff_eq};
     use gravlume_domain::{HomogeneousScalarSlab, SurfaceTransport};
     use proptest::prelude::*;
 
@@ -216,7 +217,7 @@ mod tests {
         let expected = std::f64::consts::PI.powi(4) / 15.0;
         let actual = integrate_planck_kernel(0.0, 80.0);
 
-        assert!((actual - expected).abs() <= 4.0e-14);
+        assert_abs_diff_eq!(actual, expected, epsilon = 4.0e-14);
     }
 
     #[test]
@@ -246,7 +247,7 @@ mod tests {
         ];
 
         for (actual, expected) in actual.into_iter().zip(expected) {
-            assert!((actual - expected).abs() <= 3.0e-15);
+            assert_abs_diff_eq!(actual, expected, epsilon = 3.0e-15);
         }
     }
 
@@ -261,7 +262,7 @@ mod tests {
         ];
 
         for (actual, expected) in actual.into_iter().zip(expected) {
-            assert!((actual - expected).abs() / expected <= 3.0e-14);
+            assert_abs_diff_eq!(actual, expected, epsilon = 3.0e-14 * expected);
         }
     }
 
@@ -311,13 +312,17 @@ mod tests {
             prop_assert!(partitioned >= 0.0 && atomic >= 0.0);
             prop_assert!(combined_transmittance <= first_transmittance);
             prop_assert!(combined_transmittance <= second_transmittance);
-            prop_assert!(
+            prop_assert!(abs_diff_eq!(
                 first_transmittance
-                    .mul_add(-second_transmittance, combined_transmittance)
-                    .abs()
-                    <= 16.0 * f64::EPSILON,
-            );
-            prop_assert!((partitioned - atomic).abs() <= 32.0 * f64::EPSILON * scale);
+                    .mul_add(-second_transmittance, combined_transmittance),
+                0.0,
+                epsilon = 16.0 * f64::EPSILON
+            ));
+            prop_assert!(abs_diff_eq!(
+                partitioned,
+                atomic,
+                epsilon = 32.0 * f64::EPSILON * scale
+            ));
         }
     }
 }
