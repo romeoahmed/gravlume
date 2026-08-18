@@ -39,6 +39,15 @@ impl SpectralBand {
     }
 }
 
+/// The spectral interpretation of a homogeneous scalar slab's emission term.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ScalarSlabEmissionModel {
+    /// A neutral bolometric term with no resolved spectrum.
+    NeutralBolometric,
+    /// A diluted-blackbody term at one observer-frame temperature.
+    BlackbodyV1 { temperature_kelvin: f64 },
+}
+
 /// A path-integrated homogeneous grey slab between a resolved source and the observer.
 ///
 /// The slab stores total optical depth rather than a coordinate thickness. It compiles either a
@@ -49,7 +58,7 @@ impl SpectralBand {
 pub struct HomogeneousScalarSlab {
     optical_depth: f64,
     integrated_bolometric_emission: f64,
-    emission_temperature_kelvin: Option<f64>,
+    emission_model: ScalarSlabEmissionModel,
 }
 
 impl HomogeneousScalarSlab {
@@ -74,7 +83,7 @@ impl HomogeneousScalarSlab {
         Self::validated(
             optical_depth,
             EmissionInput::ConstantSource(source_bolometric_intensity),
-            None,
+            ScalarSlabEmissionModel::NeutralBolometric,
         )
     }
 
@@ -91,7 +100,9 @@ impl HomogeneousScalarSlab {
         Self::validated(
             optical_depth,
             EmissionInput::ConstantSource(source_bolometric_intensity),
-            Some(source_temperature_kelvin),
+            ScalarSlabEmissionModel::BlackbodyV1 {
+                temperature_kelvin: source_temperature_kelvin,
+            },
         )
     }
 
@@ -106,7 +117,7 @@ impl HomogeneousScalarSlab {
         Self::validated(
             0.0,
             EmissionInput::Integrated(integrated_bolometric_emission),
-            None,
+            ScalarSlabEmissionModel::NeutralBolometric,
         )
     }
 
@@ -122,14 +133,16 @@ impl HomogeneousScalarSlab {
         Self::validated(
             0.0,
             EmissionInput::Integrated(integrated_bolometric_emission),
-            Some(emission_temperature_kelvin),
+            ScalarSlabEmissionModel::BlackbodyV1 {
+                temperature_kelvin: emission_temperature_kelvin,
+            },
         )
     }
 
     fn validated(
         optical_depth: f64,
         emission: EmissionInput,
-        emission_temperature_kelvin: Option<f64>,
+        emission_model: ScalarSlabEmissionModel,
     ) -> Result<Self, ValidationReport> {
         let mut report = ValidationReport::default();
         validate_finite(
@@ -164,13 +177,13 @@ impl HomogeneousScalarSlab {
                 emission_description,
             ));
         }
-        if let Some(temperature) = emission_temperature_kelvin {
+        if let ScalarSlabEmissionModel::BlackbodyV1 { temperature_kelvin } = emission_model {
             validate_finite(
                 &mut report,
-                temperature,
+                temperature_kelvin,
                 "homogeneous_scalar_slab.emission_temperature_kelvin",
             );
-            if temperature.is_finite() && temperature <= 0.0 {
+            if temperature_kelvin.is_finite() && temperature_kelvin <= 0.0 {
                 report.push(ValidationIssue::error(
                     ValidationIssueCode::NonPositive,
                     "homogeneous_scalar_slab.emission_temperature_kelvin",
@@ -199,7 +212,7 @@ impl HomogeneousScalarSlab {
         report.into_result(Self {
             optical_depth,
             integrated_bolometric_emission,
-            emission_temperature_kelvin,
+            emission_model,
         })
     }
 
@@ -213,10 +226,10 @@ impl HomogeneousScalarSlab {
         self.integrated_bolometric_emission
     }
 
-    /// Returns the emission temperature, or `None` for a neutral bolometric emission term.
+    /// Returns the emission term's explicit spectral interpretation.
     #[must_use]
-    pub const fn emission_temperature_kelvin(self) -> Option<f64> {
-        self.emission_temperature_kelvin
+    pub const fn emission_model(self) -> ScalarSlabEmissionModel {
+        self.emission_model
     }
 }
 

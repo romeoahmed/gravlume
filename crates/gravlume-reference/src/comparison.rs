@@ -238,8 +238,8 @@ fn compare_surface_observables(
         issues.push(ComparisonIssue::SurfaceBranchMismatch);
     }
     let (Some(baseline_observable), Some(candidate_observable)) = (
-        baseline.surface_observable(),
-        candidate.surface_observable(),
+        baseline.terminal().surface_observable(),
+        candidate.terminal().surface_observable(),
     ) else {
         issues.push(ComparisonIssue::SurfaceObservableUnavailable);
         return (None, None);
@@ -280,19 +280,22 @@ const fn is_unsuccessful(termination: Termination) -> bool {
 }
 
 fn event_position_distance(left: &ReferenceOutcome, right: &ReferenceOutcome) -> Option<f64> {
-    left.event().zip(right.event()).map(|_| {
-        let left = left.state().components();
-        let right = right.state().components();
-        let dx = left[1] - right[1];
-        let dy = left[2] - right[2];
-        let dz = left[3] - right[3];
-        dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt()
-    })
+    left.terminal()
+        .event()
+        .zip(right.terminal().event())
+        .map(|_| {
+            let left = left.state().components();
+            let right = right.state().components();
+            let dx = left[1] - right[1];
+            let dy = left[2] - right[2];
+            let dz = left[3] - right[3];
+            dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt()
+        })
 }
 
 fn escape_direction_angle(left: &ReferenceOutcome, right: &ReferenceOutcome) -> Option<f64> {
-    let left = left.escape_direction_xyz()?;
-    let right = right.escape_direction_xyz()?;
+    let left = left.terminal().escape_direction()?.xyz()?;
+    let right = right.terminal().escape_direction()?.xyz()?;
     let dot = left[0]
         .mul_add(right[0], left[1].mul_add(right[1], left[2] * right[2]))
         .clamp(-1.0, 1.0);
@@ -312,26 +315,27 @@ mod tests {
     use gravlume_domain::GeodesicState;
 
     use super::{ComparisonIssue, ReferenceComparison};
-    use crate::{NumericalFailure, ReferenceOutcome, Termination, TraceDiagnostics, TraceInputId};
+    use crate::{
+        EscapeDirection, EventKind, LocalizedEvent, NumericalFailure, ReferenceOutcome,
+        ReferenceTerminal, TraceDiagnostics, TraceInputId,
+    };
 
     #[test]
     fn matching_unsuccessful_terminations_are_not_convergence_evidence() {
-        for termination in [
-            Termination::StepExhaustion,
-            Termination::RejectExhaustion,
-            Termination::NumericalFailure(NumericalFailure::NonFinite),
+        for terminal in [
+            ReferenceTerminal::StepExhaustion,
+            ReferenceTerminal::RejectExhaustion,
+            ReferenceTerminal::NumericalFailure(NumericalFailure::NonFinite),
         ] {
             let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
-            baseline.termination = termination;
-            baseline.escape_direction_xyz = None;
+            baseline.terminal = terminal.clone();
             let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
-            candidate.termination = termination;
-            candidate.escape_direction_xyz = None;
+            candidate.terminal = terminal.clone();
 
             let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
                 .expect("policy roles and input identity match");
 
-            assert!(!comparison.is_accepted(), "accepted {termination:?}");
+            assert!(!comparison.is_accepted(), "accepted {terminal:?}");
         }
     }
 
@@ -341,17 +345,20 @@ mod tests {
         for (momentum, direction, expected_issue) in [
             (
                 [0.0, 1.0, 0.0],
-                Some([0.0, 1.0, 0.0]),
+                EscapeDirection::Resolved([0.0, 1.0, 0.0]),
                 ComparisonIssue::EscapeDirectionBudgetExceeded,
             ),
             (
                 [1.0, 0.0, 0.0],
-                None,
+                EscapeDirection::Unavailable,
                 ComparisonIssue::EscapeDirectionUnavailable,
             ),
         ] {
             let mut candidate = escape_outcome("reference-strict-v1", momentum);
-            candidate.escape_direction_xyz = direction;
+            candidate.terminal = ReferenceTerminal::Escape {
+                event: localized_event(EventKind::Escape),
+                direction,
+            };
 
             let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
                 .expect("policy roles and input identity match");
@@ -363,11 +370,13 @@ mod tests {
     #[test]
     fn surface_convergence_requires_the_atomic_surface_observable() {
         let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
-        baseline.termination = Termination::EquatorialSurface;
-        baseline.escape_direction_xyz = None;
+        baseline.terminal = ReferenceTerminal::EquatorialSurface {
+            event: localized_event(EventKind::EquatorialSurface),
+        };
         let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
-        candidate.termination = Termination::EquatorialSurface;
-        candidate.escape_direction_xyz = None;
+        candidate.terminal = ReferenceTerminal::EquatorialSurface {
+            event: localized_event(EventKind::EquatorialSurface),
+        };
 
         let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
             .expect("policy roles and input identity match");
@@ -382,11 +391,13 @@ mod tests {
     #[test]
     fn surface_convergence_rejects_a_discrete_branch_mismatch() {
         let mut baseline = escape_outcome("reference-regular-v1", [1.0, 0.0, 0.0]);
-        baseline.termination = Termination::EquatorialSurface;
-        baseline.escape_direction_xyz = None;
+        baseline.terminal = ReferenceTerminal::EquatorialSurface {
+            event: localized_event(EventKind::EquatorialSurface),
+        };
         let mut candidate = escape_outcome("reference-strict-v1", [1.0, 0.0, 0.0]);
-        candidate.termination = Termination::EquatorialSurface;
-        candidate.escape_direction_xyz = None;
+        candidate.terminal = ReferenceTerminal::EquatorialSurface {
+            event: localized_event(EventKind::EquatorialSurface),
+        };
         candidate.branch_key = crate::TraceBranchKey::new(crate::PolarSide::Equatorial, 1, 0, 0);
 
         let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
@@ -403,7 +414,10 @@ mod tests {
         ReferenceOutcome {
             input_id: TraceInputId::new("same-input"),
             policy_id,
-            termination: Termination::Escape,
+            terminal: ReferenceTerminal::Escape {
+                event: localized_event(EventKind::Escape),
+                direction: EscapeDirection::Resolved(spatial_momentum),
+            },
             state: GeodesicState::new(
                 [0.0, 200.0, 0.0, 0.0],
                 [
@@ -415,13 +429,10 @@ mod tests {
             )
             .expect("state is finite"),
             affine_parameter_m: 1.0,
-            event: None,
-            escape_direction_xyz: Some(spatial_momentum),
             turning_radius_m: None,
             azimuth_advance_rad: 0.0,
             travel_time_m: 1.0,
             branch_key: crate::TraceBranchKey::new(crate::PolarSide::Equatorial, 0, 0, 0),
-            surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: 1,
                 rejected_steps: 0,
@@ -433,6 +444,16 @@ mod tests {
                 maximum_angular_momentum_z_drift: 0.0,
                 maximum_carter_drift: 0.0,
             },
+        }
+    }
+
+    fn localized_event(kind: EventKind) -> LocalizedEvent {
+        LocalizedEvent {
+            kind,
+            candidates: vec![kind],
+            affine_parameter_m: 1.0,
+            bracket_width_m: 0.0,
+            normalized_residual: 0.0,
         }
     }
 }

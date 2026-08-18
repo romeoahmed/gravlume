@@ -14,8 +14,13 @@ mod view;
 
 pub use emission::{EquatorialCircularEmitter, EquatorialEmissionModel};
 pub use observer::{ObserverFrame, StationaryObserverInput};
-pub use radiation::{HomogeneousScalarSlab, SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
-pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput};
+pub use radiation::{
+    HomogeneousScalarSlab, ScalarSlabEmissionModel, SpectralBand, VISIBLE_BOXCAR_BANDS_V1,
+};
+pub use scene::{
+    EquatorialSurface, InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput,
+    SceneRadiance, SurfaceTransport,
+};
 pub use spacetime::{
     Extremality, GeodesicInvariants, GeometryError, KerrNewmanSpacetime, KerrSchildChart,
 };

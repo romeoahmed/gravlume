@@ -1,9 +1,10 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, EquatorialEmissionModel, HomogeneousScalarSlab,
-    KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
-    StationaryObserverInput, ValidationIssueCode,
+    Angle, EquatorialCircularEmitter, EquatorialEmissionModel, EquatorialSurface,
+    HomogeneousScalarSlab, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
+    PhysicalSceneInput, SceneRadiance, StationaryObserverInput, SurfaceTransport,
+    ValidationIssueCode,
 };
 use proptest::prelude::*;
 
@@ -251,16 +252,43 @@ proptest! {
 }
 
 #[test]
-fn physical_scene_owns_the_optional_scalar_slab_without_changing_geometry() {
+fn physical_scene_installs_an_equatorial_source_chain_atomically() {
     let vacuum = default_scene();
+    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
+        .expect("the source is valid");
     let slab = HomogeneousScalarSlab::constant_bolometric_v1(0.75, 0.125)
         .expect("the analytic slab is valid");
-    let transported = vacuum.clone().with_homogeneous_scalar_slab(slab);
+    let surface = EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
+        .expect("bolometric source and slab are compatible");
+    let transported = vacuum.clone().with_equatorial_surface(surface);
 
     assert_eq!(vacuum.spacetime(), transported.spacetime());
     assert_eq!(vacuum.observer_event(), transported.observer_event());
-    assert_eq!(vacuum.homogeneous_scalar_slab(), None);
-    assert_eq!(transported.homogeneous_scalar_slab(), Some(slab));
+    assert_eq!(vacuum.radiance(), SceneRadiance::AnalyticSky);
+    let SceneRadiance::EquatorialSurface(surface) = transported.radiance() else {
+        panic!("installed source must be present");
+    };
+    assert_eq!(surface.emitter(), emitter);
+    assert_eq!(
+        surface.transport(),
+        SurfaceTransport::HomogeneousScalar(slab)
+    );
+}
+
+#[test]
+fn blackbody_surface_rejects_a_nonzero_neutral_slab_source() {
+    let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(6.0, 20.0, 1.0, 6_000.0)
+        .expect("the blackbody source is valid");
+    let slab = HomogeneousScalarSlab::constant_bolometric_v1(0.5, 0.1)
+        .expect("the neutral bolometric slab is independently valid");
+
+    let report = EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
+        .expect_err("an unresolved source spectrum is rejected at the scene seam");
+
+    assert!(report.issues().iter().any(|issue| {
+        issue.code() == ValidationIssueCode::IncompatibleModel
+            && issue.field_path() == "equatorial_surface.transport.emission_model"
+    }));
 }
 
 #[test]

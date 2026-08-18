@@ -1,10 +1,10 @@
 use std::num::NonZeroUsize;
 
 use gravlume_reference::{
-    AffineDirection, ComparisonError, FixtureDocument, FixtureError, GeodesicBatch,
-    GeodesicFixture, GeodesicTrace, GeodesicTracer, ObservationFixture, ObservationTrace,
-    ObservationTracer, ReferenceComparison, ReferenceOutcome, ReferencePolicy, Termination,
-    TraceInputId,
+    AffineDirection, ComparisonError, EscapeDirection, FixtureDocument, FixtureError,
+    GeodesicBatch, GeodesicFixture, GeodesicTrace, GeodesicTracer, ObservationFixture,
+    ObservationTrace, ObservationTracer, ReferenceComparison, ReferenceOutcome, ReferencePolicy,
+    Termination, TraceInputId,
 };
 
 const SCATTER_B6: &str = include_str!("../fixtures/v1/schwarzschild-scatter-b6.toml");
@@ -189,7 +189,7 @@ fn regular_schwarzschild_fixture_and_strict_refinement_meet_the_oracle() {
         .trace(fixture.trace_request());
 
     assert_eq!(regular.termination(), Termination::Escape);
-    assert!(regular.event().is_some_and(|event| {
+    assert!(regular.terminal().event().is_some_and(|event| {
         event.bracket_width_m() <= ReferencePolicy::regular_v1().event_affine_tolerance_m()
             && event.normalized_residual() <= 5.0e-12
             && !event.is_ambiguous()
@@ -389,7 +389,9 @@ fn observation_interface_traces_backward_without_flipping_photon_time_orientatio
     assert!(regular.travel_time_m() > 0.0);
     assert_eq!(regular.input_id().as_str(), fixture.input_id().as_str());
     let escape_direction = regular
-        .escape_direction_xyz()
+        .terminal()
+        .escape_direction()
+        .and_then(EscapeDirection::xyz)
         .expect("escape has a traversal direction");
     let terminal = regular.state().components();
     let direction_norm = escape_direction[0].mul_add(

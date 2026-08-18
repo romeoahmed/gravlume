@@ -6,6 +6,7 @@ pub enum ValidationIssueCode {
     NonFinite,
     NonPositive,
     OutOfRange,
+    IncompatibleModel,
     DegenerateDirection,
     NonStationaryObserver,
     InternalInvariant,

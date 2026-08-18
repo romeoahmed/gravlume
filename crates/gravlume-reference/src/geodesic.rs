@@ -7,8 +7,8 @@ use crate::{
     fixture::GeodesicFixture,
     integrator::{DenseOutput, attempt_step, derivative},
     outcome::{
-        GeodesicTrace, LocalizedEvent, NumericalFailure, PolarSide, ReferenceOutcome, Termination,
-        TraceBranchKey, TraceDiagnostics,
+        EscapeDirection, GeodesicTrace, LocalizedEvent, NumericalFailure, PolarSide,
+        ReferenceOutcome, ReferenceTerminal, TraceBranchKey, TraceDiagnostics,
     },
     policy::ReferencePolicy,
 };
@@ -137,7 +137,7 @@ impl<'tracer> TraceExecution<'tracer> {
         loop {
             if self.accepted_steps >= self.tracer.policy.maximum_accepted_steps() {
                 let state = self.state;
-                return self.finish(Termination::StepExhaustion, state, None);
+                return self.finish(state, ReferenceTerminal::StepExhaustion);
             }
             self.record_step(self.step_m.abs());
             let attempt = match attempt_step(
@@ -171,7 +171,7 @@ impl<'tracer> TraceExecution<'tracer> {
                 self.consecutive_rejects += 1;
                 if self.consecutive_rejects >= self.tracer.policy.maximum_consecutive_rejects() {
                     let state = self.state;
-                    return self.finish(Termination::RejectExhaustion, state, None);
+                    return self.finish(state, ReferenceTerminal::RejectExhaustion);
                 }
                 if self.step_m.abs() <= self.tracer.policy.minimum_step_m() {
                     return self.finish_failure(NumericalFailure::MinimumStep);
@@ -199,11 +199,7 @@ impl<'tracer> TraceExecution<'tracer> {
             if let Some(event) = event {
                 self.affine_parameter_m = self.step_m.mul_add(event.theta, self.affine_parameter_m);
                 let localized = self.event_diagnostic(&event);
-                return self.finish(
-                    termination_for_event(event.kind),
-                    committed_state,
-                    Some(localized),
-                );
+                return self.finish_event(committed_state, localized);
             }
 
             self.affine_parameter_m += self.step_m;
@@ -431,24 +427,31 @@ impl<'tracer> TraceExecution<'tracer> {
 
     fn finish_failure(self, failure: NumericalFailure) -> ReferenceOutcome {
         let state = self.state;
-        self.finish(Termination::NumericalFailure(failure), state, None)
+        self.finish(state, ReferenceTerminal::NumericalFailure(failure))
     }
 
-    fn finish(
-        mut self,
-        termination: Termination,
-        state: GeodesicState,
-        event: Option<LocalizedEvent>,
-    ) -> ReferenceOutcome {
-        let escape_direction_xyz = self.escape_direction_xyz(termination, state);
+    fn finish_event(mut self, state: GeodesicState, event: LocalizedEvent) -> ReferenceOutcome {
+        let terminal = match event.kind() {
+            EventKind::SingularityGuard => ReferenceTerminal::SingularityGuard { event },
+            EventKind::Horizon => ReferenceTerminal::HorizonCrossing { event },
+            EventKind::EquatorialSurface => ReferenceTerminal::EquatorialSurface { event },
+            EventKind::Escape => {
+                let direction = self
+                    .escape_direction_xyz(state)
+                    .map_or(EscapeDirection::Unavailable, EscapeDirection::Resolved);
+                ReferenceTerminal::Escape { event, direction }
+            }
+        };
+        self.finish(state, terminal)
+    }
+
+    fn finish(self, state: GeodesicState, terminal: ReferenceTerminal) -> ReferenceOutcome {
         ReferenceOutcome {
             input_id: self.request.input_id,
             policy_id: self.tracer.policy.id(),
-            termination,
+            terminal,
             state,
             affine_parameter_m: self.affine_parameter_m,
-            event,
-            escape_direction_xyz,
             turning_radius_m: self.turning_radius_m,
             azimuth_advance_rad: self.azimuth_advance_rad,
             travel_time_m: self.request.affine_direction.sign()
@@ -459,7 +462,6 @@ impl<'tracer> TraceExecution<'tracer> {
                 self.equatorial_crossings,
                 self.azimuth_winding,
             ),
-            surface_observable: None,
             diagnostics: TraceDiagnostics {
                 accepted_steps: self.accepted_steps,
                 rejected_steps: self.rejected_steps,
@@ -474,14 +476,7 @@ impl<'tracer> TraceExecution<'tracer> {
         }
     }
 
-    fn escape_direction_xyz(
-        &mut self,
-        termination: Termination,
-        state: GeodesicState,
-    ) -> Option<[f64; 3]> {
-        if termination != Termination::Escape {
-            return None;
-        }
+    fn escape_direction_xyz(&mut self, state: GeodesicState) -> Option<[f64; 3]> {
         let derivative = self
             .evaluate_rhs(|spacetime| spacetime.hamiltonian_rhs(state))
             .ok()?;
@@ -703,15 +698,6 @@ fn event_value_for(
     }
 }
 
-const fn termination_for_event(kind: EventKind) -> Termination {
-    match kind {
-        EventKind::SingularityGuard => Termination::SingularityGuard,
-        EventKind::Horizon => Termination::HorizonCrossing,
-        EventKind::EquatorialSurface => Termination::EquatorialSurface,
-        EventKind::Escape => Termination::Escape,
-    }
-}
-
 const fn crosses(kind: EventKind, start: f64, end: f64) -> bool {
     match kind {
         EventKind::SingularityGuard | EventKind::Horizon => start > 0.0 && end <= 0.0,
@@ -759,9 +745,9 @@ mod tests {
 
     use super::{
         EventArming, EventConfiguration, EventKind, GeodesicTrace, GeodesicTracer, ReferencePolicy,
-        Termination, event_value_for, select_earliest_event,
+        event_value_for, select_earliest_event,
     };
-    use crate::{AffineDirection, TraceInputId};
+    use crate::{AffineDirection, Termination, TraceInputId};
 
     #[test]
     fn accepted_step_limit_is_a_typed_terminal_condition() {

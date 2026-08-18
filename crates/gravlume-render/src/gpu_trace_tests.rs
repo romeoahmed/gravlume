@@ -1,8 +1,9 @@
 use std::num::NonZeroU32;
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, ImageSample, KerrNewmanSpacetime, KerrSchildChart,
-    Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    Angle, EquatorialCircularEmitter, EquatorialSurface, ImageSample, KerrNewmanSpacetime,
+    KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+    StationaryObserverInput, SurfaceTransport,
 };
 use gravlume_reference::{
     ObservationTrace, ObservationTracer, ReferencePolicy, Termination, TraceInputId,
@@ -73,6 +74,7 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
         )
         .expect("canonical surface source is valid");
     let reference_observable = reference
+        .terminal()
         .surface_observable()
         .expect("canonical trace terminates on the surface");
     let reference_anchor = reference_observable.source_anchor();
@@ -181,9 +183,10 @@ fn gpu_trace_rejects_surface_profiles_not_representable_after_f32_packing() {
 
     for emitter in [collapsed_interval, underflowed_intensity] {
         let observation = Observation::new(
-            base.scene()
-                .clone()
-                .with_equatorial_circular_emitter(emitter),
+            base.scene().clone().with_equatorial_surface(
+                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                    .expect("test surface is compatible with vacuum"),
+            ),
             *base.view(),
         );
         assert!(matches!(
@@ -204,9 +207,10 @@ fn gpu_trace_rejects_surface_profiles_reaching_packed_escape_boundary() {
             EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, outer_radius_m, 1.0)
                 .expect("physical emitter is valid independently of the GPU profile");
         let observation = Observation::new(
-            base.scene()
-                .clone()
-                .with_equatorial_circular_emitter(emitter),
+            base.scene().clone().with_equatorial_surface(
+                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                    .expect("test surface is compatible with vacuum"),
+            ),
             *base.view(),
         );
 
@@ -264,9 +268,10 @@ fn gpu_surface_event_arming_requires_leaving_the_profile_band() {
     let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
         .expect("surface profile is valid");
     let observation = Observation::new(
-        base.scene()
-            .clone()
-            .with_equatorial_circular_emitter(emitter),
+        base.scene().clone().with_equatorial_surface(
+            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                .expect("test surface is compatible with vacuum"),
+        ),
         *base.view(),
     );
     let capture = capture_event_policy_cases(&observation);
@@ -572,7 +577,11 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
         assert_eq!(gpu.metadata[1], 0, "{image_sample:?}: failure flags");
         assert!(gpu.metadata[2] > 0, "{image_sample:?}: step counter");
 
-        if let Some(reference_direction) = reference.escape_direction_xyz() {
+        if let Some(reference_direction) = reference
+            .terminal()
+            .escape_direction()
+            .and_then(gravlume_reference::EscapeDirection::xyz)
+        {
             let gpu_direction = [
                 f64::from(gpu.source_time[0]),
                 f64::from(gpu.source_time[1]),

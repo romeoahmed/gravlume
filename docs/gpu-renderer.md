@@ -23,11 +23,19 @@ validated Observation
 
 ### 输入与 ABI
 
-- `Renderer::new` 只接受 validated `Observation`。Host 按 $M$ 无量纲化，并受检转换为 binary32；不可表示字段、未归一化 observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正 intensity、slab emission 或 transmittance 下溢为零/落入 subnormal、source 未严格落在 numerical escape boundary 内、blackbody radial temperature 超出 LUT，或 slab/source spectrum 不闭合，都会返回 `GpuTraceInputError`。
+- `Renderer::new` 只接受 validated `Observation`。Emitter 与 path transport 已由
+  `EquatorialSurface::new` 原子验证；slab-only scene 或 unresolved blackbody slab source 在 domain seam
+  返回 `ValidationReport`。Host 再按 $M$ 无量纲化并受检转换为 binary32；不可表示字段、未归一化
+  observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正
+  intensity、slab emission 或 transmittance 下溢为零/落入 subnormal、source 未严格落在 numerical
+  escape boundary 内或 blackbody radial temperature 超出 LUT，返回 `GpuTraceInputError`。
 - Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。
 - `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 11 个连续 16-byte block、共 176 byte；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Blackbody plan 独占 binding 8 的 4097-entry read-only `array<vec4<f32>>`；WGSL array stride 为 16 byte。Production ABI 只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；四个 diagnostic record planes 仅由 test capture 创建。
 - Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。Surface sample 另携带 initial polar side、radial/equatorial crossing counts 与 signed azimuth winding 的 exact branch key。
-- Renderer 从 Physical Scene 解析 private sealed `TracePlan`，并用 WGSL pipeline override 固化 surface-event capability。Surface plan 在 shader、bindings、timing 与 target 上都不含 escape map 或 shadow refinement scratch；caller 不选择 accelerator。
+- Renderer 只匹配一次 `SceneRadiance`，同一 compiled input 同时生成 `TraceUniforms`、private sealed
+  `TracePlan` 与 scientific metadata；不存在三个消费者各自解释 Observation 的漂移。WGSL pipeline
+  override 固化 surface-event capability。Surface plan 在 shader、bindings、timing 与 target 上都不含
+  escape map 或 shadow refinement scratch；caller 不选择 accelerator。
 
 ### 数值基线
 
@@ -56,14 +64,19 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 - `HomogeneousScalarSlab` 预先保存 $\tau$ 与稳定计算的 integrated emission；GPU 执行 $I_{out}=I_{vac}e^{-\tau}+E$。非零 spectral slab source 必须带自己的 blackbody temperature；neutral bolometric source 不被猜成 spectrum。它是 path-integrated 解析边界，不是 arbitrary volume integration。
 - `Renderer::capture_scene_linear` 显式等待 copy/map，读取已发布、tone-map/UI 之前的 scene。
   Surface alpha tag `2.0` 才表示 metadata 所述 radiance；escape tag `1.0` 仍是 analytic
-  orientation preview，zero 是 horizon，negative tag 是 trace failure。API 返回 RGBA binary16
-  words、texel kind、source/transport/channel，以及 bolometric `2e-3`、final spectral `4e-3` 与
-  LUT 分项误差 metadata，避免调用者把 preview RGB 当成光谱或把 LUT 预算误当成最终预算。
+  orientation preview，zero 是 horizon，negative tag 是 trace failure。API 返回
+  `ScientificTexel` slice；raw RGBA binary16 words、texel kind 与只对 `SurfaceRadiance` 开放的 RGB
+  projection 不能发生索引错配。Metadata 原子携带 source/transport/channel，以及 bolometric
+  `2e-3`、final spectral `4e-3` 与 LUT 分项误差预算。
 - 该 source 只声称运动学 circular thin surface 与 diluted blackbody；不声称 orbit radial stability、Novikov–Thorne/Page–Thorne disk 或完整 GRRT。
 
 ### Publication 与 display
 
-- 每个 extent generation 创建隐藏 candidate。Compute batch 不 acquire surface、不运行 egui、不 present；最后 timestamp/readback 完成且 generation 匹配后，candidate view 才成为 published scene。
+- 每个 extent generation 创建隐藏 candidate。Compute batch 不 acquire surface、不运行 egui、不
+  present；timestamp resolve/copy 与 mapping 由
+  [`map_buffer_on_submit`](https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit)
+  绑定到同一 encoder，callback completion 自带 submission generation；匹配当前 generation 后 candidate
+  view 才成为 published scene。
 - Resize 继续显示上一张完整 scene，并按 aspect-fit 处理比例变化；没有整图 publication copy、低分辨率阶段或 tile 扫描。
 - Scene 保持 extended-linear sRGB。egui 先画到透明 gamma-encoded premultiplied target，final pass 解码到 linear-premultiplied 后合成。
 - HDR 只在 native state 与精确 `Rgba16Float + ExtendedSrgbLinear` surface pair 同时可靠时启用；否则带原因选择 SDR。解析天空只用于方向、HDR 和 failure visibility，不是物理 source model。
@@ -81,7 +94,7 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | surface           | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance    |
 | scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets  |
 | branch/footprint  | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
-| scientific export | raw normal binary16 values、row unpadding、surface/sky/horizon/failure texel kind 与解释 metadata             |
+| scientific export | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                |
 | dispatch          | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap      |
 | acceleration      | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback |
 | coverage          | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                |

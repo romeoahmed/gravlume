@@ -1,14 +1,15 @@
 use std::borrow::Cow;
 
 use gravlume_domain::{
-    EquatorialCircularEmitter, EquatorialEmissionModel, Extremality, HomogeneousScalarSlab,
-    KerrNewmanSpacetime, KerrSchildChart, Observation, ValidationReport,
+    EquatorialEmissionModel, EquatorialSurface, Extremality, KerrNewmanSpacetime, KerrSchildChart,
+    Observation, ScalarSlabEmissionModel, SceneRadiance, SurfaceTransport, ValidationReport,
 };
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
 
 use crate::{
     extent::RenderExtent,
+    scientific_capture::{ScientificCaptureMetadata, ScientificChannelModel},
     shadow_coverage::{ShadowCoverage, ShadowTarget},
     spectral_lut::{
         BLACKBODY_LUT_BYTE_SIZE, blackbody_lut, maximum_temperature_kelvin,
@@ -74,7 +75,10 @@ struct TraceDispatch {
 }
 
 impl TraceUniforms {
-    pub fn from_observation(observation: &Observation) -> Result<Self, GpuTraceInputError> {
+    fn from_observation_with_surface(
+        observation: &Observation,
+        surface: Option<EquatorialSurface>,
+    ) -> Result<Self, GpuTraceInputError> {
         let scene = observation.scene();
         let physical_spacetime = *scene.spacetime();
         let mass = physical_spacetime.mass_m();
@@ -119,10 +123,8 @@ impl TraceUniforms {
         }
         let horizon = gpu_spacetime.outer_horizon_radius().unwrap_or(-1.0);
         let [_, observer_x, observer_y, observer_z] = scene.observer_event().to_txyz();
-        let emitter = scene.equatorial_circular_emitter();
-        let slab = scene.homogeneous_scalar_slab();
-        let surface_emitter = pack_surface_emitter(emitter, mass)?;
-        let surface_transport = pack_surface_transport(emitter, slab, mass)?;
+        let surface_emitter = pack_surface_emitter(surface, mass)?;
+        let surface_transport = pack_surface_transport(surface, mass)?;
 
         Ok(Self {
             spacetime: spacetime_uniform,
@@ -152,19 +154,21 @@ impl TraceUniforms {
             step_policy: [0.1, 0.005, 8.0, INVARIANT_DRIFT_LIMIT],
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn from_observation(observation: &Observation) -> Result<Self, GpuTraceInputError> {
+        CompiledTraceInput::compile(observation).map(|compiled| compiled.uniforms)
+    }
 }
 
 fn pack_surface_transport(
-    emitter: Option<EquatorialCircularEmitter>,
-    slab: Option<HomogeneousScalarSlab>,
+    surface: Option<EquatorialSurface>,
     mass_m: f64,
 ) -> Result<[f32; 4], GpuTraceInputError> {
-    let Some(emitter) = emitter else {
-        if slab.is_some() {
-            return Err(GpuTraceInputError::ScalarSlabRequiresSurface);
-        }
+    let Some(surface) = surface else {
         return Ok([0.0, 0.0, 1.0, 0.0]);
     };
+    let emitter = surface.emitter();
     let emitter_temperature = match emitter.emission_model() {
         EquatorialEmissionModel::InverseCubeBolometricV1 => None,
         EquatorialEmissionModel::InverseCubeBlackbodyV1 {
@@ -189,23 +193,37 @@ fn pack_surface_transport(
         }
     }
 
-    let (transmittance, weighted_source_intensity, source_temperature) =
-        slab.map_or((1.0, 0.0, None), |slab| {
-            let transmittance = (-slab.optical_depth()).exp();
-            (
-                transmittance,
-                slab.integrated_bolometric_emission(),
-                slab.emission_temperature_kelvin(),
-            )
-        });
+    let (slab, transmittance, weighted_source_intensity, source_emission) =
+        match surface.transport() {
+            SurfaceTransport::Vacuum => (None, 1.0, 0.0, None),
+            SurfaceTransport::HomogeneousScalar(slab) => {
+                let transmittance = (-slab.optical_depth()).exp();
+                (
+                    Some(slab),
+                    transmittance,
+                    slab.integrated_bolometric_emission(),
+                    Some(slab.emission_model()),
+                )
+            }
+        };
     let source_temperature = if emitter_temperature.is_some() && weighted_source_intensity > 0.0 {
-        let temperature =
-            source_temperature.ok_or(GpuTraceInputError::UnresolvedSlabSourceSpectrum)?;
+        let Some(ScalarSlabEmissionModel::BlackbodyV1 { temperature_kelvin }) = source_emission
+        else {
+            // `EquatorialSurface` construction rejects this combination. Keeping this assertion
+            // local documents the trusted domain invariant without restoring a duplicate error.
+            debug_assert!(
+                false,
+                "validated blackbody transport has a resolved source spectrum"
+            );
+            return Err(GpuTraceInputError::NotRepresentable {
+                field: "surface_transport",
+            });
+        };
         validate_lut_temperature(
-            temperature,
+            temperature_kelvin,
             "homogeneous_scalar_slab.emission_temperature_kelvin",
         )?;
-        temperature
+        temperature_kelvin
     } else {
         0.0
     };
@@ -252,12 +270,13 @@ fn validate_lut_temperature(
 }
 
 fn pack_surface_emitter(
-    emitter: Option<EquatorialCircularEmitter>,
+    surface: Option<EquatorialSurface>,
     mass_m: f64,
 ) -> Result<[f32; 4], GpuTraceInputError> {
-    let Some(emitter) = emitter else {
+    let Some(surface) = surface else {
         return Ok([0.0; 4]);
     };
+    let emitter = surface.emitter();
     let outer_radius_over_m = emitter.outer_radius_m() / mass_m;
     if outer_radius_over_m >= f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M) {
         return Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary {
@@ -332,10 +351,6 @@ pub enum GpuTraceInputError {
         outer_radius_over_m: f64,
         escape_radius_over_m: f64,
     },
-    #[error("a homogeneous scalar slab requires a resolved equatorial surface source")]
-    ScalarSlabRequiresSurface,
-    #[error("a non-zero slab source requires a blackbody spectrum for spectral GPU transport")]
-    UnresolvedSlabSourceSpectrum,
     #[error(
         "{field} temperature {temperature_kelvin} K lies outside the GPU spectral LUT [{minimum_kelvin}, {maximum_kelvin}] K"
     )]
@@ -358,6 +373,7 @@ pub struct RayTracer {
     blackbody_lut: Option<wgpu::Buffer>,
     shadow_coverage: Option<ShadowCoverage>,
     plan: TracePlan,
+    scientific_capture_metadata: Option<ScientificCaptureMetadata>,
     #[cfg(test)]
     target_kind: TraceTargetKind,
 }
@@ -369,21 +385,44 @@ enum TracePlan {
     EquatorialBlackbodySurface,
 }
 
-impl TracePlan {
-    const fn resolve(observation: &Observation) -> Self {
-        match observation.scene().equatorial_circular_emitter() {
-            Some(emitter) => match emitter.emission_model() {
-                EquatorialEmissionModel::InverseCubeBolometricV1 => {
-                    Self::EquatorialBolometricSurface
-                }
-                EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
-                    Self::EquatorialBlackbodySurface
-                }
-            },
-            None => Self::AcceleratedSky,
-        }
-    }
+struct CompiledTraceInput {
+    uniforms: TraceUniforms,
+    plan: TracePlan,
+    scientific_capture_metadata: Option<ScientificCaptureMetadata>,
+}
 
+impl CompiledTraceInput {
+    fn compile(observation: &Observation) -> Result<Self, GpuTraceInputError> {
+        let scene = observation.scene();
+        let (surface, plan, channels) = match scene.radiance() {
+            SceneRadiance::AnalyticSky => (None, TracePlan::AcceleratedSky, None),
+            SceneRadiance::EquatorialSurface(surface) => {
+                let (plan, channels) = match surface.emitter().emission_model() {
+                    EquatorialEmissionModel::InverseCubeBolometricV1 => (
+                        TracePlan::EquatorialBolometricSurface,
+                        ScientificChannelModel::BolometricRepeated,
+                    ),
+                    EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => (
+                        TracePlan::EquatorialBlackbodySurface,
+                        ScientificChannelModel::VisibleBoxcarV1,
+                    ),
+                };
+                (Some(surface), plan, Some(channels))
+            }
+        };
+        let uniforms = TraceUniforms::from_observation_with_surface(observation, surface)?;
+        let scientific_capture_metadata = surface.zip(channels).map(|(surface, channels)| {
+            ScientificCaptureMetadata::for_surface(scene.spacetime().mass_m(), surface, channels)
+        });
+        Ok(Self {
+            uniforms,
+            plan,
+            scientific_capture_metadata,
+        })
+    }
+}
+
+impl TracePlan {
     fn scratch_bytes(self, extent: RenderExtent) -> u64 {
         match self {
             Self::AcceleratedSky => shadow_coverage_scratch_bytes(extent)
@@ -614,13 +653,9 @@ impl RayTracer {
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
-        let uniforms = TraceUniforms::from_observation(observation)?;
-        let plan = TracePlan::resolve(observation);
-        Ok(Self::from_uniforms(
-            device,
-            uniforms,
-            plan.presentation_spec(),
-        ))
+        let compiled = CompiledTraceInput::compile(observation)?;
+        let spec = compiled.plan.presentation_spec();
+        Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
@@ -629,14 +664,14 @@ impl RayTracer {
         observation: &Observation,
         subpixel: [f64; 2],
     ) -> Result<Self, GpuTraceInputError> {
-        let mut uniforms = TraceUniforms::from_observation(observation)?;
+        let mut compiled = CompiledTraceInput::compile(observation)?;
         let packed_subpixel = pack4(
             [subpixel[0], subpixel[1], 0.0, 0.0],
             "trace_capture_subpixel",
         )?;
-        uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
-        let plan = TracePlan::resolve(observation);
-        Ok(Self::from_uniforms(device, uniforms, plan.capture_spec()))
+        compiled.uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
+        let spec = compiled.plan.capture_spec();
+        Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
@@ -645,23 +680,19 @@ impl RayTracer {
         observation: &Observation,
         subpixel: [f64; 2],
     ) -> Result<Self, GpuTraceInputError> {
-        let mut uniforms = TraceUniforms::from_observation(observation)?;
+        let mut compiled = CompiledTraceInput::compile(observation)?;
         let packed_subpixel = pack4(
             [subpixel[0], subpixel[1], 0.0, 0.0],
             "surface_footprint_subpixel",
         )?;
-        uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
+        compiled.uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
         // Source-chart differencing subtracts neighboring terminal anchors. Keep this diagnostic
         // path below the presentation step ceiling so RK4 phase error does not dominate J.
-        uniforms.step_policy[0] = 0.0025;
-        uniforms.step_policy[1] = 0.000_125;
-        uniforms.step_policy[2] = 0.25;
-        let plan = TracePlan::resolve(observation);
-        Ok(Self::from_uniforms(
-            device,
-            uniforms,
-            plan.footprint_capture_spec()?,
-        ))
+        compiled.uniforms.step_policy[0] = 0.0025;
+        compiled.uniforms.step_policy[1] = 0.000_125;
+        compiled.uniforms.step_policy[2] = 0.25;
+        let spec = compiled.plan.footprint_capture_spec()?;
+        Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
@@ -669,10 +700,10 @@ impl RayTracer {
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
-        let uniforms = TraceUniforms::from_observation(observation)?;
-        Ok(Self::from_uniforms(
+        let compiled = CompiledTraceInput::compile(observation)?;
+        Ok(Self::from_compiled(
             device,
-            uniforms,
+            compiled,
             TracePipelineSpec {
                 shader_source: accelerated_capture_shader_source(),
                 entry_point: "capture_accelerated_trace_scene",
@@ -690,11 +721,12 @@ impl RayTracer {
         observation: &Observation,
         subpixel: [f32; 2],
     ) -> Result<Self, GpuTraceInputError> {
-        let mut uniforms = TraceUniforms::from_observation(observation)?;
-        uniforms.camera[2..].copy_from_slice(&subpixel);
-        Ok(Self::from_uniforms(
+        let mut compiled = CompiledTraceInput::compile(observation)?;
+        compiled.uniforms.camera[2..].copy_from_slice(&subpixel);
+        let plan = compiled.plan;
+        Ok(Self::from_compiled(
             device,
-            uniforms,
+            compiled,
             TracePipelineSpec {
                 shader_source: Cow::Owned(format!(
                     "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
@@ -703,7 +735,7 @@ impl RayTracer {
                 entry_point: "write_initial_rays",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan: TracePlan::resolve(observation),
+                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -714,10 +746,11 @@ impl RayTracer {
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
-        let uniforms = TraceUniforms::from_observation(observation)?;
-        Ok(Self::from_uniforms(
+        let compiled = CompiledTraceInput::compile(observation)?;
+        let plan = compiled.plan;
+        Ok(Self::from_compiled(
             device,
-            uniforms,
+            compiled,
             TracePipelineSpec {
                 shader_source: Cow::Owned(format!(
                     "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
@@ -726,7 +759,7 @@ impl RayTracer {
                 entry_point: "write_invariant_gate_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan: TracePlan::resolve(observation),
+                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -737,10 +770,11 @@ impl RayTracer {
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
-        let uniforms = TraceUniforms::from_observation(observation)?;
-        Ok(Self::from_uniforms(
+        let compiled = CompiledTraceInput::compile(observation)?;
+        let plan = compiled.plan;
+        Ok(Self::from_compiled(
             device,
-            uniforms,
+            compiled,
             TracePipelineSpec {
                 shader_source: Cow::Owned(format!(
                     "{}\n{EVENT_POLICY_CAPTURE_SHADER}",
@@ -749,17 +783,22 @@ impl RayTracer {
                 entry_point: "write_event_policy_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan: TracePlan::resolve(observation),
+                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
     }
 
-    fn from_uniforms(
+    fn from_compiled(
         device: &wgpu::Device,
-        uniforms: TraceUniforms,
+        compiled: CompiledTraceInput,
         spec: TracePipelineSpec,
     ) -> Self {
+        let CompiledTraceInput {
+            uniforms,
+            scientific_capture_metadata,
+            ..
+        } = compiled;
         let TracePipelineSpec {
             shader_source,
             entry_point,
@@ -844,6 +883,7 @@ impl RayTracer {
             blackbody_lut,
             shadow_coverage,
             plan,
+            scientific_capture_metadata,
             #[cfg(test)]
             target_kind,
         }
@@ -855,6 +895,10 @@ impl RayTracer {
 
     pub(crate) const fn has_escape_map(&self) -> bool {
         self.escape_map_node_pipeline.is_some()
+    }
+
+    pub(crate) const fn scientific_capture_metadata(&self) -> Option<&ScientificCaptureMetadata> {
+        self.scientific_capture_metadata.as_ref()
     }
 
     pub fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceImage {

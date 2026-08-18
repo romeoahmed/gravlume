@@ -407,7 +407,11 @@ mod tests {
         )]);
         let manual = select_surface(&manual_caps, DynamicRange::Sdr)
             .expect("a plain eight-bit SDR pair can use shader encoding");
-        assert_eq!(manual.fragment_entry(), "present_sdr_to_gamma_target");
+        assert_eq!(manual.format(), wgpu::TextureFormat::Bgra8Unorm);
+        assert_eq!(
+            manual.output_mode(),
+            OutputMode::Sdr(SdrReason::DisplayReportedSdr)
+        );
     }
 
     #[test]

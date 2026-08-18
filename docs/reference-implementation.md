@@ -6,13 +6,13 @@
 
 | 领域        | 当前实现                                                                                                                      |
 | ----------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| validation  | scene-owned `EquatorialCircularEmitter`、`HomogeneousScalarSlab` 与 `PhysicalSceneInput → PhysicalScene → Observation` 原子验证；稳定协议是 issue code 与 field path |
+| validation  | `EquatorialSurface::new` 原子验证 emitter + explicit `SurfaceTransport`，再由 `PhysicalSceneInput → PhysicalScene → Observation` 组合；稳定协议是 issue code 与 field path |
 | view ray    | `Observation::initial_ray` 独占 top-left pixel/subpixel 到 future-directed Photon Momentum 的映射                             |
 | spacetime   | canonical `(t,x,y,z,p_t,p_x,p_y,p_z)` `f64` Cartesian Kerr–Schild Hamilton system                                             |
 | parameters  | 对实际 binary64 bit pattern 精确判定 extremality；axis geometry 使用解析极限                                                  |
 | integration | 七次求值、FSAL 的 Dormand–Prince 5(4)，按 position/momentum group 归一化误差                                                  |
 | events      | accepted-step quartic dense output；只在 bracket 内定位 horizon、escape、equatorial surface 与 singularity guard；surface 必须严格位于 numerical escape boundary 内 |
-| outcomes    | typed terminal、event/invariant diagnostics、travel/azimuth 与 exact branch key；source outcome 原子返回 Source Anchor、Frequency Ratio、vacuum/final bolometric 与可选 spectral bands |
+| outcomes    | `ReferenceTerminal` variant 原子携带必需 event/escape/source evidence，另有 invariant diagnostics、travel/azimuth 与 exact branch key；observed-surface variant 返回 Source Anchor、Frequency Ratio、vacuum/final bolometric 与可选 spectral bands |
 | transport   | 独立 `f64` Planck quadrature、$gT$ blackbody bands、stable homogeneous slab 与 pure-emission limit；不复用 GPU LUT generator |
 | footprint   | 五条真实 quarter-pixel trace；仅在无歧义 surface 与完整 branch key 一致时返回 local source Jacobian、singular values 与 parity |
 | fixtures    | 严格 v1/v2/v3 TOML、1 MiB 上限、unknown-field rejection、版本化 identity/profile 与十进制字符串                              |

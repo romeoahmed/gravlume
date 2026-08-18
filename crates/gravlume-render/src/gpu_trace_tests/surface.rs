@@ -1,4 +1,7 @@
-use gravlume_domain::{EquatorialCircularEmitter, HomogeneousScalarSlab, Observation};
+use gravlume_domain::{
+    EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, Observation,
+    SurfaceTransport,
+};
 use gravlume_reference::{
     FixtureDocument, ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy,
     SurfaceFootprintEstimate, SurfaceParity, Termination, TraceInputId,
@@ -39,6 +42,7 @@ fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
             )
             .expect("reference spectral transport succeeds");
         let expected = reference
+            .terminal()
             .surface_observable()
             .and_then(gravlume_reference::SurfaceObservable::observed_spectral_band_intensities)
             .expect("reference resolves the three instrument bands");
@@ -246,9 +250,10 @@ fn assert_surface_branch_profile(profile: SurfaceBranchProfile, oracle: Observat
     let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
         .expect("matrix surface is valid");
     let observation = Observation::new(
-        base.scene()
-            .clone()
-            .with_equatorial_circular_emitter(emitter),
+        base.scene().clone().with_equatorial_surface(
+            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                .expect("matrix surface is compatible with vacuum"),
+        ),
         *base.view(),
     );
     let capture = capture_trace(&observation);
@@ -313,34 +318,6 @@ fn assert_surface_branch_profile(profile: SurfaceBranchProfile, oracle: Observat
 }
 
 #[test]
-fn gpu_trace_rejects_transport_models_without_a_resolvable_spectral_contract() {
-    let base = default_observation(1, 1);
-    let slab = HomogeneousScalarSlab::constant_bolometric_v1(0.5, 0.1).expect("test slab is valid");
-    let slab_without_surface = Observation::new(
-        base.scene().clone().with_homogeneous_scalar_slab(slab),
-        *base.view(),
-    );
-    assert!(matches!(
-        TraceUniforms::from_observation(&slab_without_surface),
-        Err(GpuTraceInputError::ScalarSlabRequiresSurface)
-    ));
-
-    let blackbody = EquatorialCircularEmitter::inverse_cube_blackbody_v1(6.0, 20.0, 1.0, 6_000.0)
-        .expect("test blackbody is valid");
-    let unresolved_spectrum = Observation::new(
-        base.scene()
-            .clone()
-            .with_equatorial_circular_emitter(blackbody)
-            .with_homogeneous_scalar_slab(slab),
-        *base.view(),
-    );
-    assert!(matches!(
-        TraceUniforms::from_observation(&unresolved_spectrum),
-        Err(GpuTraceInputError::UnresolvedSlabSourceSpectrum)
-    ));
-}
-
-#[test]
 fn gpu_trace_rejects_transmittance_that_binary32_cannot_preserve_normally() {
     let base = default_observation(1, 1);
     let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0e38)
@@ -350,10 +327,10 @@ fn gpu_trace_rejects_transmittance_that_binary32_cannot_preserve_normally() {
         let slab = HomogeneousScalarSlab::pure_absorption_v1(optical_depth)
             .expect("the high optical-depth slab is intrinsically valid");
         let observation = Observation::new(
-            base.scene()
-                .clone()
-                .with_equatorial_circular_emitter(emitter)
-                .with_homogeneous_scalar_slab(slab),
+            base.scene().clone().with_equatorial_surface(
+                EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
+                    .expect("bolometric surface and slab are compatible"),
+            ),
             *base.view(),
         );
 
@@ -372,9 +349,10 @@ fn gpu_trace_rejects_a_blackbody_profile_outside_the_spectral_lut() {
     let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(1.0e-12, 20.0, 1.0, 6_000.0)
         .expect("the intrinsic source profile is valid independently of the GPU LUT");
     let observation = Observation::new(
-        base.scene()
-            .clone()
-            .with_equatorial_circular_emitter(emitter),
+        base.scene().clone().with_equatorial_surface(
+            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                .expect("blackbody surface is compatible with vacuum"),
+        ),
         *base.view(),
     );
 

@@ -29,8 +29,9 @@ pub use geodesic::{GeodesicConfigurationError, GeodesicTracer};
 pub use gravlume_domain::{SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
 pub use observation::{ObservationTrace, ObservationTraceError, ObservationTracer};
 pub use outcome::{
-    AffineDirection, GeodesicTrace, LocalizedEvent, NumericalFailure, PolarSide, ReferenceOutcome,
-    Termination, TraceBranchKey, TraceDiagnostics, TraceInputId,
+    AffineDirection, EscapeDirection, GeodesicTrace, LocalizedEvent, NumericalFailure, PolarSide,
+    ReferenceOutcome, ReferenceTerminal, Termination, TraceBranchKey, TraceDiagnostics,
+    TraceInputId,
 };
 pub use policy::ReferencePolicy;
 pub use surface::{FrequencyRatio, SourceAnchor, SurfaceObservable, SurfaceObservableError};

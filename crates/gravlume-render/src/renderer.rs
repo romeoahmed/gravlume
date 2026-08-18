@@ -5,9 +5,7 @@ use gravlume_native_display::DynamicRange;
 
 mod frame;
 
-use frame::{
-    CoreResourcePlan, FrameResources, TraceProgressDiagnostics, TraceSubmission, validate_extent,
-};
+use frame::{CoreResourcePlan, FrameResources, TraceProgressDiagnostics, validate_extent};
 
 use crate::{
     capabilities::{
@@ -21,10 +19,7 @@ use crate::{
     },
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     ray_tracer::{RayTracer, TraceBatchOptions},
-    scientific_capture::{
-        ScientificCapture, ScientificCaptureError, ScientificCaptureMetadata, capture_texture,
-        metadata_for_observation,
-    },
+    scientific_capture::{ScientificCapture, ScientificCaptureError, capture_texture},
     timing::GpuTimings,
 };
 
@@ -197,12 +192,10 @@ pub struct Renderer {
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
-    scientific_capture_metadata: Option<ScientificCaptureMetadata>,
     trace: RayTracer,
     display: DisplayPipeline,
     egui: egui_wgpu::Renderer,
-    timings: GpuTimings,
-    trace_submission: Option<TraceSubmission>,
+    timings: GpuTimings<u64>,
     pending_present_generation: Option<u64>,
     diagnostic_labels: DiagnosticLabels,
     device_events: mpsc::Receiver<DeviceEvent>,
@@ -259,7 +252,6 @@ impl Renderer {
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = RayTracer::new(&device, observation)?;
-        let scientific_capture_metadata = metadata_for_observation(observation);
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -279,12 +271,10 @@ impl Renderer {
             extent: ExtentTracker::default(),
             frame_resources: None,
             published_scene,
-            scientific_capture_metadata,
             trace,
             display,
             egui,
             timings,
-            trace_submission: None,
             pending_present_generation: None,
             diagnostic_labels,
             device_events,
@@ -458,8 +448,9 @@ impl Renderer {
             .generation()
             .ok_or(ScientificCaptureError::NoPublishedScene)?;
         let metadata = self
-            .scientific_capture_metadata
-            .clone()
+            .trace
+            .scientific_capture_metadata()
+            .cloned()
             .ok_or(ScientificCaptureError::NoPhysicalSurfaceSource)?;
         capture_texture(
             &self.device,
@@ -508,11 +499,10 @@ impl Renderer {
                 true,
             ),
         );
-        self.timings.encode_resolve(&mut encoder);
+        let generation = self.extent.generation();
+        self.timings.encode_readback(&mut encoder, generation)?;
         self.queue.submit([encoder.finish()]);
         frame.submitted(batch);
-        self.timings.begin_readback();
-        self.trace_submission = Some(TraceSubmission::new(self.extent.generation()));
         Ok(())
     }
 
@@ -531,13 +521,14 @@ impl Renderer {
             None
         };
         let mut published_generation = None;
-        if let Some(timing) = timing {
-            let submission = self.trace_submission.take();
+        if let Some((submission_generation, timing)) = timing {
             let generation = self.extent.generation();
-            if let Some(submission) = submission
-                && let Some(frame) = self.frame_resources.as_mut()
-                && let Some(completed) =
-                    frame.complete_submission(submission, generation, timing.compute_ms())
+            if let Some(frame) = self.frame_resources.as_mut()
+                && let Some(completed) = frame.complete_submission(
+                    submission_generation,
+                    generation,
+                    timing.compute_ms(),
+                )
             {
                 let extent = frame.extent();
                 let (view, presentation) = completed.into_parts();

@@ -294,7 +294,7 @@ impl ExpectedSurfaceOutcome {
         {
             return false;
         }
-        let Some(observable) = outcome.surface_observable() else {
+        let Some(observable) = outcome.terminal().surface_observable() else {
             return false;
         };
         let anchor = observable.source_anchor();

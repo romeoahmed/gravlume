@@ -1,22 +1,21 @@
 use std::f64::consts::{PI, TAU};
 
 use gravlume_domain::{
-    EquatorialCircularEmitter, EquatorialEmissionModel, GeodesicState, GeometryError,
-    HomogeneousScalarSlab, KerrNewmanSpacetime, KerrSchildChart,
+    EquatorialCircularEmitter, EquatorialEmissionModel, EquatorialSurface, GeodesicState,
+    GeometryError, KerrNewmanSpacetime, KerrSchildChart,
 };
 
 use crate::radiation::{
-    SpectralTransportError, blackbody_band_intensities, transport_blackbody_bands,
-    transport_bolometric_intensity,
+    blackbody_band_intensities, transport_blackbody_bands, transport_bolometric_intensity,
 };
 
 pub fn observable_at(
-    emitter: EquatorialCircularEmitter,
+    surface: EquatorialSurface,
     spacetime: KerrNewmanSpacetime,
     state: GeodesicState,
     observer_frequency: f64,
-    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
 ) -> Result<SurfaceObservable, SurfaceObservableError> {
+    let emitter = surface.emitter();
     let (radius_m, frequency_ratio) =
         surface_radius_and_frequency_ratio(emitter, spacetime, state, observer_frequency)?;
     let mass_m = spacetime.mass_m();
@@ -40,21 +39,13 @@ pub fn observable_at(
                 .ok_or(SurfaceObservableError::NonRepresentableSpectrum)
         })
         .transpose()?;
-    let (observed_bolometric_intensity, optical_depth, _) = transport_bolometric_intensity(
-        vacuum_observed_bolometric_intensity,
-        homogeneous_scalar_slab,
-    )
-    .ok_or(SurfaceObservableError::NonRepresentableObservedIntensity)?;
+    let (observed_bolometric_intensity, optical_depth, _) =
+        transport_bolometric_intensity(vacuum_observed_bolometric_intensity, surface.transport())
+            .ok_or(SurfaceObservableError::NonRepresentableObservedIntensity)?;
     let observed_spectral_band_intensities = vacuum_spectral_band_intensities
         .map(|bands| {
-            transport_blackbody_bands(bands, homogeneous_scalar_slab).map_err(|error| match error {
-                SpectralTransportError::UnresolvedSourceSpectrum => {
-                    SurfaceObservableError::UnresolvedSlabSourceSpectrum
-                }
-                SpectralTransportError::NonRepresentable => {
-                    SurfaceObservableError::NonRepresentableSpectrum
-                }
-            })
+            transport_blackbody_bands(bands, surface)
+                .ok_or(SurfaceObservableError::NonRepresentableSpectrum)
         })
         .transpose()?;
 
@@ -322,8 +313,6 @@ pub enum SurfaceObservableError {
     NonRepresentableTemperature,
     #[error("the versioned boxcar spectrum is not representable")]
     NonRepresentableSpectrum,
-    #[error("a non-zero neutral slab source cannot be combined with a resolved blackbody spectrum")]
-    UnresolvedSlabSourceSpectrum,
 }
 
 pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
@@ -333,7 +322,8 @@ pub fn wrapped_angle_difference(left: f64, right: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use gravlume_domain::{
-        EquatorialCircularEmitter, GeodesicState, KerrNewmanSpacetime, KerrSchildChart,
+        EquatorialCircularEmitter, EquatorialSurface, GeodesicState, KerrNewmanSpacetime,
+        KerrSchildChart, SurfaceTransport,
     };
     use proptest::prelude::*;
 
@@ -345,7 +335,7 @@ mod tests {
             .expect("Schwarzschild spacetime is valid");
         let state = GeodesicState::new([0.0, 6.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0])
             .expect("state is finite");
-        let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0, None)
+        let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
             .expect("the r = 6 M circular orbit is timelike");
 
         let expected = 0.5_f64.sqrt();
@@ -358,7 +348,7 @@ mod tests {
             .expect("Schwarzschild spacetime is valid");
         let state = GeodesicState::new([0.0, 3.0, 0.0, 0.0], [-1.0, 0.0, 0.0, 0.0])
             .expect("state is finite");
-        let error = observable_at(surface(3.0, 3.0), spacetime, state, 1.0, None)
+        let error = observable_at(surface(3.0, 3.0), spacetime, state, 1.0)
             .expect_err("the photon orbit is not a timelike emitter orbit");
 
         assert_eq!(error, SurfaceObservableError::CircularOrbitIsNotTimelike);
@@ -384,7 +374,7 @@ mod tests {
             );
             let state = GeodesicState::new([0.0, x, y, z], [-1.0, 0.0, 0.0, 0.0])
                 .expect("generated state is finite");
-            let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0, None)
+            let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
                 .expect("generated circular source orbit is timelike");
             let anchor = observable.source_anchor();
             let azimuth_difference = anchor.azimuth_rad() - azimuth_rad;
@@ -410,8 +400,14 @@ mod tests {
 
     }
 
-    fn surface(inner_radius_m: f64, outer_radius_m: f64) -> EquatorialCircularEmitter {
-        EquatorialCircularEmitter::inverse_cube_bolometric_v1(inner_radius_m, outer_radius_m, 1.0)
-            .expect("surface is valid")
+    fn surface(inner_radius_m: f64, outer_radius_m: f64) -> EquatorialSurface {
+        let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+            inner_radius_m,
+            outer_radius_m,
+            1.0,
+        )
+        .expect("surface emitter is valid");
+        EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+            .expect("surface is compatible with vacuum")
     }
 }
