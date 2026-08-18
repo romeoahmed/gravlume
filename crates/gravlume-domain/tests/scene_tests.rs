@@ -1,9 +1,9 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, HomogeneousScalarSlab, KerrSchildChart, Observation,
-    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
-    ValidationIssueCode,
+    Angle, EquatorialCircularEmitter, EquatorialEmissionModel, HomogeneousScalarSlab,
+    KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+    StationaryObserverInput, ValidationIssueCode,
 };
 use proptest::prelude::*;
 
@@ -93,6 +93,10 @@ fn image_sample() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
     })
 }
 
+fn thin_depth_exponent() -> impl Strategy<Value = i32> {
+    prop_oneof![Just(10), Just(52), Just(55), Just(60), 10_i32..=60,]
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(128))]
 
@@ -109,15 +113,18 @@ proptest! {
             && intensity_at_six_m.is_finite()
             && intensity_at_six_m >= 0.0;
 
-        prop_assert_eq!(
-            EquatorialCircularEmitter::inverse_cube_bolometric_v1(
-                inner_radius_m,
-                outer_radius_m,
-                intensity_at_six_m,
-            )
-            .is_ok(),
-            is_valid,
+        let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+            inner_radius_m,
+            outer_radius_m,
+            intensity_at_six_m,
         );
+        prop_assert_eq!(emitter.is_ok(), is_valid);
+        if let Ok(emitter) = emitter {
+            prop_assert_eq!(
+                emitter.emission_model(),
+                EquatorialEmissionModel::InverseCubeBolometricV1,
+            );
+        }
     }
 
     #[test]
@@ -136,16 +143,21 @@ proptest! {
             && temperature_at_six_kelvin.is_finite()
             && temperature_at_six_kelvin > 0.0;
 
-        prop_assert_eq!(
-            EquatorialCircularEmitter::inverse_cube_blackbody_v1(
-                inner_radius_m,
-                outer_radius_m,
-                intensity_at_six_m,
-                temperature_at_six_kelvin,
-            )
-            .is_ok(),
-            is_valid,
+        let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(
+            inner_radius_m,
+            outer_radius_m,
+            intensity_at_six_m,
+            temperature_at_six_kelvin,
         );
+        prop_assert_eq!(emitter.is_ok(), is_valid);
+        if let Ok(emitter) = emitter {
+            prop_assert_eq!(
+                emitter.emission_model(),
+                EquatorialEmissionModel::InverseCubeBlackbodyV1 {
+                    temperature_at_six_kelvin,
+                },
+            );
+        }
     }
 
     #[test]
@@ -195,6 +207,22 @@ proptest! {
                 && source_temperature_kelvin.is_finite()
                 && source_temperature_kelvin > 0.0,
         );
+    }
+
+    #[test]
+    fn thin_constant_source_preserves_first_order_emission(exponent in thin_depth_exponent()) {
+        let optical_depth = 2.0_f64.powi(-exponent);
+        let source_intensity = optical_depth.recip();
+        let slab = HomogeneousScalarSlab::constant_bolometric_v1(
+            optical_depth,
+            source_intensity,
+        )
+        .expect("generated thin slab is valid");
+        let normalized_emission = slab.integrated_bolometric_emission();
+
+        prop_assert!(normalized_emission > 0.0);
+        prop_assert!(normalized_emission <= 1.0);
+        prop_assert!((normalized_emission - 1.0).abs() <= optical_depth);
     }
 
     #[test]

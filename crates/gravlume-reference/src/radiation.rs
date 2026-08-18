@@ -167,11 +167,24 @@ pub enum SpectralTransportError {
 #[cfg(test)]
 mod tests {
     use gravlume_domain::HomogeneousScalarSlab;
+    use proptest::prelude::*;
 
     use super::{
-        VISIBLE_BOXCAR_BANDS_V1, blackbody_band_intensities, integrate_planck_kernel,
-        transport_bolometric_intensity,
+        SpectralTransportError, VISIBLE_BOXCAR_BANDS_V1, blackbody_band_intensities,
+        integrate_planck_kernel, transport_blackbody_bands, transport_bolometric_intensity,
     };
+
+    fn lut_log2_temperature() -> impl Strategy<Value = f64> {
+        prop_oneof![Just(-8.0), Just(24.0), -8.0_f64..=24.0]
+    }
+
+    fn non_negative_intensity() -> impl Strategy<Value = f64> {
+        prop_oneof![Just(0.0), 0.0_f64..=1.0e6]
+    }
+
+    fn optical_depth() -> impl Strategy<Value = f64> {
+        prop_oneof![Just(0.0), Just(20.0), 0.0_f64..=20.0]
+    }
 
     #[test]
     fn dimensionless_planck_integral_closes_stefan_boltzmann_normalization() {
@@ -182,19 +195,19 @@ mod tests {
     }
 
     #[test]
-    fn visible_boxcar_bands_are_named_non_overlapping_intervals() {
+    fn visible_boxcar_v1_preserves_its_versioned_channel_order() {
         assert_eq!(
-            VISIBLE_BOXCAR_BANDS_V1.map(SpectralBandSnapshot::from),
+            VISIBLE_BOXCAR_BANDS_V1.map(|band| (
+                band.name(),
+                band.lower_wavelength_nm(),
+                band.upper_wavelength_nm(),
+            )),
             [
-                SpectralBandSnapshot("red", 600.0, 700.0),
-                SpectralBandSnapshot("green", 500.0, 600.0),
-                SpectralBandSnapshot("blue", 400.0, 500.0),
+                ("red", 600.0, 700.0),
+                ("green", 500.0, 600.0),
+                ("blue", 400.0, 500.0),
             ]
         );
-        let bands = blackbody_band_intensities(1.0, 5_778.0)
-            .expect("solar-temperature band fractions are representable");
-        assert!(bands.into_iter().all(|value| value > 0.0));
-        assert!(bands.into_iter().sum::<f64>() < 1.0);
     }
 
     #[test]
@@ -213,38 +226,69 @@ mod tests {
     }
 
     #[test]
-    fn constant_source_transport_is_invariant_under_ordered_partitioning() {
-        let incoming = 0.375;
-        let source = 0.125;
-        let first = HomogeneousScalarSlab::constant_bolometric_v1(0.2, source)
-            .expect("first partition is valid");
-        let second = HomogeneousScalarSlab::constant_bolometric_v1(0.55, source)
-            .expect("second partition is valid");
-        let combined = HomogeneousScalarSlab::constant_bolometric_v1(0.75, source)
-            .expect("combined slab is valid");
-        let after_first = transport_bolometric_intensity(incoming, Some(first))
-            .expect("first transport is finite")
-            .0;
-        let partitioned = transport_bolometric_intensity(after_first, Some(second))
-            .expect("second transport is finite")
-            .0;
-        let atomic = transport_bolometric_intensity(incoming, Some(combined))
-            .expect("combined transport is finite")
-            .0;
+    fn blackbody_transport_rejects_a_nonzero_source_without_a_spectrum() {
+        let neutral_source = HomogeneousScalarSlab::constant_bolometric_v1(0.5, 0.1)
+            .expect("neutral slab is valid for bolometric transport");
 
-        assert!((partitioned - atomic).abs() <= 2.0 * f64::EPSILON);
+        assert_eq!(
+            transport_blackbody_bands([0.2, 0.3, 0.4], Some(neutral_source)),
+            Err(SpectralTransportError::UnresolvedSourceSpectrum)
+        );
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq)]
-    struct SpectralBandSnapshot(&'static str, f64, f64);
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
 
-    impl From<gravlume_domain::SpectralBand> for SpectralBandSnapshot {
-        fn from(value: gravlume_domain::SpectralBand) -> Self {
-            Self(
-                value.name(),
-                value.lower_wavelength_nm(),
-                value.upper_wavelength_nm(),
+        #[test]
+        fn visible_boxcar_bands_remain_a_bounded_bolometric_fraction(
+            log2_temperature in lut_log2_temperature(),
+        ) {
+            let bands = blackbody_band_intensities(1.0, log2_temperature.exp2())
+                .expect("generated LUT-domain temperature is representable");
+
+            prop_assert!(bands.into_iter().all(|value| (0.0..=1.0).contains(&value)));
+            prop_assert!(
+                bands.into_iter().sum::<f64>() <= 16.0_f64.mul_add(f64::EPSILON, 1.0)
+            );
+        }
+
+        #[test]
+        fn constant_source_transport_is_positive_and_partition_invariant(
+            incoming in non_negative_intensity(),
+            source in non_negative_intensity(),
+            first_depth in optical_depth(),
+            second_depth in optical_depth(),
+        ) {
+            let first = HomogeneousScalarSlab::constant_bolometric_v1(first_depth, source)
+                .expect("generated first partition is valid");
+            let second = HomogeneousScalarSlab::constant_bolometric_v1(second_depth, source)
+                .expect("generated second partition is valid");
+            let combined = HomogeneousScalarSlab::constant_bolometric_v1(
+                first_depth + second_depth,
+                source,
             )
+            .expect("generated combined slab is valid");
+            let (after_first, _, first_transmittance) =
+                transport_bolometric_intensity(incoming, Some(first))
+                    .expect("first transport is representable");
+            let (partitioned, _, second_transmittance) =
+                transport_bolometric_intensity(after_first, Some(second))
+                    .expect("second transport is representable");
+            let (atomic, _, combined_transmittance) =
+                transport_bolometric_intensity(incoming, Some(combined))
+                    .expect("combined transport is representable");
+            let scale = partitioned.abs().max(atomic.abs()).max(1.0);
+
+            prop_assert!(partitioned >= 0.0 && atomic >= 0.0);
+            prop_assert!(combined_transmittance <= first_transmittance);
+            prop_assert!(combined_transmittance <= second_transmittance);
+            prop_assert!(
+                first_transmittance
+                    .mul_add(-second_transmittance, combined_transmittance)
+                    .abs()
+                    <= 16.0 * f64::EPSILON,
+            );
+            prop_assert!((partitioned - atomic).abs() <= 32.0 * f64::EPSILON * scale);
         }
     }
 }

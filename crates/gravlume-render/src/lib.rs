@@ -29,8 +29,7 @@ pub use ray_tracer::GpuTraceInputError;
 pub use renderer::{PresentResult, PresentSkip, Renderer, RendererDiagnostics, RendererUpdate};
 pub use scientific_capture::{
     ScientificCapture, ScientificCaptureError, ScientificCaptureMetadata, ScientificChannelModel,
-    ScientificEmissionModel, ScientificNumericalMetadata, ScientificPixelKind,
-    ScientificTransportMetadata,
+    ScientificNumericalMetadata, ScientificPixelKind,
 };
 pub use timing::TimingError;
 

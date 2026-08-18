@@ -2,11 +2,11 @@ use std::f64::consts::PI;
 
 use gravlume_domain::VISIBLE_BOXCAR_BANDS_V1;
 
-pub const BLACKBODY_LUT_ENTRY_COUNT: usize = 4_097;
+const BLACKBODY_LUT_ENTRY_COUNT: usize = 4_097;
 pub const BLACKBODY_LUT_BYTE_SIZE: u64 = 65_552;
-pub const BLACKBODY_LUT_MIN_LOG2_TEMPERATURE: f64 = -8.0;
-pub const BLACKBODY_LUT_MAX_LOG2_TEMPERATURE: f64 = 24.0;
-pub const BLACKBODY_LUT_INTERVALS_PER_OCTAVE: f64 = 128.0;
+const BLACKBODY_LUT_MIN_LOG2_TEMPERATURE: f64 = -8.0;
+const BLACKBODY_LUT_MAX_LOG2_TEMPERATURE: f64 = 24.0;
+const BLACKBODY_LUT_INTERVALS_PER_OCTAVE: f64 = 128.0;
 
 const SECOND_RADIATION_CONSTANT_M_K: f64 = 0.014_387_768_775_039_337;
 const PLANCK_INTEGRAL: f64 = PI * PI * PI * PI / 15.0;
@@ -123,20 +123,19 @@ fn planck_kernel(x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BLACKBODY_LUT_BYTE_SIZE, BLACKBODY_LUT_ENTRY_COUNT, blackbody_band_fractions, blackbody_lut,
-    };
+    use super::{blackbody_band_fractions, blackbody_lut};
 
     #[test]
-    fn lut_uses_wgsl_vec4_array_stride() {
+    fn every_lut_entry_is_a_bounded_fraction_with_zero_padding() {
         let lut = blackbody_lut();
 
-        assert_eq!(lut.len(), BLACKBODY_LUT_ENTRY_COUNT);
-        assert_eq!(
-            lut.len() * size_of::<[f32; 4]>(),
-            usize::try_from(BLACKBODY_LUT_BYTE_SIZE).expect("LUT byte size fits usize")
-        );
-        assert!(lut.iter().flatten().all(|value| value.is_finite()));
+        assert!(lut.iter().all(|[red, green, blue, padding]| {
+            [*red, *green, *blue]
+                .into_iter()
+                .all(|fraction| (0.0..=1.0).contains(&fraction))
+                && red + green + blue <= 4.0_f32.mul_add(f32::EPSILON, 1.0)
+                && *padding == 0.0
+        }));
     }
 
     #[test]
