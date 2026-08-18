@@ -128,8 +128,16 @@ impl TraceUniforms {
 
         Ok(Self {
             spacetime: spacetime_uniform,
+            // A nonzero binary64 height can round to zero in binary32. Preserve the discrete side
+            // before narrowing; the shader never consumes coordinate time from this lane.
+            // Source: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
             observer_event: pack4(
-                [0.0, observer_x / mass, observer_y / mass, observer_z / mass],
+                [
+                    f64::from(encode_initial_polar_side(observer_z)),
+                    observer_x / mass,
+                    observer_y / mass,
+                    observer_z / mass,
+                ],
                 "observer_event",
             )?,
             observer_velocity: pack4(frame.four_velocity_txyz(), "observer_velocity")?,
@@ -325,6 +333,24 @@ fn pack4(values: [f64; 4], field: &'static str) -> Result<[f32; 4], GpuTraceInpu
         return Err(GpuTraceInputError::NotRepresentable { field });
     };
     Ok([a, b, c, d])
+}
+
+const fn encode_initial_polar_side(height_m: f64) -> u32 {
+    if height_m < 0.0 {
+        0
+    } else if height_m > 0.0 {
+        2
+    } else {
+        1
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn initial_polar_side_is_encoded_before_binary32_packing() {
+    for (height_m, expected) in [(-1.0e-50, 0), (0.0, 1), (1.0e-50, 2)] {
+        assert_eq!(encode_initial_polar_side(height_m), expected);
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -560,6 +586,17 @@ impl TracePlan {
             }
         }
     }
+
+    #[cfg(test)]
+    fn transport_capture_spec(self) -> TracePipelineSpec {
+        assert!(
+            !matches!(self, Self::AcceleratedSky),
+            "isolated transport capture requires a surface plan",
+        );
+        let mut spec = self.capture_spec();
+        spec.entry_point = "capture_surface_transport_case";
+        spec
+    }
 }
 
 impl TraceTargetKind {
@@ -692,6 +729,16 @@ impl RayTracer {
         compiled.uniforms.step_policy[1] = 0.000_125;
         compiled.uniforms.step_policy[2] = 0.25;
         let spec = compiled.plan.footprint_capture_spec()?;
+        Ok(Self::from_compiled(device, compiled, spec))
+    }
+
+    #[cfg(test)]
+    pub fn for_surface_transport_capture(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<Self, GpuTraceInputError> {
+        let compiled = CompiledTraceInput::compile(observation)?;
+        let spec = compiled.plan.transport_capture_spec();
         Ok(Self::from_compiled(device, compiled, spec))
     }
 

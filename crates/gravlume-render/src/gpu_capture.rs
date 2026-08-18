@@ -66,6 +66,13 @@ pub fn capture_surface_footprint_sample(
     capture_region(gpu, observation, &compute, tile)
 }
 
+pub fn capture_surface_transport_case(observation: &Observation) -> TraceCapture {
+    let gpu = crate::test_device::native_gpu();
+    let compute = RayTracer::for_surface_transport_capture(&gpu.device, observation)
+        .expect("surface observation packs for isolated GPU transport");
+    capture(gpu, observation, &compute, false)
+}
+
 pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
     let compute = RayTracer::for_accelerated_trace_capture(&gpu.device, observation)

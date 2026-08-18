@@ -101,7 +101,11 @@ fn canonical_surface_footprint_is_resolved_only_with_one_exact_branch_key() {
     let [major, minor] = footprint.singular_values_m_per_pixel();
     assert!(major >= minor && minor > 0.0);
     assert_ne!(footprint.parity(), SurfaceParity::Degenerate);
-    assert!(footprint.branch_key().equatorial_crossings() > 0);
+    assert_eq!(
+        footprint.branch_key().equatorial_crossings(),
+        0,
+        "the terminal surface crossing is excluded from the exact branch key",
+    );
 }
 
 #[test]

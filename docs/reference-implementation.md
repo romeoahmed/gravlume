@@ -36,7 +36,7 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
-- surface branch key 只提交 accepted terminal fraction 以内的 radial/equatorial crossings；canonical
+- surface branch key 只提交严格位于 accepted terminal fraction 之前的 radial/equatorial crossings；canonical
   ordinary region 的 source Jacobian、稳定奇异值与 parity 由 branch-checked footprint API 验证。
 
 这些测试不需要 GPU。几何/Observation 基线由 [`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/) 保存；neutral surface observable 由 [`fixtures/v2`](../crates/gravlume-reference/fixtures/v2/) 保存；blackbody/slab transport 由 [`fixtures/v3`](../crates/gravlume-reference/fixtures/v3/) 保存。新证据不修改旧 schema 含义。
