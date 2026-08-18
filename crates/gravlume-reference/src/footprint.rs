@@ -1,8 +1,8 @@
 use gravlume_domain::{ImageSample, Observation, ValidationReport};
 
 use crate::{
-    LocalizedEvent, ObservationTrace, ObservationTraceError, ObservationTracer, ReferenceOutcome,
-    ReferencePolicy, SourceAnchor, SurfaceObservable, Termination, TraceBranchKey, TraceInputId,
+    ObservationTrace, ObservationTraceError, ObservationTracer, ReferenceOutcome, ReferencePolicy,
+    ReferenceTerminal, SourceAnchor, SurfaceObservable, TraceBranchKey, TraceInputId,
     surface::wrapped_angle_difference,
 };
 
@@ -241,16 +241,16 @@ struct ResolvedSurface {
     branch_key: TraceBranchKey,
 }
 
-fn resolved_surface(outcome: &ReferenceOutcome) -> Option<ResolvedSurface> {
-    if outcome.termination() != Termination::EquatorialSurface
-        || outcome.event().is_none_or(LocalizedEvent::is_ambiguous)
-    {
-        return None;
+const fn resolved_surface(outcome: &ReferenceOutcome) -> Option<ResolvedSurface> {
+    match outcome.terminal() {
+        ReferenceTerminal::ObservedSurface { event, observable } if !event.is_ambiguous() => {
+            Some(ResolvedSurface {
+                observable: *observable,
+                branch_key: outcome.branch_key(),
+            })
+        }
+        _ => None,
     }
-    Some(ResolvedSurface {
-        observable: outcome.surface_observable()?,
-        branch_key: outcome.branch_key(),
-    })
 }
 
 #[derive(Debug, thiserror::Error)]

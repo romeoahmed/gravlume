@@ -1,11 +1,10 @@
 use gravlume_domain::{
-    EquatorialCircularEmitter, HomogeneousScalarSlab, ImageSample, InitialViewRay,
-    KerrNewmanSpacetime, Observation, ValidationReport,
+    ImageSample, InitialViewRay, KerrNewmanSpacetime, Observation, SceneRadiance, ValidationReport,
 };
 
 use crate::{
     AffineDirection, EventConfiguration, EventConfigurationError, GeodesicTrace, GeodesicTracer,
-    ReferenceOutcome, ReferencePolicy, SurfaceObservableError, Termination, TraceInputId,
+    ReferenceOutcome, ReferencePolicy, ReferenceTerminal, SurfaceObservableError, TraceInputId,
     surface::observable_at,
 };
 
@@ -15,8 +14,7 @@ pub struct ObservationTrace {
     spacetime: KerrNewmanSpacetime,
     initial_ray: InitialViewRay,
     policy: ReferencePolicy,
-    equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
-    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
+    radiance: SceneRadiance,
 }
 
 impl ObservationTrace {
@@ -37,8 +35,7 @@ impl ObservationTrace {
             spacetime: *observation.scene().spacetime(),
             initial_ray,
             policy,
-            equatorial_circular_emitter: observation.scene().equatorial_circular_emitter(),
-            homogeneous_scalar_slab: observation.scene().homogeneous_scalar_slab(),
+            radiance: observation.scene().radiance(),
         })
     }
 }
@@ -69,20 +66,21 @@ impl ObservationTracer {
             spacetime,
             initial_ray,
             policy,
-            equatorial_circular_emitter,
-            homogeneous_scalar_slab,
+            radiance,
         } = request;
-        if homogeneous_scalar_slab.is_some() && equatorial_circular_emitter.is_none() {
-            return Err(ObservationTraceError::ScalarSlabRequiresSurface);
-        }
         if (initial_ray.observer_frequency() - 1.0).abs() > 32.0 * f64::EPSILON {
             return Err(ObservationTraceError::NonNormalizedReferenceInput);
         }
         let mut events = EventConfiguration::observation_baseline_v1();
-        if let Some(surface) = equatorial_circular_emitter {
-            events = events
-                .with_equatorial_surface(surface.inner_radius_m(), surface.outer_radius_m())?;
-        }
+        let surface = match radiance {
+            SceneRadiance::AnalyticSky => None,
+            SceneRadiance::EquatorialSurface(surface) => {
+                let emitter = surface.emitter();
+                events = events
+                    .with_equatorial_surface(emitter.inner_radius_m(), emitter.outer_radius_m())?;
+                Some(surface)
+            }
+        };
         let tracer = GeodesicTracer::new(spacetime, policy, events)
             .map_err(|_| ObservationTraceError::NonNormalizedReferenceInput)?;
         let observer_frequency = initial_ray.observer_frequency();
@@ -91,17 +89,15 @@ impl ObservationTracer {
             initial_ray.state(),
             AffineDirection::Negative,
         ));
-        if let Some(surface) = equatorial_circular_emitter
-            && outcome.termination() == Termination::EquatorialSurface
-        {
-            outcome.surface_observable = Some(observable_at(
-                surface,
-                spacetime,
-                outcome.state(),
-                observer_frequency,
-                homogeneous_scalar_slab,
-            )?);
-        }
+        let Some(surface) = surface else {
+            return Ok(outcome);
+        };
+        let ReferenceTerminal::EquatorialSurface { event } = outcome.terminal() else {
+            return Ok(outcome);
+        };
+        let event = event.clone();
+        let observable = observable_at(surface, spacetime, outcome.state(), observer_frequency)?;
+        outcome.terminal = ReferenceTerminal::ObservedSurface { event, observable };
         Ok(outcome)
     }
 }
@@ -110,8 +106,6 @@ impl ObservationTracer {
 pub enum ObservationTraceError {
     #[error("reference-v1 observation inputs must be normalized to M = omega = 1")]
     NonNormalizedReferenceInput,
-    #[error("a homogeneous scalar slab requires a resolved equatorial surface source")]
-    ScalarSlabRequiresSurface,
     #[error(transparent)]
     EventConfiguration(#[from] EventConfigurationError),
     #[error(transparent)]

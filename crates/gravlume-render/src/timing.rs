@@ -88,6 +88,8 @@ fn decode_query_ticks(bytes: &[u8]) -> Option<QueryTicks> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum TimingError {
+    #[error("a GPU timestamp readback is already pending")]
+    ReadbackAlreadyPending,
     #[error("non-blocking GPU poll failed: {0}")]
     Poll(#[from] wgpu::PollError),
     #[error("GPU timestamp readback mapping failed: {0}")]
@@ -100,15 +102,20 @@ pub enum TimingError {
     InvalidReadback,
 }
 
-pub struct GpuTimings {
+struct PendingReadback<C> {
+    receiver: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    context: C,
+}
+
+pub struct GpuTimings<C> {
     layout: TimingLayout,
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
     readback_buffer: wgpu::Buffer,
-    callback_receiver: Option<mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    pending: Option<PendingReadback<C>>,
 }
 
-impl GpuTimings {
+impl<C> GpuTimings<C> {
     pub(crate) fn new(device: &wgpu::Device, has_escape_map: bool) -> Self {
         let layout = TimingLayout::for_escape_map(has_escape_map);
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
@@ -133,12 +140,12 @@ impl GpuTimings {
             query_set,
             resolve_buffer,
             readback_buffer,
-            callback_receiver: None,
+            pending: None,
         }
     }
 
     pub(crate) const fn capture_available(&self) -> bool {
-        self.callback_receiver.is_none()
+        self.pending.is_none()
     }
 
     pub(crate) const fn escape_map_writes(&self) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
@@ -161,7 +168,14 @@ impl GpuTimings {
         }
     }
 
-    pub(crate) fn encode_resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+    pub(crate) fn encode_readback(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        context: C,
+    ) -> Result<(), TimingError> {
+        if self.pending.is_some() {
+            return Err(TimingError::ReadbackAlreadyPending);
+        }
         encoder.resolve_query_set(
             &self.query_set,
             0..self.layout.query_count(),
@@ -175,48 +189,56 @@ impl GpuTimings {
             0,
             self.layout.query_bytes(),
         );
-    }
-
-    pub(crate) fn begin_readback(&mut self) {
-        if self.callback_receiver.is_some() {
-            return;
-        }
 
         let (sender, receiver) = mpsc::channel();
-        self.readback_buffer
-            .map_async(wgpu::MapMode::Read, .., move |result| {
+        // Scheduling map on the producing encoder makes copy completion and mapping one ordered
+        // submission lifecycle. The callback is driven by `Device::poll` after queue submission.
+        // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
+        encoder.map_buffer_on_submit(
+            &self.readback_buffer,
+            wgpu::MapMode::Read,
+            ..,
+            move |result| {
                 if sender.send(result).is_err() {
                     tracing::debug!("timestamp callback receiver dropped");
                 }
-            });
-        self.callback_receiver = Some(receiver);
+            },
+        );
+        self.pending = Some(PendingReadback { receiver, context });
+        Ok(())
     }
 
     pub(crate) fn poll(
         &mut self,
         device: &wgpu::Device,
         timestamp_period_ns: f32,
-    ) -> Result<Option<TimingSample>, TimingError> {
-        let Some(receiver) = self.callback_receiver.as_ref() else {
+    ) -> Result<Option<(C, TimingSample)>, TimingError> {
+        if self.pending.is_none() {
             return Ok(None);
-        };
+        }
 
         device.poll(wgpu::PollType::Poll)?;
-        match receiver.try_recv() {
+        let Some(pending) = self.pending.take() else {
+            return Ok(None);
+        };
+        match pending.receiver.try_recv() {
             Ok(Ok(())) => {
                 let ticks = self.read_ticks();
-                self.finish_readback();
+                self.readback_buffer.unmap();
                 let ticks = ticks?;
                 let sample = TimingSample::from_ticks(ticks, timestamp_period_ns);
-                Ok(Some(sample))
+                Ok(Some((pending.context, sample)))
             }
             Ok(Err(error)) => {
-                self.finish_readback();
+                self.readback_buffer.unmap();
                 Err(error.into())
             }
-            Err(TryRecvError::Empty) => Ok(None),
+            Err(TryRecvError::Empty) => {
+                self.pending = Some(pending);
+                Ok(None)
+            }
             Err(TryRecvError::Disconnected) => {
-                self.finish_readback();
+                self.readback_buffer.unmap();
                 Err(TimingError::CallbackDisconnected)
             }
         }
@@ -229,13 +251,8 @@ impl GpuTimings {
         ticks
     }
 
-    fn finish_readback(&mut self) {
-        self.readback_buffer.unmap();
-        self.callback_receiver = None;
-    }
-
     pub(crate) const fn has_pending_readback(&self) -> bool {
-        self.callback_receiver.is_some()
+        self.pending.is_some()
     }
 }
 
@@ -317,9 +334,10 @@ mod tests {
                     timestamp_writes: Some(timings.trace_writes()),
                 });
             }
-            timings.encode_resolve(&mut encoder);
+            timings
+                .encode_readback(&mut encoder, 17_u64)
+                .expect("timestamp readback is available");
             let submission = gpu.queue.submit([encoder.finish()]);
-            timings.begin_readback();
             gpu.device
                 .poll(wgpu::PollType::Wait {
                     submission_index: Some(submission),
@@ -327,11 +345,12 @@ mod tests {
                 })
                 .expect("timestamp submission completes");
 
-            let sample = timings
+            let (context, sample) = timings
                 .poll(&gpu.device, gpu.queue.get_timestamp_period())
                 .expect("timestamp readback succeeds")
                 .expect("timestamp readback completed after its submission");
 
+            assert_eq!(context, 17);
             assert!(sample.compute_ms().is_finite());
             assert!(!timings.has_pending_readback());
         }

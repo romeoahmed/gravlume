@@ -54,11 +54,6 @@ struct TraceProgress {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TraceSubmission {
-    generation: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CoreResourcePlan {
     published: u64,
     installed: FrameResourceFootprint,
@@ -171,12 +166,6 @@ impl CoreResourcePlan {
     }
 }
 
-impl TraceSubmission {
-    pub const fn new(generation: u64) -> Self {
-        Self { generation }
-    }
-}
-
 impl CompletedCandidate {
     pub fn into_parts(self) -> (wgpu::TextureView, ScenePresentation) {
         (self.view, self.presentation)
@@ -258,7 +247,7 @@ impl FrameResources {
 
     pub fn complete_submission(
         &mut self,
-        submission: TraceSubmission,
+        submission_generation: u64,
         current_generation: u64,
         compute_ms: f64,
     ) -> Option<CompletedCandidate> {
@@ -266,9 +255,11 @@ impl FrameResources {
             .candidate
             .as_mut()
             .map_or(TraceCompletion::Stale, |candidate| {
-                candidate
-                    .progress
-                    .complete_submission(submission, current_generation, compute_ms)
+                candidate.progress.complete_submission(
+                    submission_generation,
+                    current_generation,
+                    compute_ms,
+                )
             });
         if completion == TraceCompletion::Stale {
             return None;
@@ -425,11 +416,11 @@ impl TraceProgress {
 
     fn complete_submission(
         &mut self,
-        submission: TraceSubmission,
+        submission_generation: u64,
         current_generation: u64,
         compute_ms: f64,
     ) -> TraceCompletion {
-        if submission.generation != current_generation {
+        if submission_generation != current_generation {
             return TraceCompletion::Stale;
         }
         self.completed(compute_ms);
@@ -548,7 +539,7 @@ mod tests {
             extent,
             wgpu::Limits::default().max_compute_workgroups_per_dimension,
         );
-        let submission = TraceSubmission::new(7);
+        let submission_generation = 7;
         let mut covered_tiles = 0;
 
         while let Some(batch) = progress.next_batch() {
@@ -561,7 +552,7 @@ mod tests {
             };
             assert_eq!(batch.finishes(extent), expected == TraceCompletion::Ready);
             assert_eq!(
-                progress.complete_submission(submission, 7, TARGET_BATCH_MS),
+                progress.complete_submission(submission_generation, 7, TARGET_BATCH_MS),
                 expected
             );
         }
@@ -576,7 +567,7 @@ mod tests {
             .expect("one tile requires one submission");
         stale.submitted(batch);
         assert_eq!(
-            stale.complete_submission(submission, 8, TARGET_BATCH_MS),
+            stale.complete_submission(submission_generation, 8, TARGET_BATCH_MS),
             TraceCompletion::Stale
         );
     }

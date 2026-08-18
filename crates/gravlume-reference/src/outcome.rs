@@ -262,6 +262,105 @@ impl LocalizedEvent {
     }
 }
 
+/// Availability of the normalized coordinate traversal direction at an escape event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum EscapeDirection {
+    Resolved([f64; 3]),
+    Unavailable,
+}
+
+impl EscapeDirection {
+    #[must_use]
+    pub const fn xyz(self) -> Option<[f64; 3]> {
+        match self {
+            Self::Resolved(direction) => Some(direction),
+            Self::Unavailable => None,
+        }
+    }
+}
+
+/// Terminal classification together with exactly the evidence available for that branch.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ReferenceTerminal {
+    HorizonCrossing {
+        event: LocalizedEvent,
+    },
+    Escape {
+        event: LocalizedEvent,
+        direction: EscapeDirection,
+    },
+    EquatorialSurface {
+        event: LocalizedEvent,
+    },
+    ObservedSurface {
+        event: LocalizedEvent,
+        observable: SurfaceObservable,
+    },
+    SingularityGuard {
+        event: LocalizedEvent,
+    },
+    StepExhaustion,
+    RejectExhaustion,
+    NumericalFailure(NumericalFailure),
+}
+
+impl ReferenceTerminal {
+    #[must_use]
+    pub const fn termination(&self) -> Termination {
+        match self {
+            Self::HorizonCrossing { .. } => Termination::HorizonCrossing,
+            Self::Escape { .. } => Termination::Escape,
+            Self::EquatorialSurface { .. } | Self::ObservedSurface { .. } => {
+                Termination::EquatorialSurface
+            }
+            Self::SingularityGuard { .. } => Termination::SingularityGuard,
+            Self::StepExhaustion => Termination::StepExhaustion,
+            Self::RejectExhaustion => Termination::RejectExhaustion,
+            Self::NumericalFailure(failure) => Termination::NumericalFailure(*failure),
+        }
+    }
+
+    #[must_use]
+    pub const fn event(&self) -> Option<&LocalizedEvent> {
+        match self {
+            Self::HorizonCrossing { event }
+            | Self::Escape { event, .. }
+            | Self::EquatorialSurface { event }
+            | Self::ObservedSurface { event, .. }
+            | Self::SingularityGuard { event } => Some(event),
+            Self::StepExhaustion | Self::RejectExhaustion | Self::NumericalFailure(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn escape_direction(&self) -> Option<EscapeDirection> {
+        match self {
+            Self::Escape { direction, .. } => Some(*direction),
+            Self::HorizonCrossing { .. }
+            | Self::EquatorialSurface { .. }
+            | Self::ObservedSurface { .. }
+            | Self::SingularityGuard { .. }
+            | Self::StepExhaustion
+            | Self::RejectExhaustion
+            | Self::NumericalFailure(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub const fn surface_observable(&self) -> Option<SurfaceObservable> {
+        match self {
+            Self::ObservedSurface { observable, .. } => Some(*observable),
+            Self::HorizonCrossing { .. }
+            | Self::Escape { .. }
+            | Self::EquatorialSurface { .. }
+            | Self::SingularityGuard { .. }
+            | Self::StepExhaustion
+            | Self::RejectExhaustion
+            | Self::NumericalFailure(_) => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TraceDiagnostics {
     pub(super) accepted_steps: u64,
@@ -326,16 +425,13 @@ impl TraceDiagnostics {
 pub struct ReferenceOutcome {
     pub(super) input_id: TraceInputId,
     pub(super) policy_id: &'static str,
-    pub(super) termination: Termination,
+    pub(super) terminal: ReferenceTerminal,
     pub(super) state: GeodesicState,
     pub(super) affine_parameter_m: f64,
-    pub(super) event: Option<LocalizedEvent>,
-    pub(super) escape_direction_xyz: Option<[f64; 3]>,
     pub(super) turning_radius_m: Option<f64>,
     pub(super) azimuth_advance_rad: f64,
     pub(super) travel_time_m: f64,
     pub(super) branch_key: TraceBranchKey,
-    pub(super) surface_observable: Option<SurfaceObservable>,
     pub(super) diagnostics: TraceDiagnostics,
 }
 
@@ -352,7 +448,12 @@ impl ReferenceOutcome {
 
     #[must_use]
     pub const fn termination(&self) -> Termination {
-        self.termination
+        self.terminal.termination()
+    }
+
+    #[must_use]
+    pub const fn terminal(&self) -> &ReferenceTerminal {
+        &self.terminal
     }
 
     #[must_use]
@@ -363,17 +464,6 @@ impl ReferenceOutcome {
     #[must_use]
     pub const fn affine_parameter_m(&self) -> f64 {
         self.affine_parameter_m
-    }
-
-    #[must_use]
-    pub const fn event(&self) -> Option<&LocalizedEvent> {
-        self.event.as_ref()
-    }
-
-    /// Returns the normalized terminal coordinate traversal direction for an escape.
-    #[must_use]
-    pub const fn escape_direction_xyz(&self) -> Option<[f64; 3]> {
-        self.escape_direction_xyz
     }
 
     #[must_use]
@@ -395,12 +485,6 @@ impl ReferenceOutcome {
     #[must_use]
     pub const fn branch_key(&self) -> TraceBranchKey {
         self.branch_key
-    }
-
-    /// Returns the physical source observable for a configured surface hit.
-    #[must_use]
-    pub const fn surface_observable(&self) -> Option<SurfaceObservable> {
-        self.surface_observable
     }
 
     #[must_use]

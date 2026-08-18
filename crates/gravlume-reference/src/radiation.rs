@@ -1,6 +1,9 @@
 use std::f64::consts::PI;
 
-use gravlume_domain::{HomogeneousScalarSlab, SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
+use gravlume_domain::{
+    EquatorialEmissionModel, EquatorialSurface, ScalarSlabEmissionModel, SpectralBand,
+    SurfaceTransport, VISIBLE_BOXCAR_BANDS_V1,
+};
 
 const SECOND_RADIATION_CONSTANT_M_K: f64 = 0.014_387_768_775_039_337;
 const PLANCK_INTEGRAL: f64 = PI * PI * PI * PI / 15.0;
@@ -32,10 +35,11 @@ pub fn blackbody_band_intensities(
 
 pub fn transport_bolometric_intensity(
     incoming: f64,
-    slab: Option<HomogeneousScalarSlab>,
+    transport: SurfaceTransport,
 ) -> Option<(f64, f64, f64)> {
-    let Some(slab) = slab else {
-        return Some((incoming, 0.0, 1.0));
+    let slab = match transport {
+        SurfaceTransport::Vacuum => return Some((incoming, 0.0, 1.0)),
+        SurfaceTransport::HomogeneousScalar(slab) => slab,
     };
     let optical_depth = slab.optical_depth();
     let transmittance = (-optical_depth).exp();
@@ -49,31 +53,36 @@ pub fn transport_bolometric_intensity(
 
 pub fn transport_blackbody_bands(
     incoming: [f64; 3],
-    slab: Option<HomogeneousScalarSlab>,
-) -> Result<[f64; 3], SpectralTransportError> {
-    let Some(slab) = slab else {
-        return Ok(incoming);
+    surface: EquatorialSurface,
+) -> Option<[f64; 3]> {
+    debug_assert!(matches!(
+        surface.emitter().emission_model(),
+        EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. }
+    ));
+    let slab = match surface.transport() {
+        SurfaceTransport::Vacuum => return Some(incoming),
+        SurfaceTransport::HomogeneousScalar(slab) => slab,
     };
     let transmittance = (-slab.optical_depth()).exp();
     let integrated_emission = slab.integrated_bolometric_emission();
     let source = if integrated_emission == 0.0 {
         [0.0; 3]
     } else {
-        let temperature = slab
-            .emission_temperature_kelvin()
-            .ok_or(SpectralTransportError::UnresolvedSourceSpectrum)?;
-        blackbody_band_intensities(integrated_emission, temperature)
-            .ok_or(SpectralTransportError::NonRepresentable)?
+        let ScalarSlabEmissionModel::BlackbodyV1 { temperature_kelvin } = slab.emission_model()
+        else {
+            return None;
+        };
+        blackbody_band_intensities(integrated_emission, temperature_kelvin)?
     };
 
     let mut outgoing = [0.0; 3];
     for ((outgoing, incoming), source) in outgoing.iter_mut().zip(incoming).zip(source) {
         *outgoing = incoming.mul_add(transmittance, source);
         if !outgoing.is_finite() || *outgoing < 0.0 {
-            return Err(SpectralTransportError::NonRepresentable);
+            return None;
         }
     }
-    Ok(outgoing)
+    Some(outgoing)
 }
 
 fn blackbody_band_fraction(temperature_kelvin: f64, band: SpectralBand) -> Option<f64> {
@@ -158,20 +167,14 @@ fn planck_kernel(x: f64) -> f64 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SpectralTransportError {
-    UnresolvedSourceSpectrum,
-    NonRepresentable,
-}
-
 #[cfg(test)]
 mod tests {
-    use gravlume_domain::HomogeneousScalarSlab;
+    use gravlume_domain::{HomogeneousScalarSlab, SurfaceTransport};
     use proptest::prelude::*;
 
     use super::{
-        SpectralTransportError, VISIBLE_BOXCAR_BANDS_V1, blackbody_band_intensities,
-        integrate_planck_kernel, transport_blackbody_bands, transport_bolometric_intensity,
+        VISIBLE_BOXCAR_BANDS_V1, blackbody_band_intensities, integrate_planck_kernel,
+        transport_bolometric_intensity,
     };
 
     fn lut_log2_temperature() -> impl Strategy<Value = f64> {
@@ -225,17 +228,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blackbody_transport_rejects_a_nonzero_source_without_a_spectrum() {
-        let neutral_source = HomogeneousScalarSlab::constant_bolometric_v1(0.5, 0.1)
-            .expect("neutral slab is valid for bolometric transport");
-
-        assert_eq!(
-            transport_blackbody_bands([0.2, 0.3, 0.4], Some(neutral_source)),
-            Err(SpectralTransportError::UnresolvedSourceSpectrum)
-        );
-    }
-
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -269,13 +261,13 @@ mod tests {
             )
             .expect("generated combined slab is valid");
             let (after_first, _, first_transmittance) =
-                transport_bolometric_intensity(incoming, Some(first))
+                transport_bolometric_intensity(incoming, SurfaceTransport::HomogeneousScalar(first))
                     .expect("first transport is representable");
             let (partitioned, _, second_transmittance) =
-                transport_bolometric_intensity(after_first, Some(second))
+                transport_bolometric_intensity(after_first, SurfaceTransport::HomogeneousScalar(second))
                     .expect("second transport is representable");
             let (atomic, _, combined_transmittance) =
-                transport_bolometric_intensity(incoming, Some(combined))
+                transport_bolometric_intensity(incoming, SurfaceTransport::HomogeneousScalar(combined))
                     .expect("combined transport is representable");
             let scale = partitioned.abs().max(atomic.abs()).max(1.0);
 

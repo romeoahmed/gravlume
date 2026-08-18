@@ -8,8 +8,9 @@ use std::{num::NonZeroU32, time::Duration};
 
 use criterion::{Criterion, SamplingMode, Throughput};
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, KerrNewmanSpacetime, KerrSchildChart, Observation,
-    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput, ValidationReport,
+    Angle, EquatorialCircularEmitter, EquatorialSurface, KerrNewmanSpacetime, KerrSchildChart,
+    Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    SurfaceTransport, ValidationReport,
 };
 
 use crate::{
@@ -53,7 +54,7 @@ struct TraceGpuBenchmark {
     compute: RayTracer,
     target: TraceImage,
     tiles: TileRegion,
-    timings: GpuTimings,
+    timings: GpuTimings<()>,
     adapter_info: wgpu::AdapterInfo,
 }
 
@@ -124,14 +125,13 @@ impl TraceGpuBenchmark {
                 true,
             ),
         );
-        self.timings.encode_resolve(&mut encoder);
+        self.timings.encode_readback(&mut encoder, ())?;
         let submission = self.queue.submit([encoder.finish()]);
-        self.timings.begin_readback();
         self.device.poll(wgpu::PollType::Wait {
             submission_index: Some(submission),
             timeout: None,
         })?;
-        let sample = self
+        let (_, sample) = self
             .timings
             .poll(&self.device, self.queue.get_timestamp_period())?
             .ok_or(TraceBenchmarkError::MissingTimingSample)?;
@@ -233,6 +233,7 @@ fn benchmark_observation() -> Result<Observation, TraceBenchmarkError> {
         1.0,
     );
     let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)?;
+    let surface = EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)?;
     let scene = PhysicalScene::new(PhysicalSceneInput::new(
         1.0,
         0.8,
@@ -240,7 +241,7 @@ fn benchmark_observation() -> Result<Observation, TraceBenchmarkError> {
         KerrSchildChart::Outgoing,
         observer,
     ))?
-    .with_equatorial_circular_emitter(emitter);
+    .with_equatorial_surface(surface);
     let view = PerspectiveView::new(
         NonZeroU32::new(BENCHMARK_WIDTH).ok_or(TraceBenchmarkError::UnsupportedExtent)?,
         NonZeroU32::new(BENCHMARK_HEIGHT).ok_or(TraceBenchmarkError::UnsupportedExtent)?,

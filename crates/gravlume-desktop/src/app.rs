@@ -25,7 +25,7 @@ use winit::{
 use crate::{
     lifecycle::Lifecycle,
     preview::DEFAULT_PREVIEW,
-    schedule::{EventLoopSchedule, PendingResize, earliest},
+    schedule::{DesktopSchedule, ResizeAction},
     ui::{install_fonts, show_overlay},
 };
 
@@ -87,8 +87,7 @@ struct DesktopApp {
     renderer: Option<Renderer>,
     egui_context: egui::Context,
     event_proxy: EventLoopProxy<AppEvent>,
-    schedule: EventLoopSchedule,
-    pending_resize: PendingResize,
+    schedule: DesktopSchedule,
     pending_textures: egui::TexturesDelta,
     last_device_event: Option<DeviceEvent>,
     last_resize_event: Option<DeviceEvent>,
@@ -108,8 +107,7 @@ impl DesktopApp {
             renderer: None,
             egui_context,
             event_proxy,
-            schedule: EventLoopSchedule::default(),
-            pending_resize: PendingResize::default(),
+            schedule: DesktopSchedule::default(),
             pending_textures: egui::TexturesDelta::default(),
             last_device_event: None,
             last_resize_event: None,
@@ -283,13 +281,13 @@ impl DesktopApp {
     }
 
     fn request_resize(&mut self, event_loop: &ActiveEventLoop, size: PhysicalSize<u32>) {
-        if self.pending_resize.request(Instant::now(), size) {
+        if let ResizeAction::ApplyNow(size) = self.schedule.request_resize(Instant::now(), size) {
             self.resize_renderer(event_loop, size.width, size.height);
         }
     }
 
     fn apply_pending_resize(&mut self, event_loop: &ActiveEventLoop, gpu_idle: bool) {
-        if let Some(size) = self.pending_resize.take_due(Instant::now(), gpu_idle) {
+        if let Some(size) = self.schedule.take_ready_resize(Instant::now(), gpu_idle) {
             self.resize_renderer(event_loop, size.width, size.height);
         }
     }
@@ -444,7 +442,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 self.request_resize(event_loop, size);
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
-            WindowEvent::RedrawRequested if !self.pending_resize.is_pending() => {
+            WindowEvent::RedrawRequested if self.schedule.redraw_allowed() => {
                 self.draw_frame(event_loop);
             }
             WindowEvent::Occluded(true) | WindowEvent::RedrawRequested => {}
@@ -507,7 +505,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             .as_ref()
             .is_none_or(|renderer| !renderer.has_pending_work());
         self.apply_pending_resize(event_loop, gpu_idle);
-        if !self.pending_resize.is_pending()
+        if !self.schedule.resize_pending()
             && let Some(Err(error)) = self.renderer.as_mut().map(Renderer::advance_trace)
         {
             self.fail(event_loop, error.into());
@@ -525,16 +523,14 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             .window
             .as_ref()
             .and_then(|window| window.display_monitor.next_dispatch_deadline());
-        let resize_deadline = gpu_idle.then(|| self.pending_resize.deadline()).flatten();
-        let application_deadline = earliest(self.schedule.next_wake(), resize_deadline);
-        match earliest(application_deadline, native_dispatch_deadline) {
+        match self.schedule.next_wake(native_dispatch_deadline, gpu_idle) {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        self.pending_resize.clear();
+        self.schedule.clear_resize();
         if self.lifecycle.suspend()
             && let Some(renderer) = self.renderer.as_mut()
         {

@@ -1,8 +1,9 @@
 use std::num::NonZeroU32;
 
 use gravlume_domain::{
-    Angle, EquatorialCircularEmitter, KerrNewmanSpacetime, KerrSchildChart, Observation,
-    PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput, ValidationReport,
+    Angle, EquatorialCircularEmitter, EquatorialSurface, KerrNewmanSpacetime, KerrSchildChart,
+    Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput, StationaryObserverInput,
+    SurfaceTransport, ValidationReport,
 };
 
 #[derive(Clone, Copy)]
@@ -42,6 +43,7 @@ impl Preview {
             20.0 * self.mass_m,
             1.0,
         )?;
+        let surface = EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)?;
         let scene = PhysicalScene::new(PhysicalSceneInput::new(
             self.mass_m,
             self.spin_m,
@@ -49,7 +51,7 @@ impl Preview {
             KerrSchildChart::Outgoing,
             observer,
         ))?
-        .with_equatorial_circular_emitter(emitter);
+        .with_equatorial_surface(surface);
         let view = PerspectiveView::new(
             NonZeroU32::new(width).unwrap_or(NonZeroU32::MIN),
             NonZeroU32::new(height).unwrap_or(NonZeroU32::MIN),

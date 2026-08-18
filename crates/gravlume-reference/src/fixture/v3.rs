@@ -1,5 +1,6 @@
 use gravlume_domain::{
-    EquatorialCircularEmitter, HomogeneousScalarSlab, Observation, PhysicalScene,
+    EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, Observation,
+    SurfaceTransport,
 };
 use serde::Deserialize;
 
@@ -58,13 +59,13 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
         raw.emission.temperature_at_6m_kelvin.value,
     )
     .map_err(invalid_physical_data)?;
-    let slab = build_slab(&raw.transport)?;
+    let transport = build_transport(&raw.transport)?;
+    let surface = EquatorialSurface::new(emitter, transport).map_err(invalid_physical_data)?;
     let scene = base
         .observation
         .scene()
         .clone()
-        .with_equatorial_circular_emitter(emitter);
-    let scene = install_slab(scene, slab);
+        .with_equatorial_surface(surface);
     let observation = Observation::new(scene, *base.observation.view());
     let sample = observation
         .view()
@@ -79,7 +80,7 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
         .initial_ray(sample)
         .map_err(invalid_physical_data)?;
     let spacetime = *observation.scene().spacetime();
-    validate_expected(&raw, emitter, slab, spacetime.mass_m())?;
+    validate_expected(&raw, surface, spacetime.mass_m())?;
     let events = EventConfiguration::observation_baseline_v1()
         .with_equatorial_surface(emitter.inner_radius_m(), emitter.outer_radius_m())
         .map_err(invalid_physical_data)?;
@@ -130,16 +131,9 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
     ))
 }
 
-const fn install_slab(scene: PhysicalScene, slab: Option<HomogeneousScalarSlab>) -> PhysicalScene {
-    match slab {
-        Some(slab) => scene.with_homogeneous_scalar_slab(slab),
-        None => scene,
-    }
-}
-
-fn build_slab(transport: &RawTransport) -> Result<Option<HomogeneousScalarSlab>, FixtureError> {
+fn build_transport(transport: &RawTransport) -> Result<SurfaceTransport, FixtureError> {
     let slab = match transport {
-        RawTransport::Vacuum {} => return Ok(None),
+        RawTransport::Vacuum {} => return Ok(SurfaceTransport::Vacuum),
         RawTransport::PureAbsorption { optical_depth } => {
             HomogeneousScalarSlab::pure_absorption_v1(optical_depth.value)
         }
@@ -161,7 +155,7 @@ fn build_slab(transport: &RawTransport) -> Result<Option<HomogeneousScalarSlab>,
         ),
     }
     .map_err(invalid_physical_data)?;
-    Ok(Some(slab))
+    Ok(SurfaceTransport::HomogeneousScalar(slab))
 }
 
 fn validate_envelope(raw: &RawSurfaceTransportFixture) -> Result<(), FixtureError> {
@@ -179,10 +173,10 @@ fn validate_envelope(raw: &RawSurfaceTransportFixture) -> Result<(), FixtureErro
 
 fn validate_expected(
     raw: &RawSurfaceTransportFixture,
-    emitter: EquatorialCircularEmitter,
-    slab: Option<HomogeneousScalarSlab>,
+    surface: gravlume_domain::EquatorialSurface,
     mass_m: f64,
 ) -> Result<(), FixtureError> {
+    let emitter = surface.emitter();
     let expected = &raw.expected;
     let tolerance = &raw.tolerance;
     if expected.frequency_ratio.value <= 0.0
@@ -212,10 +206,10 @@ fn validate_expected(
     let observed_temperature = emitted_temperature * expected.frequency_ratio.value;
     let vacuum_bands = blackbody_band_intensities(vacuum, observed_temperature)
         .ok_or(FixtureError::InconsistentExpectedObservables)?;
-    let transported = transport_bolometric_intensity(vacuum, slab)
+    let transported = transport_bolometric_intensity(vacuum, surface.transport())
         .ok_or(FixtureError::InconsistentExpectedObservables)?;
-    let transported_bands = transport_blackbody_bands(vacuum_bands, slab)
-        .map_err(|_| FixtureError::InconsistentExpectedObservables)?;
+    let transported_bands = transport_blackbody_bands(vacuum_bands, surface)
+        .ok_or(FixtureError::InconsistentExpectedObservables)?;
     let expected_bands = decimal_array(&expected.observed_spectral_band_intensities);
     let temperature_matches = relative_error(
         emitted_temperature,

@@ -1,8 +1,6 @@
 use std::sync::mpsc;
 
-use gravlume_domain::{
-    EquatorialCircularEmitter, EquatorialEmissionModel, HomogeneousScalarSlab, Observation,
-};
+use gravlume_domain::EquatorialSurface;
 
 use crate::{error::GpuErrorScopes, extent::RenderExtent, ray_tracer::INVARIANT_DRIFT_LIMIT};
 
@@ -21,7 +19,7 @@ const HALF_SURFACE_RADIANCE_TAG_BITS: u16 = 0x4000;
 pub struct ScientificCapture {
     extent: [u32; 2],
     generation: u64,
-    rgba16_float_bits: Vec<[u16; 4]>,
+    texels: Vec<ScientificTexel>,
     metadata: ScientificCaptureMetadata,
 }
 
@@ -36,27 +34,59 @@ impl ScientificCapture {
         self.generation
     }
 
-    /// Returns IEEE-754 binary16 bit patterns in `R`, `G`, `B`, `A` memory order.
+    /// Returns row-major texels with their raw representation and semantic kind kept together.
     ///
-    /// WebGPU texel copies preserve the numeric value of finite, normal channels but may
-    /// canonicalize zero and other exceptional representations. Use [`Self::pixel_kind`] before
-    /// interpreting RGB: only [`ScientificPixelKind::SurfaceRadiance`] is physical source output.
+    /// Only [`ScientificPixelKind::SurfaceRadiance`] carries physical source output.
     #[must_use]
-    pub fn rgba16_float_bits(&self) -> &[[u16; 4]] {
-        &self.rgba16_float_bits
-    }
-
-    /// Classifies one row-major texel by the renderer's non-display alpha tag.
-    #[must_use]
-    pub fn pixel_kind(&self, index: usize) -> Option<ScientificPixelKind> {
-        self.rgba16_float_bits
-            .get(index)
-            .map(|texel| classify_alpha_bits(texel[3]))
+    pub fn texels(&self) -> &[ScientificTexel] {
+        &self.texels
     }
 
     #[must_use]
     pub const fn metadata(&self) -> &ScientificCaptureMetadata {
         &self.metadata
+    }
+}
+
+/// One scientific-capture texel and the renderer protocol needed to interpret it safely.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ScientificTexel {
+    rgba16_float_bits: [u16; 4],
+}
+
+impl ScientificTexel {
+    const fn from_rgba16_float_bits(rgba16_float_bits: [u16; 4]) -> Self {
+        Self { rgba16_float_bits }
+    }
+
+    /// Returns IEEE-754 binary16 bit patterns in `R`, `G`, `B`, `A` memory order.
+    ///
+    /// WebGPU texel copies preserve the numeric value of finite, normal channels but may
+    /// canonicalize zero and other exceptional representations.
+    #[must_use]
+    pub const fn rgba16_float_bits(self) -> [u16; 4] {
+        self.rgba16_float_bits
+    }
+
+    #[must_use]
+    pub const fn kind(self) -> ScientificPixelKind {
+        classify_alpha_bits(self.rgba16_float_bits[3])
+    }
+
+    /// Returns physical scene-linear RGB words only when the alpha protocol identifies radiance.
+    #[must_use]
+    pub const fn surface_radiance_rgb16_float_bits(self) -> Option<[u16; 3]> {
+        match self.kind() {
+            ScientificPixelKind::SurfaceRadiance => Some([
+                self.rgba16_float_bits[0],
+                self.rgba16_float_bits[1],
+                self.rgba16_float_bits[2],
+            ]),
+            ScientificPixelKind::AnalyticEscapePreview
+            | ScientificPixelKind::Horizon
+            | ScientificPixelKind::TraceFailure { .. }
+            | ScientificPixelKind::Unclassified { .. } => None,
+        }
     }
 }
 
@@ -78,26 +108,50 @@ pub enum ScientificPixelKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScientificCaptureMetadata {
     mass_m: f64,
-    emitter: EquatorialCircularEmitter,
-    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
+    surface: EquatorialSurface,
     channels: ScientificChannelModel,
     numerical: ScientificNumericalMetadata,
 }
 
 impl ScientificCaptureMetadata {
+    pub(crate) fn for_surface(
+        mass_m: f64,
+        surface: EquatorialSurface,
+        channels: ScientificChannelModel,
+    ) -> Self {
+        let spectral_budget = channels == ScientificChannelModel::VisibleBoxcarV1;
+        let optional_budget = |value| spectral_budget.then_some(value);
+        Self {
+            mass_m,
+            surface,
+            channels,
+            numerical: ScientificNumericalMetadata {
+                invariant_relative_drift_limit: INVARIANT_DRIFT_LIMIT,
+                bolometric_surface_relative_error_budget: BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
+                spectral_surface_relative_error_budget: optional_budget(
+                    SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
+                ),
+                spectral_lut_absolute_fraction_error_budget: optional_budget(
+                    SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET,
+                ),
+                spectral_lut_visible_relative_error_budget: optional_budget(
+                    SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET,
+                ),
+                spectral_lut_relative_error_fraction_floor: optional_budget(
+                    SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
+                ),
+            },
+        }
+    }
+
     #[must_use]
     pub const fn mass_m(&self) -> f64 {
         self.mass_m
     }
 
     #[must_use]
-    pub const fn emitter(&self) -> EquatorialCircularEmitter {
-        self.emitter
-    }
-
-    #[must_use]
-    pub const fn homogeneous_scalar_slab(&self) -> Option<HomogeneousScalarSlab> {
-        self.homogeneous_scalar_slab
+    pub const fn surface(&self) -> EquatorialSurface {
+        self.surface
     }
 
     #[must_use]
@@ -159,42 +213,6 @@ impl ScientificNumericalMetadata {
     pub const fn spectral_lut_relative_error_fraction_floor(self) -> Option<f64> {
         self.spectral_lut_relative_error_fraction_floor
     }
-}
-
-pub fn metadata_for_observation(observation: &Observation) -> Option<ScientificCaptureMetadata> {
-    let scene = observation.scene();
-    let emitter = scene.equatorial_circular_emitter()?;
-    let (channels, spectral_budget) = match emitter.emission_model() {
-        EquatorialEmissionModel::InverseCubeBolometricV1 => {
-            (ScientificChannelModel::BolometricRepeated, false)
-        }
-        EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
-            (ScientificChannelModel::VisibleBoxcarV1, true)
-        }
-    };
-    let optional_budget = |value| spectral_budget.then_some(value);
-    Some(ScientificCaptureMetadata {
-        mass_m: scene.spacetime().mass_m(),
-        emitter,
-        homogeneous_scalar_slab: scene.homogeneous_scalar_slab(),
-        channels,
-        numerical: ScientificNumericalMetadata {
-            invariant_relative_drift_limit: INVARIANT_DRIFT_LIMIT,
-            bolometric_surface_relative_error_budget: BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
-            spectral_surface_relative_error_budget: optional_budget(
-                SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
-            ),
-            spectral_lut_absolute_fraction_error_budget: optional_budget(
-                SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET,
-            ),
-            spectral_lut_visible_relative_error_budget: optional_budget(
-                SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET,
-            ),
-            spectral_lut_relative_error_fraction_floor: optional_budget(
-                SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
-            ),
-        },
-    })
 }
 
 pub fn capture_texture(
@@ -275,13 +293,14 @@ pub fn capture_texture(
         .ok()
         .and_then(|width| width.checked_mul(height))
         .ok_or(ScientificCaptureError::LayoutOverflow)?;
-    let mut rgba16_float_bits = Vec::with_capacity(texel_capacity);
+    let mut texels = Vec::with_capacity(texel_capacity);
     for row in mapped.chunks_exact(padded) {
         for texel in row[..unpadded].chunks_exact(RGBA16_FLOAT_BYTES_PER_PIXEL as usize) {
-            rgba16_float_bits.push(std::array::from_fn(|channel| {
+            let rgba16_float_bits = std::array::from_fn(|channel| {
                 let offset = channel * size_of::<u16>();
                 u16::from_le_bytes([texel[offset], texel[offset + 1]])
-            }));
+            });
+            texels.push(ScientificTexel::from_rgba16_float_bits(rgba16_float_bits));
         }
     }
     drop(mapped);
@@ -289,7 +308,7 @@ pub fn capture_texture(
     Ok(ScientificCapture {
         extent: [extent.width(), extent.height()],
         generation,
-        rgba16_float_bits,
+        texels,
         metadata,
     })
 }
@@ -337,39 +356,32 @@ pub enum ScientificCaptureError {
 
 #[cfg(test)]
 mod tests {
-    use gravlume_domain::{EquatorialCircularEmitter, HomogeneousScalarSlab, Observation};
+    use gravlume_domain::{
+        EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, SurfaceTransport,
+    };
 
     use super::{
         BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET, INVARIANT_DRIFT_LIMIT,
         SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET, SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
         SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET, SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
-        ScientificChannelModel, ScientificNumericalMetadata, ScientificPixelKind, capture_texture,
-        classify_alpha_bits, metadata_for_observation,
+        ScientificCaptureMetadata, ScientificChannelModel, ScientificNumericalMetadata,
+        ScientificPixelKind, capture_texture, classify_alpha_bits,
     };
-    use crate::{extent::RenderExtent, gpu_trace_tests::default_observation};
+    use crate::extent::RenderExtent;
 
     #[test]
-    fn analytic_sky_is_not_labeled_as_scientific_radiance() {
-        assert!(metadata_for_observation(&default_observation(1, 1)).is_none());
-    }
-
-    #[test]
-    fn capture_metadata_tracks_validated_scene_semantics_and_exact_budgets() {
-        let base = default_observation(1, 1);
+    fn capture_metadata_keeps_validated_surface_semantics_and_exact_budgets() {
         let bolometric = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
             .expect("test bolometric source is valid");
-        let bolometric_observation = Observation::new(
-            base.scene()
-                .clone()
-                .with_equatorial_circular_emitter(bolometric),
-            *base.view(),
+        let bolometric_surface = validated_surface(bolometric, SurfaceTransport::Vacuum);
+        let metadata = ScientificCaptureMetadata::for_surface(
+            1.0,
+            bolometric_surface,
+            ScientificChannelModel::BolometricRepeated,
         );
-        let metadata = metadata_for_observation(&bolometric_observation)
-            .expect("bolometric surface source has capture metadata");
 
         assert_f64_contract(metadata.mass_m(), 1.0);
-        assert_eq!(metadata.emitter(), bolometric);
-        assert_eq!(metadata.homogeneous_scalar_slab(), None);
+        assert_eq!(metadata.surface(), bolometric_surface);
         assert_eq!(
             metadata.channels(),
             ScientificChannelModel::BolometricRepeated
@@ -380,20 +392,15 @@ mod tests {
             .expect("test blackbody source is valid");
         let slab = HomogeneousScalarSlab::constant_blackbody_v1(0.35, 0.05, 4_500.0)
             .expect("test slab is valid");
-        let observation = Observation::new(
-            base.scene()
-                .clone()
-                .with_equatorial_circular_emitter(emitter)
-                .with_homogeneous_scalar_slab(slab),
-            *base.view(),
+        let surface = validated_surface(emitter, SurfaceTransport::HomogeneousScalar(slab));
+        let metadata = ScientificCaptureMetadata::for_surface(
+            1.0,
+            surface,
+            ScientificChannelModel::VisibleBoxcarV1,
         );
 
-        let metadata = metadata_for_observation(&observation)
-            .expect("physical surface source has capture metadata");
-
-        assert_eq!(metadata.emitter(), emitter);
+        assert_eq!(metadata.surface(), surface);
         assert_eq!(metadata.channels(), ScientificChannelModel::VisibleBoxcarV1);
-        assert_eq!(metadata.homogeneous_scalar_slab(), Some(slab));
         assert_numerical_contract(metadata.numerical(), true);
     }
 
@@ -446,27 +453,28 @@ mod tests {
                 depth_or_array_layers: 1,
             },
         );
-        let mut observation = default_observation(2, 2);
         let emitter =
             gravlume_domain::EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
                 .expect("test surface is valid");
-        observation = gravlume_domain::Observation::new(
-            observation
-                .scene()
-                .clone()
-                .with_equatorial_circular_emitter(emitter),
-            *observation.view(),
+        let metadata = ScientificCaptureMetadata::for_surface(
+            1.0,
+            validated_surface(emitter, SurfaceTransport::Vacuum),
+            ScientificChannelModel::BolometricRepeated,
         );
-        let metadata = metadata_for_observation(&observation)
-            .expect("surface observation has scientific metadata");
 
         let capture = capture_texture(&gpu.device, &gpu.queue, &texture, extent, 17, metadata)
             .expect("raw texture capture succeeds");
 
         assert_eq!(capture.extent(), [2, 2]);
         assert_eq!(capture.generation(), 17);
+        let words = capture
+            .texels()
+            .iter()
+            .copied()
+            .map(super::ScientificTexel::rgba16_float_bits)
+            .collect::<Vec<_>>();
         assert_eq!(
-            capture.rgba16_float_bits(),
+            words,
             [
                 [0x3c00, 0x3800, 0x0000, 0x4000],
                 [0x4000, 0x4200, 0x4400, 0xc500],
@@ -475,21 +483,28 @@ mod tests {
             ]
         );
         assert_eq!(
-            capture.pixel_kind(0),
-            Some(ScientificPixelKind::SurfaceRadiance)
+            capture.texels()[0].kind(),
+            ScientificPixelKind::SurfaceRadiance
         );
         assert_eq!(
-            capture.pixel_kind(1),
-            Some(ScientificPixelKind::TraceFailure {
+            capture.texels()[0].surface_radiance_rgb16_float_bits(),
+            Some([0x3c00, 0x3800, 0x0000])
+        );
+        assert_eq!(
+            capture.texels()[1].kind(),
+            ScientificPixelKind::TraceFailure {
                 termination_code: 5
-            })
+            }
         );
         assert_eq!(
-            capture.pixel_kind(2),
-            Some(ScientificPixelKind::AnalyticEscapePreview)
+            capture.texels()[2].kind(),
+            ScientificPixelKind::AnalyticEscapePreview
         );
-        assert_eq!(capture.pixel_kind(3), Some(ScientificPixelKind::Horizon));
-        assert_eq!(capture.pixel_kind(4), None);
+        assert_eq!(capture.texels()[3].kind(), ScientificPixelKind::Horizon);
+        assert_eq!(
+            capture.texels()[2].surface_radiance_rgb16_float_bits(),
+            None
+        );
     }
 
     #[test]
@@ -569,5 +584,13 @@ mod tests {
             (actual - expected).abs() <= tolerance,
             "{actual:e} differs from {expected:e} by more than {tolerance:e}"
         );
+    }
+
+    fn validated_surface(
+        emitter: EquatorialCircularEmitter,
+        transport: SurfaceTransport,
+    ) -> EquatorialSurface {
+        EquatorialSurface::new(emitter, transport)
+            .expect("test surface and transport are compatible")
     }
 }

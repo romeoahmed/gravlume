@@ -1,8 +1,8 @@
 use crate::{
-    EquatorialCircularEmitter, Extremality, GeodesicState, HomogeneousScalarSlab, ImageSample,
-    KerrNewmanSpacetime, KerrSchildChart, ObserverFrame, PerspectiveView, SpacetimeEvent,
-    StationaryObserverInput, ValidationIssueCode, ValidationReport, observer::StationaryObserver,
-    state::FourVector,
+    EquatorialCircularEmitter, EquatorialEmissionModel, Extremality, GeodesicState,
+    HomogeneousScalarSlab, ImageSample, KerrNewmanSpacetime, KerrSchildChart, ObserverFrame,
+    PerspectiveView, ScalarSlabEmissionModel, SpacetimeEvent, StationaryObserverInput,
+    ValidationIssueCode, ValidationReport, observer::StationaryObserver, state::FourVector,
 };
 
 const INITIAL_RAY_NULL_TOLERANCE: f64 = 2.0e-12;
@@ -35,12 +35,72 @@ impl PhysicalSceneInput {
     }
 }
 
+/// The complete observer-path transport applied after an equatorial surface hit.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SurfaceTransport {
+    Vacuum,
+    HomogeneousScalar(HomogeneousScalarSlab),
+}
+
+/// A validated equatorial emitter and its complete observer-path transport.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EquatorialSurface {
+    emitter: EquatorialCircularEmitter,
+    transport: SurfaceTransport,
+}
+
+impl EquatorialSurface {
+    /// Validates one emitter and its complete observer-path transport as a single value.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a source/transport combination whose resolved spectral meaning is incomplete.
+    pub fn new(
+        emitter: EquatorialCircularEmitter,
+        transport: SurfaceTransport,
+    ) -> Result<Self, ValidationReport> {
+        if let SurfaceTransport::HomogeneousScalar(slab) = transport
+            && matches!(
+                emitter.emission_model(),
+                EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. }
+            )
+            && slab.integrated_bolometric_emission() > 0.0
+            && slab.emission_model() == ScalarSlabEmissionModel::NeutralBolometric
+        {
+            return Err(ValidationReport::from_error(
+                ValidationIssueCode::IncompatibleModel,
+                "equatorial_surface.transport.emission_model",
+                "blackbody surface transport with nonzero emission requires a resolved spectrum",
+            ));
+        }
+        Ok(Self { emitter, transport })
+    }
+
+    #[must_use]
+    pub const fn emitter(self) -> EquatorialCircularEmitter {
+        self.emitter
+    }
+
+    #[must_use]
+    pub const fn transport(self) -> SurfaceTransport {
+        self.transport
+    }
+}
+
+/// The radiance interpretation selected by a validated physical scene.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SceneRadiance {
+    /// Orientation-only analytic escape sky, not a spectral source.
+    AnalyticSky,
+    /// A resolved equatorial source with atomically validated transport.
+    EquatorialSurface(EquatorialSurface),
+}
+
 #[derive(Clone, Debug)]
 pub struct PhysicalScene {
     spacetime: KerrNewmanSpacetime,
     observer: StationaryObserver,
-    equatorial_circular_emitter: Option<EquatorialCircularEmitter>,
-    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
+    radiance: SceneRadiance,
 }
 
 impl PhysicalScene {
@@ -78,8 +138,7 @@ impl PhysicalScene {
         Ok(Self {
             spacetime,
             observer,
-            equatorial_circular_emitter: None,
-            homogeneous_scalar_slab: None,
+            radiance: SceneRadiance::AnalyticSky,
         })
     }
 
@@ -108,31 +167,16 @@ impl PhysicalScene {
         self.observer.metric_g_tt()
     }
 
+    /// Returns an equivalent scene with one validated equatorial source chain installed.
     #[must_use]
-    pub const fn equatorial_circular_emitter(&self) -> Option<EquatorialCircularEmitter> {
-        self.equatorial_circular_emitter
-    }
-
-    #[must_use]
-    pub const fn homogeneous_scalar_slab(&self) -> Option<HomogeneousScalarSlab> {
-        self.homogeneous_scalar_slab
-    }
-
-    /// Returns an equivalent scene with the validated source installed.
-    #[must_use]
-    pub const fn with_equatorial_circular_emitter(
-        mut self,
-        emitter: EquatorialCircularEmitter,
-    ) -> Self {
-        self.equatorial_circular_emitter = Some(emitter);
+    pub const fn with_equatorial_surface(mut self, surface: EquatorialSurface) -> Self {
+        self.radiance = SceneRadiance::EquatorialSurface(surface);
         self
     }
 
-    /// Returns an equivalent scene with the path-integrated scalar medium installed.
     #[must_use]
-    pub const fn with_homogeneous_scalar_slab(mut self, slab: HomogeneousScalarSlab) -> Self {
-        self.homogeneous_scalar_slab = Some(slab);
-        self
+    pub const fn radiance(&self) -> SceneRadiance {
+        self.radiance
     }
 }
 

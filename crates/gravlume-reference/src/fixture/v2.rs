@@ -1,6 +1,8 @@
 use serde::Deserialize;
 
-use gravlume_domain::{EquatorialCircularEmitter, Observation};
+use gravlume_domain::{
+    EquatorialCircularEmitter, EquatorialSurface, Observation, SurfaceTransport,
+};
 
 use crate::{AffineDirection, EventConfiguration, TraceInputId};
 
@@ -37,11 +39,13 @@ pub fn parse(source: &str) -> Result<FixtureDocument, FixtureError> {
         raw.emission.intensity_at_6m.value,
     )
     .map_err(invalid_physical_data)?;
+    let surface =
+        EquatorialSurface::new(emitter, SurfaceTransport::Vacuum).map_err(invalid_physical_data)?;
     let observation = Observation::new(
         base.observation
             .scene()
             .clone()
-            .with_equatorial_circular_emitter(emitter),
+            .with_equatorial_surface(surface),
         *base.observation.view(),
     );
     let sample = observation
