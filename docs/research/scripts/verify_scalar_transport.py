@@ -132,7 +132,11 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
         temperature = mp.power(2, minimum_log2 + index / intervals_per_octave)
         grid.append(
             tuple(
-                binary32(planck_band_fraction_fast(temperature, lower, upper))
+                binary32(
+                    mp.log(
+                        planck_band_fraction_fast(temperature, lower, upper), 2
+                    )
+                )
                 for _, lower, upper in BANDS_NM
             )
         )
@@ -147,9 +151,10 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
         )
         for channel, (_, lower, upper) in enumerate(BANDS_NM):
             expected = planck_band_fraction_fast(temperature, lower, upper)
-            interpolated = mp.mpf(grid[index][channel]) + mp.mpf("0.5") * (
+            interpolated_log2 = mp.mpf(grid[index][channel]) + mp.mpf("0.5") * (
                 mp.mpf(grid[index + 1][channel]) - mp.mpf(grid[index][channel])
             )
+            interpolated = mp.power(2, interpolated_log2)
             error = abs(interpolated - expected)
             worst_absolute = max(worst_absolute, error)
             if expected >= relative_floor:
@@ -168,6 +173,19 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
             f"LUT visible-relative interpolation budget exceeded: {worst_visible_relative}"
         )
     return worst_absolute, worst_visible_relative
+
+
+def verify_scaled_low_temperature_spectrum() -> tuple[mp.mpf, ...]:
+    temperature = mp.mpf(220)
+    bolometric_intensity = mp.mpf("1e38")
+    bands = tuple(
+        bolometric_intensity
+        * planck_band_fraction_fast(temperature, lower, upper)
+        for _, lower, upper in BANDS_NM
+    )
+    if bands[0] <= 1 or bands[1] <= mp.mpf("1e-5"):
+        raise AssertionError(f"low-temperature diluted spectrum lost scale: {bands}")
+    return bands
 
 
 def verify_high_precision_oracles() -> list[tuple[int, tuple[mp.mpf, ...]]]:
@@ -259,14 +277,19 @@ def main() -> None:
     rows = verify_high_precision_oracles()
     verify_cancellation_sensitive_weight()
     lut_absolute, lut_visible_relative = verify_log_temperature_lut()
+    scaled_low_temperature = verify_scaled_low_temperature_spectrum()
 
     print("I_nu/nu^3 blackbody shift and bolometric g^4 identities: PASS")
     print("Homogeneous-slab limits and partition invariance: PASS")
     print("Planck normalization and binary64 cancellation oracle: PASS")
     print(
-        "4097-entry log2-temperature LUT midpoint scan: "
+        "4097-entry log2-temperature/log2-fraction LUT midpoint scan: "
         f"max_abs={mp.nstr(lut_absolute, 12)}, "
         f"max_rel_for_fraction_ge_1e-6={mp.nstr(lut_visible_relative, 12)}"
+    )
+    print(
+        "scaled_220K_I1e38_bands="
+        + ",".join(mp.nstr(value, 24) for value in scaled_low_temperature)
     )
     print("temperature_K,red_600_700,green_500_600,blue_400_500")
     for temperature, fractions in rows:

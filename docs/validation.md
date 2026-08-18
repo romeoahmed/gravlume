@@ -286,10 +286,14 @@ event residual，而不是只比较 cubic polynomial residual。
 
 落入 near-critical uncertainty band 的 sample 只有经过满足同一预算的 refine 才能输出确定 branch；没有这样的第二遍求解时必须保持 `Uncertain`，数值失败则输出 `NumericalFailure`。null/Carter drift 是诊断与 classifier 输入，不可单独替代 observable agreement。
 
-`visible-boxcar-v1` 的 4097-entry LUT 以 $\log_2T\in[-8,24]$、每 octave 128 intervals 线性
-插值。相对 80 位 Planck oracle，全部 midpoint 的 band-fraction absolute error 必须不超过 `3e-6`；
-当 expected fraction 至少为 `1e-6` 时 relative error 不超过 `2e-3`。最终 spectral fixture 同时包含
-geometry/transport 与 FP16 rounding，因此使用上表 `4e-3` gate，而不是把 LUT 单项预算误作总误差。
+`visible-boxcar-v1` 的 4097-entry LUT 以 $\log_2T\in[-8,24]$、每 octave 128 intervals 保存并线性
+插值 $\log_2$ band fraction。shader 将 fraction 的 significand/exponent 与 bolometric intensity、
+几何 transport 合并，只有完整 radiance 的 exponent 已知后才物化线性值并交给 `RGBA16F`
+rounding；不得先把微小 fraction 截断为零。相对 80 位 Planck oracle，全部 midpoint 重建 fraction 的
+absolute error 必须不超过
+`3e-6`；当 expected fraction 至少为 `1e-6` 时 relative error 不超过 `2e-3`。最终 spectral fixture
+同时包含 geometry/transport 与 FP16 rounding，因此使用上表 `4e-3` gate，而不是把 LUT 单项预算
+误作总误差。
 
 surface-footprint GPU capture 是 test-only 证据路径：中心与真实 `±0.25 pixel` 四邻域必须全部为
 无歧义 surface terminal，且完整 branch key exact equality，才输出 source chart
