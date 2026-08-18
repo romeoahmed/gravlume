@@ -10,7 +10,10 @@ use gravlume_reference::{
 use super::{decode_f16, default_observation, sample, transfer_profile_extent};
 use crate::{
     GpuTraceInputError,
-    gpu_capture::{capture_surface_footprint_sample, capture_trace, capture_trace_sample},
+    gpu_capture::{
+        capture_surface_footprint_sample, capture_surface_transport_case, capture_trace,
+        capture_trace_sample,
+    },
     ray_tracer::{TraceTermination, TraceUniforms},
 };
 
@@ -341,6 +344,40 @@ fn gpu_trace_rejects_transmittance_that_binary32_cannot_preserve_normally() {
             })
         ));
     }
+}
+
+#[test]
+fn high_absorption_keeps_a_representable_outgoing_surface_intensity() {
+    let base = default_observation(1, 1);
+    let emitted_intensity = f64::from(f32::MAX);
+    let emitter =
+        EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, emitted_intensity)
+            .expect("the high dynamic-range surface is intrinsically valid");
+    let slab = HomogeneousScalarSlab::pure_absorption_v1(79.0)
+        .expect("the high optical-depth slab is intrinsically valid");
+    let observation = Observation::new(
+        base.scene().clone().with_equatorial_surface(
+            EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
+                .expect("bolometric surface and slab are compatible"),
+        ),
+        *base.view(),
+    );
+
+    let capture = capture_surface_transport_case(&observation);
+    let pixel = capture.hdr_pixel(0);
+    assert_eq!(
+        u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
+        0x4000,
+        "representable surface radiance keeps its alpha tag",
+    );
+    let actual = decode_f16(u16::from_le_bytes(
+        pixel[..2].try_into().expect("red channel has two bytes"),
+    ));
+    let expected = emitted_intensity * (-79.0_f64).exp() * 1.1_f64.powi(4);
+    assert!(
+        (f64::from(actual) - expected).abs() / expected <= 2.0e-3,
+        "surface radiance {actual:e}, expected {expected:e}",
+    );
 }
 
 #[test]

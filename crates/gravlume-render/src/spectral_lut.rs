@@ -57,7 +57,15 @@ pub fn blackbody_lut() -> Vec<[f32; 4]> {
     reason = "the versioned LUT intentionally rounds finite [0, 1] fractions to binary32 and is checked against an 80-digit oracle"
 )]
 const fn binary32_fraction(value: f64) -> f32 {
-    value as f32
+    let fraction = value as f32;
+    // WGSL permits subnormal inputs and outputs of numeric built-ins to be flushed to zero.
+    // Canonical zero is therefore the only backend-independent LUT representation here, and its
+    // error is many orders of magnitude below the declared 3e-6 absolute fraction budget.
+    if fraction.is_subnormal() {
+        0.0
+    } else {
+        fraction
+    }
 }
 
 pub fn minimum_temperature_kelvin() -> f64 {
@@ -132,7 +140,7 @@ mod tests {
         assert!(lut.iter().all(|[red, green, blue, padding]| {
             [*red, *green, *blue]
                 .into_iter()
-                .all(|fraction| (0.0..=1.0).contains(&fraction))
+                .all(|fraction| (0.0..=1.0).contains(&fraction) && !fraction.is_subnormal())
                 && red + green + blue <= 4.0_f32.mul_add(f32::EPSILON, 1.0)
                 && *padding == 0.0
         }));

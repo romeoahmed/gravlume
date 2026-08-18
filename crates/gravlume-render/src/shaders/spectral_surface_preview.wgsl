@@ -22,17 +22,19 @@ fn blackbody_band_fractions(temperature_kelvin: f32) -> vec3<f32> {
     let lower = blackbody_spectral_lut[lower_index];
     let upper = blackbody_spectral_lut[lower_index + 1u];
     let bands = mix(lower, upper, vec4<f32>(fraction)).xyz;
-    if any(bands < vec3<f32>(0.0)) || !finite_vec3(bands) {
+    if any(bands < vec3<f32>(0.0))
+        || any(bands > vec3<f32>(1.0))
+        || !finite_vec3(bands)
+    {
         return vec3<f32>(-1.0);
     }
     return bands;
 }
 
 fn transported_surface_bands(sample: GeometricSample) -> vec3<f32> {
-    let vacuum_intensity = vacuum_surface_intensity(sample);
     let radius_ratio = sample.source_coordinates.x / 6.0;
     let frequency_ratio = sample.source_coordinates.z;
-    if vacuum_intensity < 0.0 || radius_ratio <= 0.0 || frequency_ratio <= 0.0 {
+    if radius_ratio <= 0.0 || frequency_ratio <= 0.0 {
         return vec3<f32>(-1.0);
     }
     let emitted_temperature = trace_uniforms.surface_transport.x
@@ -50,16 +52,19 @@ fn transported_surface_bands(sample: GeometricSample) -> vec3<f32> {
         }
         source_bands = source_fractions * trace_uniforms.surface_transport.w;
     }
-    let outgoing = incoming_fractions
-        * (vacuum_intensity * trace_uniforms.surface_transport.z)
-        + source_bands;
-    if any(outgoing < vec3<f32>(0.0))
-        || any(outgoing > vec3<f32>(MAXIMUM_RGBA16_FLOAT))
-        || !finite_vec3(outgoing)
-    {
+    let incoming = vec3<f32>(
+        attenuated_surface_intensity(sample, incoming_fractions.x),
+        attenuated_surface_intensity(sample, incoming_fractions.y),
+        attenuated_surface_intensity(sample, incoming_fractions.z),
+    );
+    if any(incoming < vec3<f32>(0.0)) {
         return vec3<f32>(-1.0);
     }
-    return outgoing;
+    return vec3<f32>(
+        bounded_surface_sum(incoming.x, source_bands.x),
+        bounded_surface_sum(incoming.y, source_bands.y),
+        bounded_surface_sum(incoming.z, source_bands.z),
+    );
 }
 
 fn store_surface_scene_result(pixel: vec2<u32>, sample: GeometricSample) {

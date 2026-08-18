@@ -189,10 +189,11 @@ impl<'tracer> TraceExecution<'tracer> {
                 Ok(event) => event,
                 Err(error) => return self.finish_failure(error.into()),
             };
-            let committed_theta = event.as_ref().map_or(1.0, |event| event.theta);
+            let terminal_theta = event.as_ref().map(|event| event.theta);
+            let committed_theta = terminal_theta.unwrap_or(1.0);
             let committed_state = event.as_ref().map_or(end_state, |event| event.state);
-            self.record_turning_point(&attempt.dense, end_state, committed_theta);
-            self.record_equatorial_crossing(&attempt.dense, end_state, committed_theta);
+            self.record_turning_point(&attempt.dense, end_state, terminal_theta);
+            self.record_equatorial_crossing(&attempt.dense, end_state, terminal_theta);
             self.coordinate_time_delta_m
                 .add(attempt.dense.time_increment(committed_theta));
             self.commit_observables(committed_state);
@@ -330,7 +331,7 @@ impl<'tracer> TraceExecution<'tracer> {
         &mut self,
         dense: &DenseOutput,
         end_state: GeodesicState,
-        maximum_theta: f64,
+        terminal_theta: Option<f64>,
     ) {
         let traversal_sign = self.request.affine_direction.sign();
         let start_state = self.state;
@@ -343,7 +344,7 @@ impl<'tracer> TraceExecution<'tracer> {
         if let (Ok(start), Ok(end)) = (start_velocity, end_velocity)
             && ((start < 0.0 && end >= 0.0) || (start > 0.0 && end <= 0.0))
             && let Ok((theta, state)) = self.localize_turning_point(dense, start, end)
-            && theta <= maximum_theta
+            && terminal_theta.is_none_or(|terminal| theta < terminal)
         {
             self.radial_turnings = self.radial_turnings.saturating_add(1);
             if start < 0.0
@@ -362,7 +363,7 @@ impl<'tracer> TraceExecution<'tracer> {
         &mut self,
         dense: &DenseOutput,
         end_state: GeodesicState,
-        maximum_theta: f64,
+        terminal_theta: Option<f64>,
     ) {
         let start = self.state.components()[3];
         let end = end_state.components()[3];
@@ -375,7 +376,7 @@ impl<'tracer> TraceExecution<'tracer> {
                 end,
                 |state| Ok(state.components()[3]),
             )
-            && root.theta <= maximum_theta
+            && terminal_theta.is_none_or(|terminal| root.theta < terminal)
         {
             self.equatorial_crossings = self.equatorial_crossings.saturating_add(1);
         }

@@ -4,6 +4,7 @@
 struct TraceUniforms {
     // (mass, spin, charge, Kerr-Schild branch sign)
     spacetime: vec4<f32>,
+    // (initial polar side, normalized observer x, y, z)
     observer_event: vec4<f32>,
     observer_velocity: vec4<f32>,
     image_right: vec4<f32>,
@@ -103,6 +104,7 @@ const TRACE_WORKGROUP_AXIS: u32 = 8u;
 const MAXIMUM_STEPS: u32 = 2048u;
 const MAXIMUM_FINITE_F32: f32 = 0x1.fffffep+127f;
 const EVENT_REFINEMENT_ITERATIONS: u32 = 6u;
+const TURNING_REFINEMENT_ITERATIONS: u32 = 20u;
 const EVENT_DERIVATIVE_RELATIVE_FLOOR: f32 = 0x1p-11f;
 override SURFACE_EVENTS_ENABLED: u32 = 0u;
 
@@ -118,6 +120,16 @@ struct EventSelection {
 struct SurfaceSource {
     coordinates: vec3<f32>,
     flags: u32,
+}
+
+struct RadialVelocitySample {
+    value: f32,
+    flags: u32,
+}
+
+struct RadialTurningBracket {
+    fractions: vec2<f32>,
+    valid: u32,
 }
 
 @group(0) @binding(0)
@@ -888,13 +900,6 @@ fn invariant_budget_exceeded(maximum_drift: vec4<f32>) -> bool {
     return any(maximum_drift > vec4<f32>(trace_uniforms.step_policy.w));
 }
 
-fn polar_side(height: f32) -> u32 {
-    if height > 0.0 {
-        return 2u;
-    }
-    return select(0u, 1u, height == 0.0);
-}
-
 fn increment_branch_count(value: u32) -> u32 {
     if value == 0xffffffffu {
         return value;
@@ -906,12 +911,79 @@ fn radial_traversal_velocity(geometry: Geometry, rhs: RhsResult) -> f32 {
     return -dot(geometry.radius_gradient, rhs.spacetime.yzw);
 }
 
-fn turning_fraction(start_velocity: f32, end_velocity: f32) -> f32 {
-    let denominator = abs(start_velocity) + abs(end_velocity);
-    if denominator <= 0.0 {
-        return 2.0;
+fn dense_radial_traversal_velocity(
+    start: TraceState,
+    end: TraceState,
+    start_rhs: RhsResult,
+    end_rhs: RhsResult,
+    energy: f32,
+    signed_step: f32,
+    fraction: f32,
+) -> RadialVelocitySample {
+    let state = dense_state_at(
+        start,
+        end,
+        start_rhs,
+        end_rhs,
+        cubic_dense_weights(signed_step, fraction),
+    );
+    if !finite_vec3(state.position) || !finite_vec3(state.momentum) {
+        return RadialVelocitySample(0.0, FLAG_NON_FINITE);
     }
-    return abs(start_velocity) / denominator;
+    let geometry = event_geometry_at(state.position);
+    let rhs = hamilton_rhs_from_geometry(state, energy, geometry);
+    let flags = geometry.flags | rhs.flags;
+    if flags != 0u {
+        return RadialVelocitySample(0.0, flags);
+    }
+    let velocity = radial_traversal_velocity(geometry, rhs);
+    if !finite_scalar(velocity) {
+        return RadialVelocitySample(0.0, FLAG_NON_FINITE);
+    }
+    return RadialVelocitySample(velocity, 0u);
+}
+
+fn localize_radial_turning(
+    start: TraceState,
+    end: TraceState,
+    start_rhs: RhsResult,
+    end_rhs: RhsResult,
+    energy: f32,
+    signed_step: f32,
+    start_velocity: f32,
+) -> RadialTurningBracket {
+    var lower = 0.0;
+    var upper = 1.0;
+    var lower_velocity = start_velocity;
+    for (var iteration = 0u; iteration < TURNING_REFINEMENT_ITERATIONS; iteration += 1u) {
+        let middle = 0.5 * (lower + upper);
+        if middle == lower || middle == upper {
+            break;
+        }
+        let sample = dense_radial_traversal_velocity(
+            start,
+            end,
+            start_rhs,
+            end_rhs,
+            energy,
+            signed_step,
+            middle,
+        );
+        if sample.flags != 0u {
+            return RadialTurningBracket(vec2<f32>(0.0), 0u);
+        }
+        if sample.value == 0.0 {
+            return RadialTurningBracket(vec2<f32>(middle), 1u);
+        }
+        let on_start_side = (sample.value < 0.0) == (lower_velocity < 0.0);
+        if on_start_side {
+            lower = middle;
+            lower_velocity = sample.value;
+        } else {
+            upper = middle;
+        }
+    }
+    return RadialTurningBracket(vec2<f32>(lower, upper), 1u);
 }
 
 fn update_azimuth_winding(previous: f32, position: vec3<f32>, winding: i32) -> i32 {
@@ -964,7 +1036,7 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
     var equatorial_crossings = 0u;
     var azimuth_winding = 0i;
     var previous_azimuth = atan2(state.position.y, state.position.x);
-    let initial_polar_side = polar_side(state.position.z);
+    let initial_polar_side = u32(trace_uniforms.observer_event.x);
     let escape_radius = trace_uniforms.event_surfaces.x;
     let singularity_guard = trace_uniforms.event_surfaces.y;
     let horizon_radius = trace_uniforms.event_surfaces.z;
@@ -1035,10 +1107,6 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
         let crosses_radial_turning = (start_radial_velocity < 0.0
                 && end_radial_velocity >= 0.0)
             || (start_radial_velocity > 0.0 && end_radial_velocity <= 0.0);
-        let radial_turning_fraction = turning_fraction(
-            start_radial_velocity,
-            end_radial_velocity,
-        );
         var event_candidates = no_event_candidates();
         if next_geometry.singularity_measure <= singularity_guard {
             event_candidates[EVENT_INDEX_SINGULARITY] = event_fraction(
@@ -1231,19 +1299,40 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
             );
             let event_residual = (localized_value - selected_event_surface)
                 / max(1.0, abs(selected_event_surface));
-            var termination = selection.termination;
-            if selection.ambiguous != 0u || invariant_budget_exceeded(committed_maximum_drift) {
-                termination = TERMINATION_UNCERTAIN;
-            }
             var committed_radial_turnings = radial_turnings;
-            if crosses_radial_turning && radial_turning_fraction <= selection.fraction {
-                committed_radial_turnings = increment_branch_count(committed_radial_turnings);
+            var radial_turning_order_uncertain = false;
+            if crosses_radial_turning {
+                let turning = localize_radial_turning(
+                    state,
+                    stepped.state,
+                    state_rhs,
+                    next_rhs,
+                    energy,
+                    signed_step,
+                    start_radial_velocity,
+                );
+                if turning.valid == 0u {
+                    radial_turning_order_uncertain = true;
+                } else if turning.fractions.y < selection.fraction {
+                    committed_radial_turnings = increment_branch_count(committed_radial_turnings);
+                } else if turning.fractions.x < selection.fraction {
+                    // The terminal lies inside the root bracket, so the discrete order is not
+                    // justified at binary32 precision.
+                    radial_turning_order_uncertain = true;
+                }
             }
             var committed_equatorial_crossings = equatorial_crossings;
-            if equatorial_crossing_fraction <= selection.fraction {
+            if equatorial_crossing_fraction < selection.fraction {
                 committed_equatorial_crossings = increment_branch_count(
                     committed_equatorial_crossings,
                 );
+            }
+            var termination = selection.termination;
+            if selection.ambiguous != 0u
+                || radial_turning_order_uncertain
+                || invariant_budget_exceeded(committed_maximum_drift)
+            {
+                termination = TERMINATION_UNCERTAIN;
             }
             let committed_azimuth_winding = update_azimuth_winding(
                 previous_azimuth,
@@ -1286,7 +1375,7 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
             maximum_drift,
             invariant_drift(initial_invariants.values, current_invariants.values),
         );
-        if crosses_radial_turning && radial_turning_fraction <= 1.0 {
+        if crosses_radial_turning {
             radial_turnings = increment_branch_count(radial_turnings);
         }
         if equatorial_crossing_fraction <= 1.0 {
