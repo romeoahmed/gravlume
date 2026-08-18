@@ -1,4 +1,4 @@
-use std::f64::consts::PI;
+use std::f64::consts::{LN_2, PI};
 
 use gravlume_domain::{
     EquatorialEmissionModel, EquatorialSurface, ScalarSlabEmissionModel, SpectralBand,
@@ -7,8 +7,8 @@ use gravlume_domain::{
 
 const SECOND_RADIATION_CONSTANT_M_K: f64 = 0.014_387_768_775_039_337;
 const PLANCK_INTEGRAL: f64 = PI * PI * PI * PI / 15.0;
-const MAX_DIMENSIONLESS_FREQUENCY: f64 = 80.0;
-const PLANCK_UNIT_INTERVAL_COUNT: u32 = 80;
+const HIGH_FREQUENCY_LOG_THRESHOLD: f64 = 50.0;
+const PLANCK_QUADRATURE_INTERVAL_COUNT: u32 = 80;
 
 pub fn blackbody_band_intensities(
     bolometric_intensity: f64,
@@ -24,11 +24,8 @@ pub fn blackbody_band_intensities(
 
     let mut intensities = [0.0; 3];
     for (intensity, band) in intensities.iter_mut().zip(VISIBLE_BOXCAR_BANDS_V1) {
-        let fraction = blackbody_band_fraction(temperature_kelvin, band)?;
-        *intensity = bolometric_intensity * fraction;
-        if !intensity.is_finite() || *intensity < 0.0 {
-            return None;
-        }
+        let log2_fraction = blackbody_band_log2_fraction(temperature_kelvin, band)?;
+        *intensity = scale_by_log2(bolometric_intensity, log2_fraction)?;
     }
     Some(intensities)
 }
@@ -85,7 +82,7 @@ pub fn transport_blackbody_bands(
     Some(outgoing)
 }
 
-fn blackbody_band_fraction(temperature_kelvin: f64, band: SpectralBand) -> Option<f64> {
+fn blackbody_band_log2_fraction(temperature_kelvin: f64, band: SpectralBand) -> Option<f64> {
     let lower_wavelength_m = band.lower_wavelength_nm() * 1.0e-9;
     let upper_wavelength_m = band.upper_wavelength_nm() * 1.0e-9;
     let lower_x = SECOND_RADIATION_CONSTANT_M_K / (upper_wavelength_m * temperature_kelvin);
@@ -93,17 +90,28 @@ fn blackbody_band_fraction(temperature_kelvin: f64, band: SpectralBand) -> Optio
     if !lower_x.is_finite() || !upper_x.is_finite() || lower_x < 0.0 || upper_x <= lower_x {
         return None;
     }
-    if lower_x >= MAX_DIMENSIONLESS_FREQUENCY {
-        return Some(0.0);
-    }
-    let upper_x = upper_x.min(MAX_DIMENSIONLESS_FREQUENCY);
-    let integral = integrate_planck_kernel(lower_x, upper_x);
-    let fraction = integral / PLANCK_INTEGRAL;
-    (fraction.is_finite() && (0.0..=1.0).contains(&fraction)).then_some(fraction)
+    let log_integral = if lower_x >= HIGH_FREQUENCY_LOG_THRESHOLD {
+        log_high_frequency_planck_band_integral(lower_x, upper_x)
+    } else {
+        integrate_planck_kernel(lower_x, upper_x).ln()
+    };
+    let log2_fraction = (log_integral - PLANCK_INTEGRAL.ln()) / LN_2;
+    (log2_fraction.is_finite() && log2_fraction <= 0.0).then_some(log2_fraction)
+}
+
+fn scale_by_log2(value: f64, log2_scale: f64) -> Option<f64> {
+    let scale = log2_scale.exp2();
+    let scaled = if scale == 0.0 && value > 0.0 {
+        (value.log2() + log2_scale).exp2()
+    } else {
+        value * scale
+    };
+    (scaled.is_finite() && scaled >= 0.0).then_some(scaled)
 }
 
 fn integrate_planck_kernel(lower: f64, upper: f64) -> f64 {
-    (0..PLANCK_UNIT_INTERVAL_COUNT)
+    debug_assert!(upper <= f64::from(PLANCK_QUADRATURE_INTERVAL_COUNT));
+    (0..PLANCK_QUADRATURE_INTERVAL_COUNT)
         .filter_map(|index| {
             let left = lower.max(f64::from(index));
             let right = upper.min(f64::from(index + 1));
@@ -122,6 +130,20 @@ fn integrate_planck_kernel(lower: f64, upper: f64) -> f64 {
             adaptive_simpson(left, right, whole, tolerance, 20)
         })
         .sum()
+}
+
+fn log_high_frequency_planck_band_integral(lower: f64, upper: f64) -> f64 {
+    let lower_tail = log_high_frequency_planck_tail(lower);
+    let upper_tail = log_high_frequency_planck_tail(upper);
+    lower_tail + (-(upper_tail - lower_tail).exp()).ln_1p()
+}
+
+fn log_high_frequency_planck_tail(x: f64) -> f64 {
+    // For x >= 50, replacing 1 / (exp(x) - 1) with exp(-x) has relative error below
+    // exp(-50). The resulting x^3 exp(-x) tail has this closed logarithmic form.
+    let inverse = x.recip();
+    let polynomial_correction = inverse * inverse.mul_add(6.0_f64.mul_add(inverse, 6.0), 3.0);
+    3.0_f64.mul_add(x.ln(), -x) + polynomial_correction.ln_1p()
 }
 
 fn adaptive_simpson(left: f64, right: f64, whole: f64, tolerance: f64, depth: u32) -> f64 {
@@ -225,6 +247,21 @@ mod tests {
 
         for (actual, expected) in actual.into_iter().zip(expected) {
             assert!((actual - expected).abs() <= 3.0e-15);
+        }
+    }
+
+    #[test]
+    fn low_temperature_diluted_spectrum_preserves_representable_bands() {
+        let actual = blackbody_band_intensities(1.0e38, 220.0)
+            .expect("the diluted spectrum is representable");
+        let expected = [
+            345.197_285_318_283_1,
+            9.428_001_052_700_576e-5,
+            5.526_972_080_378_235e-14,
+        ];
+
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() / expected <= 3.0e-14);
         }
     }
 

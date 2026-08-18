@@ -9,6 +9,19 @@ const MINIMUM_NORMAL_F32_EXPONENT: i32 = -125i;
 // escape preview's 1.0 lets scientific readback identify which RGB texels are physical radiance.
 const SURFACE_RADIANCE_TAG: f32 = 2.0;
 
+struct PositiveLog2Scale {
+    significand: f32,
+    exponent: i32,
+}
+
+fn positive_log2_scale(log2_scale: f32) -> PositiveLog2Scale {
+    let exponent = i32(floor(log2_scale));
+    // exp2 only sees [0, 1), so its result is normal and can safely enter frexp-based products.
+    // Source: https://www.w3.org/TR/WGSL/#floating-point-evaluation
+    // Source: https://www.w3.org/TR/WGSL/#exp2-builtin
+    return PositiveLog2Scale(exp2(log2_scale - f32(exponent)), exponent);
+}
+
 fn resolve_positive_product(significand: f32, exponent: i32) -> f32 {
     let normalized = frexp(significand);
     let normalized_exponent = exponent + normalized.exp;
@@ -34,7 +47,30 @@ fn resolve_positive_product(significand: f32, exponent: i32) -> f32 {
     return value;
 }
 
-fn attenuated_surface_intensity(sample: GeometricSample, spectral_fraction: f32) -> f32 {
+fn scaled_spectral_intensity(intensity: f32, spectral_log2_fraction: f32) -> f32 {
+    if intensity < 0.0
+        || spectral_log2_fraction > 0.0
+        || !finite_scalar(intensity)
+        || !finite_scalar(spectral_log2_fraction)
+    {
+        return -1.0;
+    }
+    if intensity == 0.0 {
+        return 0.0;
+    }
+    if intensity < MINIMUM_NORMAL_F32 {
+        return -1.0;
+    }
+
+    let intensity_parts = frexp(intensity);
+    let spectral_scale = positive_log2_scale(spectral_log2_fraction);
+    return resolve_positive_product(
+        intensity_parts.fract * spectral_scale.significand,
+        intensity_parts.exp + spectral_scale.exponent,
+    );
+}
+
+fn attenuated_surface_intensity(sample: GeometricSample, spectral_log2_fraction: f32) -> f32 {
     let radius_ratio = sample.source_coordinates.x / 6.0;
     let frequency_ratio = sample.source_coordinates.z;
     let emitted_intensity = trace_uniforms.surface_emitter.z;
@@ -43,17 +79,16 @@ fn attenuated_surface_intensity(sample: GeometricSample, spectral_fraction: f32)
         || frequency_ratio <= 0.0
         || emitted_intensity < 0.0
         || transmittance < 0.0
-        || spectral_fraction < 0.0
-        || spectral_fraction > 1.0
+        || spectral_log2_fraction > 0.0
         || !finite_scalar(radius_ratio)
         || !finite_scalar(frequency_ratio)
         || !finite_scalar(emitted_intensity)
         || !finite_scalar(transmittance)
-        || !finite_scalar(spectral_fraction)
+        || !finite_scalar(spectral_log2_fraction)
     {
         return -1.0;
     }
-    if emitted_intensity == 0.0 || transmittance == 0.0 || spectral_fraction == 0.0 {
+    if emitted_intensity == 0.0 || transmittance == 0.0 {
         return 0.0;
     }
     // These two uniform factors are required to be normal at the host boundary.
@@ -65,33 +100,27 @@ fn attenuated_surface_intensity(sample: GeometricSample, spectral_fraction: f32)
     if frequency_ratio < MINIMUM_NORMAL_F32 {
         return 0.0;
     }
-    // Interpolated LUT fractions may enter the subnormal range, where WGSL numeric built-ins may
-    // flush their inputs. The production LUT already resolves such entries to zero.
-    if spectral_fraction < MINIMUM_NORMAL_F32 {
-        return 0.0;
-    }
-
     let inverse_radius_ratio = 1.0 / radius_ratio;
     if inverse_radius_ratio < MINIMUM_NORMAL_F32 || !finite_scalar(inverse_radius_ratio) {
         return -1.0;
     }
     let emitted_parts = frexp(emitted_intensity);
     let transmittance_parts = frexp(transmittance);
-    let spectral_parts = frexp(spectral_fraction);
+    let spectral_scale = positive_log2_scale(spectral_log2_fraction);
     let inverse_radius_parts = frexp(inverse_radius_ratio);
     let frequency_parts = frexp(frequency_ratio);
     let inverse_radius_squared = inverse_radius_parts.fract * inverse_radius_parts.fract;
     let frequency_squared = frequency_parts.fract * frequency_parts.fract;
     let significand = emitted_parts.fract
         * transmittance_parts.fract
-        * spectral_parts.fract
+        * spectral_scale.significand
         * inverse_radius_squared
         * inverse_radius_parts.fract
         * frequency_squared
         * frequency_squared;
     let exponent = emitted_parts.exp
         + transmittance_parts.exp
-        + spectral_parts.exp
+        + spectral_scale.exponent
         + 3i * inverse_radius_parts.exp
         + 4i * frequency_parts.exp;
     return resolve_positive_product(significand, exponent);
@@ -111,7 +140,7 @@ fn bounded_surface_sum(incoming: f32, source: f32) -> f32 {
 }
 
 fn transported_surface_intensity(sample: GeometricSample) -> f32 {
-    let incoming = attenuated_surface_intensity(sample, 1.0);
+    let incoming = attenuated_surface_intensity(sample, 0.0);
     if incoming < 0.0 {
         return -1.0;
     }

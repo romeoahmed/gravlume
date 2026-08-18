@@ -381,6 +381,38 @@ fn high_absorption_keeps_a_representable_outgoing_surface_intensity() {
 }
 
 #[test]
+fn low_temperature_diluted_spectrum_preserves_gpu_radiance() {
+    let base = default_observation(1, 1);
+    let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(6.0, 20.0, 1.0e38, 200.0)
+        .expect("the diluted blackbody source is intrinsically valid");
+    let observation = Observation::new(
+        base.scene().clone().with_equatorial_surface(
+            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                .expect("blackbody surface is compatible with vacuum"),
+        ),
+        *base.view(),
+    );
+
+    let capture = capture_surface_transport_case(&observation);
+    let pixel = capture.hdr_pixel(0);
+    assert_eq!(
+        u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
+        0x4000,
+        "representable spectral radiance keeps its alpha tag",
+    );
+    let expected = [505.403_345_434_498_3, 1.380_353_634_125_891_2e-4];
+    for (channel, expected) in pixel[..4].chunks_exact(2).zip(expected) {
+        let actual = decode_f16(u16::from_le_bytes(
+            channel.try_into().expect("half channel has two bytes"),
+        ));
+        assert!(
+            (f64::from(actual) - expected).abs() / expected <= 4.0e-3,
+            "surface radiance {actual:e}, expected {expected:e}",
+        );
+    }
+}
+
+#[test]
 fn gpu_trace_rejects_a_blackbody_profile_outside_the_spectral_lut() {
     let base = default_observation(1, 1);
     let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(1.0e-12, 20.0, 1.0, 6_000.0)

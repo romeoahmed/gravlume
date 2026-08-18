@@ -12,7 +12,7 @@ use crate::{
     scientific_capture::{ScientificCaptureMetadata, ScientificChannelModel},
     shadow_coverage::{ShadowCoverage, ShadowTarget},
     spectral_lut::{
-        BLACKBODY_LUT_BYTE_SIZE, blackbody_lut, maximum_temperature_kelvin,
+        BLACKBODY_LUT_BYTE_SIZE, blackbody_log2_fraction_lut, maximum_temperature_kelvin,
         minimum_temperature_kelvin,
     },
 };
@@ -869,9 +869,9 @@ impl RayTracer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let blackbody_lut = plan.has_blackbody_lut().then(|| {
-            let entries = blackbody_lut();
+            let entries = blackbody_log2_fraction_lut();
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("blackbody spectral boxcar LUT"),
+                label: Some("blackbody spectral log2-fraction LUT"),
                 contents: bytemuck::cast_slice(&entries),
                 usage: wgpu::BufferUsages::STORAGE,
             })
