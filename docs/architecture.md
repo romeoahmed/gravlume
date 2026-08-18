@@ -45,10 +45,11 @@ Observation + ImageSample -> InitialViewRay
 `Observation::initial_ray` 针对自己的 view 验证 sample，并建立 future-directed、null 与 frequency 合同。`KerrSchildChart` 表示 chart convention；`Extremality` 表示 subextremal/extremal/superextremal 分类。
 
 `EquatorialCircularEmitter` 是 domain-owned validated source；它原子携带 inclusive radial
-interval、`inverse-cube-bolometric-v1` 的 $I_6$，并可选择 `inverse-cube-blackbody-v1` 的 $T_6$，
-但不携带 solver、pipeline 或 display policy。`HomogeneousScalarSlab` 是解析、path-integrated
-transfer operator，只保存总 optical depth、integrated emission 与可选 emission temperature；它
-不伪装成空间变化的 volume medium。
+interval 与 $I_6$，并由 `EquatorialEmissionModel` 明确区分 `inverse-cube-bolometric-v1` 和携带
+$T_6$ 的 `inverse-cube-blackbody-v1`，不靠 nullable temperature 推断类型，也不携带 solver、
+pipeline 或 display policy。`HomogeneousScalarSlab` 是解析、path-integrated transfer operator，
+只保存总 optical depth、integrated emission 与可选 emission temperature；它不伪装成空间变化的
+volume medium。
 Reference 保留两个有意不同的接口：
 
 - `ObservationTracer`：从 validated `Observation` 读取 emitter/slab，并一次性构造规范化 backward
@@ -74,7 +75,8 @@ Reference 保留两个有意不同的接口：
 - `update_output` 只换 display contract，不使 geometry generation 失效。
 - `capture_scene_linear` 是显式阻塞的 export 操作，只读取已原子发布的 surface generation；它返回
   `Rgba16Float` binary16 words、逐 texel kind 与分开的 bolometric/final-spectral/LUT 模型误差
-  metadata，不经过 display 或 UI。
+  metadata，不经过 display 或 UI。Metadata 直接复用 validated `EquatorialCircularEmitter` 与
+  `Option<HomogeneousScalarSlab>`；vacuum 是 `None`，不构造全零 transport 镜像。
 
 ## Renderer modules
 

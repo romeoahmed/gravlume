@@ -1,8 +1,8 @@
 use std::borrow::Cow;
 
 use gravlume_domain::{
-    EquatorialCircularEmitter, Extremality, HomogeneousScalarSlab, KerrNewmanSpacetime,
-    KerrSchildChart, Observation, ValidationReport,
+    EquatorialCircularEmitter, EquatorialEmissionModel, Extremality, HomogeneousScalarSlab,
+    KerrNewmanSpacetime, KerrSchildChart, Observation, ValidationReport,
 };
 use num_traits::ToPrimitive as _;
 use wgpu::util::DeviceExt as _;
@@ -21,9 +21,8 @@ pub const LENSING_PREVIEW_SHADER: &str = include_str!("shaders/lensing_preview.w
 pub const GEODESIC_ACCELERATION_SHADER: &str = include_str!("shaders/geodesic_acceleration.wgsl");
 pub const SHADOW_COVERAGE_SHADER: &str = include_str!("shaders/shadow_coverage.wgsl");
 pub const SURFACE_PREVIEW_SHADER: &str = include_str!("shaders/surface_preview.wgsl");
-pub const SURFACE_TRANSPORT_SHADER: &str = include_str!("shaders/surface_transport.wgsl");
-pub const SPECTRAL_SURFACE_PREVIEW_SHADER: &str =
-    include_str!("shaders/spectral_surface_preview.wgsl");
+const SURFACE_TRANSPORT_SHADER: &str = include_str!("shaders/surface_transport.wgsl");
+const SPECTRAL_SURFACE_PREVIEW_SHADER: &str = include_str!("shaders/spectral_surface_preview.wgsl");
 #[cfg(test)]
 const TRACE_CAPTURE_SHADER: &str = include_str!("shaders/trace_capture.wgsl");
 #[cfg(test)]
@@ -166,7 +165,12 @@ fn pack_surface_transport(
         }
         return Ok([0.0, 0.0, 1.0, 0.0]);
     };
-    let emitter_temperature = emitter.blackbody_temperature_at_six_kelvin();
+    let emitter_temperature = match emitter.emission_model() {
+        EquatorialEmissionModel::InverseCubeBolometricV1 => None,
+        EquatorialEmissionModel::InverseCubeBlackbodyV1 {
+            temperature_at_six_kelvin,
+        } => Some(temperature_at_six_kelvin),
+    };
     if let Some(temperature_at_six_kelvin) = emitter_temperature {
         for (radius_m, field) in [
             (
@@ -368,10 +372,14 @@ enum TracePlan {
 impl TracePlan {
     const fn resolve(observation: &Observation) -> Self {
         match observation.scene().equatorial_circular_emitter() {
-            Some(emitter) if emitter.blackbody_temperature_at_six_kelvin().is_some() => {
-                Self::EquatorialBlackbodySurface
-            }
-            Some(_) => Self::EquatorialBolometricSurface,
+            Some(emitter) => match emitter.emission_model() {
+                EquatorialEmissionModel::InverseCubeBolometricV1 => {
+                    Self::EquatorialBolometricSurface
+                }
+                EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
+                    Self::EquatorialBlackbodySurface
+                }
+            },
             None => Self::AcceleratedSky,
         }
     }

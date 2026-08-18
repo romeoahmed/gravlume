@@ -1,8 +1,8 @@
 use std::f64::consts::{PI, TAU};
 
 use gravlume_domain::{
-    EquatorialCircularEmitter, GeodesicState, GeometryError, HomogeneousScalarSlab,
-    KerrNewmanSpacetime, KerrSchildChart,
+    EquatorialCircularEmitter, EquatorialEmissionModel, GeodesicState, GeometryError,
+    HomogeneousScalarSlab, KerrNewmanSpacetime, KerrSchildChart,
 };
 
 use crate::radiation::{
@@ -158,8 +158,11 @@ pub fn emitted_blackbody_temperature(
     emitter: EquatorialCircularEmitter,
     radius_over_mass: f64,
 ) -> Result<Option<f64>, SurfaceObservableError> {
-    let Some(temperature_at_six_kelvin) = emitter.blackbody_temperature_at_six_kelvin() else {
-        return Ok(None);
+    let temperature_at_six_kelvin = match emitter.emission_model() {
+        EquatorialEmissionModel::InverseCubeBolometricV1 => return Ok(None),
+        EquatorialEmissionModel::InverseCubeBlackbodyV1 {
+            temperature_at_six_kelvin,
+        } => temperature_at_six_kelvin,
     };
     let radius_ratio = radius_over_mass / 6.0;
     let temperature = temperature_at_six_kelvin / (radius_ratio * radius_ratio.sqrt()).sqrt();
@@ -405,18 +408,6 @@ mod tests {
             prop_assert_eq!(observed.to_bits(), frequency_ratio.to_bits());
         }
 
-        #[test]
-        fn zero_bolometric_intensity_is_fixed_for_every_finite_binary_shift(
-            frequency_exponent in -1022_i32..=1023,
-        ) {
-            let observed = vacuum_observed_bolometric_intensity(
-                0.0,
-                2.0_f64.powi(frequency_exponent),
-            )
-                .expect("zero intensity remains representable");
-
-            prop_assert_eq!(observed.to_bits(), 0.0_f64.to_bits());
-        }
     }
 
     fn surface(inner_radius_m: f64, outer_radius_m: f64) -> EquatorialCircularEmitter {

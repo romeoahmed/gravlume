@@ -1,6 +1,8 @@
 use std::sync::mpsc;
 
-use gravlume_domain::{Observation, SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
+use gravlume_domain::{
+    EquatorialCircularEmitter, EquatorialEmissionModel, HomogeneousScalarSlab, Observation,
+};
 
 use crate::{error::GpuErrorScopes, extent::RenderExtent, ray_tracer::INVARIANT_DRIFT_LIMIT};
 
@@ -76,11 +78,8 @@ pub enum ScientificPixelKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScientificCaptureMetadata {
     mass_m: f64,
-    source_inner_radius_m: f64,
-    source_outer_radius_m: f64,
-    intensity_at_six_m: f64,
-    emission_model: ScientificEmissionModel,
-    transport: ScientificTransportMetadata,
+    emitter: EquatorialCircularEmitter,
+    homogeneous_scalar_slab: Option<HomogeneousScalarSlab>,
     channels: ScientificChannelModel,
     numerical: ScientificNumericalMetadata,
 }
@@ -92,23 +91,13 @@ impl ScientificCaptureMetadata {
     }
 
     #[must_use]
-    pub const fn source_radial_interval_m(&self) -> [f64; 2] {
-        [self.source_inner_radius_m, self.source_outer_radius_m]
+    pub const fn emitter(&self) -> EquatorialCircularEmitter {
+        self.emitter
     }
 
     #[must_use]
-    pub const fn intensity_at_six_m(&self) -> f64 {
-        self.intensity_at_six_m
-    }
-
-    #[must_use]
-    pub const fn emission_model(&self) -> ScientificEmissionModel {
-        self.emission_model
-    }
-
-    #[must_use]
-    pub const fn transport(&self) -> ScientificTransportMetadata {
-        self.transport
+    pub const fn homogeneous_scalar_slab(&self) -> Option<HomogeneousScalarSlab> {
+        self.homogeneous_scalar_slab
     }
 
     #[must_use]
@@ -122,42 +111,12 @@ impl ScientificCaptureMetadata {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ScientificEmissionModel {
-    InverseCubeBolometricV1,
-    InverseCubeBlackbodyV1 { temperature_at_six_kelvin: f64 },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScientificChannelModel {
     /// The same model-normalized bolometric intensity is stored in R, G, and B.
     BolometricRepeated,
-    /// R, G, and B are band-integrated radiances for the listed observer-frame boxcars.
-    VisibleBoxcarV1 { bands: [SpectralBand; 3] },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ScientificTransportMetadata {
-    optical_depth: f64,
-    integrated_bolometric_emission: f64,
-    emission_temperature_kelvin: Option<f64>,
-}
-
-impl ScientificTransportMetadata {
-    #[must_use]
-    pub const fn optical_depth(self) -> f64 {
-        self.optical_depth
-    }
-
-    #[must_use]
-    pub const fn integrated_bolometric_emission(self) -> f64 {
-        self.integrated_bolometric_emission
-    }
-
-    #[must_use]
-    pub const fn emission_temperature_kelvin(self) -> Option<f64> {
-        self.emission_temperature_kelvin
-    }
+    /// R, G, and B are band-integrated radiances for `VISIBLE_BOXCAR_BANDS_V1`.
+    VisibleBoxcarV1,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -205,45 +164,19 @@ impl ScientificNumericalMetadata {
 pub fn metadata_for_observation(observation: &Observation) -> Option<ScientificCaptureMetadata> {
     let scene = observation.scene();
     let emitter = scene.equatorial_circular_emitter()?;
-    let (emission_model, channels, spectral_budget) =
-        emitter.blackbody_temperature_at_six_kelvin().map_or(
-            (
-                ScientificEmissionModel::InverseCubeBolometricV1,
-                ScientificChannelModel::BolometricRepeated,
-                false,
-            ),
-            |temperature_at_six_kelvin| {
-                (
-                    ScientificEmissionModel::InverseCubeBlackbodyV1 {
-                        temperature_at_six_kelvin,
-                    },
-                    ScientificChannelModel::VisibleBoxcarV1 {
-                        bands: VISIBLE_BOXCAR_BANDS_V1,
-                    },
-                    true,
-                )
-            },
-        );
-    let transport = scene.homogeneous_scalar_slab().map_or(
-        ScientificTransportMetadata {
-            optical_depth: 0.0,
-            integrated_bolometric_emission: 0.0,
-            emission_temperature_kelvin: None,
-        },
-        |slab| ScientificTransportMetadata {
-            optical_depth: slab.optical_depth(),
-            integrated_bolometric_emission: slab.integrated_bolometric_emission(),
-            emission_temperature_kelvin: slab.emission_temperature_kelvin(),
-        },
-    );
+    let (channels, spectral_budget) = match emitter.emission_model() {
+        EquatorialEmissionModel::InverseCubeBolometricV1 => {
+            (ScientificChannelModel::BolometricRepeated, false)
+        }
+        EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
+            (ScientificChannelModel::VisibleBoxcarV1, true)
+        }
+    };
     let optional_budget = |value| spectral_budget.then_some(value);
     Some(ScientificCaptureMetadata {
         mass_m: scene.spacetime().mass_m(),
-        source_inner_radius_m: emitter.inner_radius_m(),
-        source_outer_radius_m: emitter.outer_radius_m(),
-        intensity_at_six_m: emitter.intensity_at_six_m(),
-        emission_model,
-        transport,
+        emitter,
+        homogeneous_scalar_slab: scene.homogeneous_scalar_slab(),
         channels,
         numerical: ScientificNumericalMetadata {
             invariant_relative_drift_limit: INVARIANT_DRIFT_LIMIT,
@@ -314,11 +247,13 @@ pub fn capture_texture(
             depth_or_array_layers: 1,
         },
     );
-    let submission = queue.submit([encoder.finish()]);
     let (sender, receiver) = mpsc::sync_channel(1);
-    readback.map_async(wgpu::MapMode::Read, .., move |result| {
+    // Bind the mapping request to the producing encoder so wgpu orders it after the copy.
+    // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
+    encoder.map_buffer_on_submit(&readback, wgpu::MapMode::Read, .., move |result| {
         let _send_result = sender.send(result);
     });
+    let submission = queue.submit([encoder.finish()]);
     device.poll(wgpu::PollType::Wait {
         submission_index: Some(submission),
         timeout: None,
@@ -405,7 +340,10 @@ mod tests {
     use gravlume_domain::{EquatorialCircularEmitter, HomogeneousScalarSlab, Observation};
 
     use super::{
-        ScientificChannelModel, ScientificEmissionModel, ScientificPixelKind, capture_texture,
+        BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET, INVARIANT_DRIFT_LIMIT,
+        SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET, SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
+        SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET, SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
+        ScientificChannelModel, ScientificNumericalMetadata, ScientificPixelKind, capture_texture,
         classify_alpha_bits, metadata_for_observation,
     };
     use crate::{extent::RenderExtent, gpu_trace_tests::default_observation};
@@ -416,8 +354,28 @@ mod tests {
     }
 
     #[test]
-    fn blackbody_capture_metadata_closes_source_transport_channels_and_budgets() {
+    fn capture_metadata_tracks_validated_scene_semantics_and_exact_budgets() {
         let base = default_observation(1, 1);
+        let bolometric = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
+            .expect("test bolometric source is valid");
+        let bolometric_observation = Observation::new(
+            base.scene()
+                .clone()
+                .with_equatorial_circular_emitter(bolometric),
+            *base.view(),
+        );
+        let metadata = metadata_for_observation(&bolometric_observation)
+            .expect("bolometric surface source has capture metadata");
+
+        assert_f64_contract(metadata.mass_m(), 1.0);
+        assert_eq!(metadata.emitter(), bolometric);
+        assert_eq!(metadata.homogeneous_scalar_slab(), None);
+        assert_eq!(
+            metadata.channels(),
+            ScientificChannelModel::BolometricRepeated
+        );
+        assert_numerical_contract(metadata.numerical(), false);
+
         let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(6.0, 20.0, 1.0, 6_000.0)
             .expect("test blackbody source is valid");
         let slab = HomogeneousScalarSlab::constant_blackbody_v1(0.35, 0.05, 4_500.0)
@@ -433,62 +391,14 @@ mod tests {
         let metadata = metadata_for_observation(&observation)
             .expect("physical surface source has capture metadata");
 
-        assert_eq!(
-            metadata.source_radial_interval_m().map(f64::to_bits),
-            [6.0_f64.to_bits(), 20.0_f64.to_bits()]
-        );
-        assert_eq!(
-            metadata.emission_model(),
-            ScientificEmissionModel::InverseCubeBlackbodyV1 {
-                temperature_at_six_kelvin: 6_000.0
-            }
-        );
-        assert!(matches!(
-            metadata.channels(),
-            ScientificChannelModel::VisibleBoxcarV1 { .. }
-        ));
-        assert_eq!(
-            metadata.transport().optical_depth().to_bits(),
-            0.35_f64.to_bits()
-        );
-        assert_eq!(
-            metadata
-                .transport()
-                .integrated_bolometric_emission()
-                .to_bits(),
-            slab.integrated_bolometric_emission().to_bits()
-        );
-        assert_eq!(
-            metadata.transport().emission_temperature_kelvin(),
-            Some(4_500.0)
-        );
-        let numerical = metadata.numerical();
-        assert!(numerical.invariant_relative_drift_limit() > 0.0);
-        assert!(numerical.bolometric_surface_relative_error_budget() > 0.0);
-        assert!(
-            numerical
-                .spectral_surface_relative_error_budget()
-                .is_some_and(|budget| budget > 0.0)
-        );
-        assert!(
-            numerical
-                .spectral_lut_absolute_fraction_error_budget()
-                .is_some_and(|budget| budget > 0.0)
-        );
-        assert!(
-            numerical
-                .spectral_lut_visible_relative_error_budget()
-                .is_some_and(|budget| budget > 0.0)
-        );
-        assert!(
-            numerical
-                .spectral_lut_relative_error_fraction_floor()
-                .is_some_and(|floor| floor > 0.0)
-        );
+        assert_eq!(metadata.emitter(), emitter);
+        assert_eq!(metadata.channels(), ScientificChannelModel::VisibleBoxcarV1);
+        assert_eq!(metadata.homogeneous_scalar_slab(), Some(slab));
+        assert_numerical_contract(metadata.numerical(), true);
     }
 
     #[test]
-    fn texture_readback_preserves_raw_scene_linear_half_bits() {
+    fn texture_readback_unpads_rows_and_preserves_normal_scene_linear_half_words() {
         let gpu = crate::test_device::native_gpu();
         let extent = RenderExtent::new(2, 2).expect("test extent is nonzero");
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -583,22 +493,81 @@ mod tests {
     }
 
     #[test]
-    fn alpha_tags_keep_preview_pixels_out_of_the_surface_radiance_domain() {
-        assert_eq!(
-            classify_alpha_bits(0x3c00),
-            ScientificPixelKind::AnalyticEscapePreview
+    fn alpha_tag_protocol_classifies_every_published_texel_kind() {
+        let cases = [
+            (0x4000, ScientificPixelKind::SurfaceRadiance),
+            (0x3c00, ScientificPixelKind::AnalyticEscapePreview),
+            (0x0000, ScientificPixelKind::Horizon),
+            (0x8000, ScientificPixelKind::Horizon),
+            (
+                0xc200,
+                ScientificPixelKind::TraceFailure {
+                    termination_code: 3,
+                },
+            ),
+            (
+                0xc400,
+                ScientificPixelKind::TraceFailure {
+                    termination_code: 4,
+                },
+            ),
+            (
+                0xc500,
+                ScientificPixelKind::TraceFailure {
+                    termination_code: 5,
+                },
+            ),
+            (
+                0xc600,
+                ScientificPixelKind::TraceFailure {
+                    termination_code: 6,
+                },
+            ),
+            (
+                0x3555,
+                ScientificPixelKind::Unclassified { alpha_bits: 0x3555 },
+            ),
+        ];
+
+        for (alpha_bits, expected) in cases {
+            assert_eq!(classify_alpha_bits(alpha_bits), expected);
+        }
+    }
+
+    fn assert_numerical_contract(metadata: ScientificNumericalMetadata, has_spectrum: bool) {
+        let spectral = |value| has_spectrum.then_some(value);
+
+        assert_f64_contract(
+            f64::from(metadata.invariant_relative_drift_limit()),
+            f64::from(INVARIANT_DRIFT_LIMIT),
         );
-        assert_eq!(classify_alpha_bits(0), ScientificPixelKind::Horizon);
-        assert_eq!(classify_alpha_bits(0x8000), ScientificPixelKind::Horizon);
-        assert_eq!(
-            classify_alpha_bits(0xc200),
-            ScientificPixelKind::TraceFailure {
-                termination_code: 3
-            }
+        assert_f64_contract(
+            metadata.bolometric_surface_relative_error_budget(),
+            BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
         );
         assert_eq!(
-            classify_alpha_bits(0x3555),
-            ScientificPixelKind::Unclassified { alpha_bits: 0x3555 }
+            metadata.spectral_surface_relative_error_budget(),
+            spectral(SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET)
+        );
+        assert_eq!(
+            metadata.spectral_lut_absolute_fraction_error_budget(),
+            spectral(SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET)
+        );
+        assert_eq!(
+            metadata.spectral_lut_visible_relative_error_budget(),
+            spectral(SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET)
+        );
+        assert_eq!(
+            metadata.spectral_lut_relative_error_fraction_floor(),
+            spectral(SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR)
+        );
+    }
+
+    fn assert_f64_contract(actual: f64, expected: f64) {
+        let tolerance = f64::EPSILON * expected.abs().max(1.0);
+        assert!(
+            (actual - expected).abs() <= tolerance,
+            "{actual:e} differs from {expected:e} by more than {tolerance:e}"
         );
     }
 }

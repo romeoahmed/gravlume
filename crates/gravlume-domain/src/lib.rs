@@ -12,7 +12,7 @@ mod state;
 mod validation;
 mod view;
 
-pub use emission::EquatorialCircularEmitter;
+pub use emission::{EquatorialCircularEmitter, EquatorialEmissionModel};
 pub use observer::{ObserverFrame, StationaryObserverInput};
 pub use radiation::{HomogeneousScalarSlab, SpectralBand, VISIBLE_BOXCAR_BANDS_V1};
 pub use scene::{InitialViewRay, Observation, PhysicalScene, PhysicalSceneInput};

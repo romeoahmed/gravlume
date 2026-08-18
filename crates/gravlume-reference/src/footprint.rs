@@ -269,15 +269,28 @@ pub enum SurfaceFootprintError {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::footprint_metrics;
 
-    #[test]
-    fn determinant_quotient_preserves_a_small_singular_axis() {
-        let jacobian = [[1.0_f64, 0.0], [0.0, 1.0e-200]];
-        let metrics = footprint_metrics(jacobian).expect("finite matrix has finite metrics");
-        let [major, minor] = metrics.singular_values;
+    proptest! {
+        #[test]
+        fn determinant_quotient_preserves_every_binary_singular_axis(
+            minor_exponent in prop_oneof![
+                Just(-1074),
+                Just(-1022),
+                Just(-1),
+                Just(0),
+                -1074_i32..=0,
+            ],
+        ) {
+            let expected_minor = 2.0_f64.powi(minor_exponent);
+            let jacobian = [[1.0_f64, 0.0], [0.0, expected_minor]];
+            let metrics = footprint_metrics(jacobian).expect("finite matrix has finite metrics");
+            let [major, minor] = metrics.singular_values;
 
-        assert_eq!(major.to_bits(), 1.0_f64.to_bits());
-        assert_eq!(minor.to_bits(), 1.0e-200_f64.to_bits());
+            prop_assert_eq!(major.to_bits(), 1.0_f64.to_bits());
+            prop_assert_eq!(minor.to_bits(), expected_minor.to_bits());
+        }
     }
 }
