@@ -12,6 +12,7 @@
 | [Kerr–Schild ↔ Mino seam](kerr-schild-mino-map.md)   | 数学 seam 已采用           | physical-spin/chart 修复已进入 domain/WGSL                                     |
 | [数值 Mino step 选择](mino-step-selection.md)        | 已拒绝                     | fixed-step candidate 因高分辨率 travel-time 反例删除                           |
 | [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策 | scalar slab、spectral fixture 与 footprint 证据已采用；path inspection/reconstruction/Carlson 待证 |
+| [有界单样本 GPU 路径审计](bounded-sample-inspection.md) | 第一版已采用 | 固定资源、generation-gated 异步回读与 exact record 已进入 production；连续字段 corpus 仍待闭合 |
 | [原生 HDR 输出](native-hdr-output.md)                | 已采用                     | native display state、extended-linear HDR 与 typed SDR fallback                |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)   | 当前方法                   | 只测固定 production workload；临时 variant 不形成永久接口                      |
 

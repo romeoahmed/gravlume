@@ -70,28 +70,22 @@ fn transported_surface_bands(sample: GeometricSample) -> vec3<f32> {
     return bounded_surface_sums(incoming, source_bands);
 }
 
-fn store_surface_scene_result(pixel: vec2<u32>, sample: GeometricSample) {
+fn surface_scene_value(sample: GeometricSample) -> vec4<f32> {
     if sample.termination != TERMINATION_EQUATORIAL_SURFACE {
-        store_scene_result(pixel, sample.termination, sample.source_coordinates);
-        return;
+        return scene_value(sample.termination, sample.source_coordinates);
     }
     let bands = transported_surface_bands(sample);
     if any(bands < vec3<f32>(0.0)) {
-        textureStore(
-            scene_hdr,
-            vec2<i32>(pixel),
-            vec4<f32>(
-                visible_failure_color(TERMINATION_NUMERICAL_FAILURE),
-                -f32(TERMINATION_NUMERICAL_FAILURE),
-            ),
+        return vec4<f32>(
+            visible_failure_color(TERMINATION_NUMERICAL_FAILURE),
+            -f32(TERMINATION_NUMERICAL_FAILURE),
         );
-        return;
     }
-    textureStore(
-        scene_hdr,
-        vec2<i32>(pixel),
-        vec4<f32>(bands, SURFACE_RADIANCE_TAG),
-    );
+    return vec4<f32>(bands, SURFACE_RADIANCE_TAG);
+}
+
+fn store_surface_scene_result(pixel: vec2<u32>, sample: GeometricSample) {
+    textureStore(scene_hdr, vec2<i32>(pixel), surface_scene_value(sample));
 }
 
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
