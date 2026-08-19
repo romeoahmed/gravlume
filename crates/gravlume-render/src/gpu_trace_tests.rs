@@ -13,15 +13,20 @@ use num_traits::ToPrimitive as _;
 use proptest::prelude::*;
 
 use crate::{
-    SampleArithmeticDomain, SampleInspection, SampleInspectionProfile, SampleInspectionRequest,
-    SampleInspectionSource, SampleProducer, SampleSceneValue, SampleTermination,
     gpu_capture::{
         capture_accelerated_trace, capture_accelerated_trace_in_batches,
         capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
         capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
         inspect_sample,
     },
-    trace::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
+    trace::{
+        INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
+        inspection::{
+            SampleArithmeticDomain, SampleInspection, SampleInspectionProfile,
+            SampleInspectionRequest, SampleInspectionSource, SampleProducer, SampleSceneValue,
+            SampleTermination,
+        },
+    },
 };
 
 const EVENT_CANDIDATE_HORIZON: u32 = 1 << 1;
@@ -192,7 +197,9 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         epsilon = 1.0e-3
     );
 
-    let branch = inspection.branch_key();
+    let branch = inspection
+        .branch_key()
+        .expect("accepted surface inspection has an exact branch");
     let reference_branch = reference.branch_key();
     assert_eq!(branch.radial_turnings(), reference_branch.radial_turnings());
     assert_eq!(
@@ -234,9 +241,12 @@ fn assert_canonical_inspection_provenance(
     assert_eq!(inspection.request(), request);
     assert_eq!(inspection.extent(), [1280, 720]);
     assert_eq!(inspection.observation_identity().words().len(), 44);
-    assert_eq!(inspection.profile(), SampleInspectionProfile::GpuKsRk4V1);
     assert_eq!(
-        inspection.producer(),
+        SampleInspection::profile(),
+        SampleInspectionProfile::GpuKsRk4V1
+    );
+    assert_eq!(
+        SampleInspection::producer(),
         SampleProducer::OnDemandFullKerrSchildRetrace
     );
     assert_eq!(
@@ -244,7 +254,7 @@ fn assert_canonical_inspection_provenance(
         Some(crate::ScientificChannelModel::BolometricRepeated)
     );
     assert_eq!(
-        inspection.arithmetic_domain(),
+        SampleInspection::arithmetic_domain(),
         SampleArithmeticDomain::WgslF32
     );
     assert_eq!(

@@ -1,5 +1,5 @@
-// Production single-sample protocol. Every host-shared lane is one aligned vec4; no vec3, bool,
-// implicit padding, trajectory, or extent-scaled record survives the invocation.
+// Test-only single-sample protocol candidate. Every host-shared lane is one aligned vec4; no
+// vec3, bool, implicit padding, trajectory, or extent-scaled record survives the invocation.
 
 struct SampleInspectionRequest {
     pixel_extent: vec4<u32>,
@@ -13,6 +13,9 @@ struct SampleInspectionRecord {
     protocol: vec4<u32>,
     // (termination, failure flags, steps, event candidates)
     metadata: vec4<u32>,
+    // Exact only for a determinate, non-numerical-failure termination. All zeroes mean
+    // unavailable for a numerical failure; Uncertain may carry provisional counters that must
+    // not be decoded as an exact branch.
     branch_key: vec4<u32>,
     source_time: vec4<f32>,
     // (scene-linear RGB, event residual)

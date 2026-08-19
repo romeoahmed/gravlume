@@ -3,8 +3,9 @@ use gravlume_domain::{ImageSample, Observation};
 use crate::{
     extent::RenderExtent,
     trace::{
-        SampleInspection, SampleInspectionError, SampleInspectionRequest, TileRegion,
-        TracePipeline, tile_grid, trace_record_plane_size,
+        TileRegion, TracePipeline,
+        inspection::{SampleInspection, SampleInspectionError, SampleInspectionRequest},
+        tile_grid, trace_record_plane_size,
     },
 };
 
