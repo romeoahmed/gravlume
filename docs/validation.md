@@ -128,7 +128,7 @@ CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 0.6928203230275509,15)M.
 \]
 
-负 radiance 或 non-finite 不进入该 display function：预览显示 diagnostic，capture 保留字段与 failure metadata，不能先 clamp 再解释为物理结果。
+负 radiance 或 non-finite 不进入该 display function：预览显示 diagnostic；scene-linear capture 保留 raw channels、texel kind 与 failure classification。path observation fields 不属于这项 display capture 合同，任何输出都不能先 clamp 再解释为物理结果。
 
 80 位复算恢复 $r=30M$，并给出
 

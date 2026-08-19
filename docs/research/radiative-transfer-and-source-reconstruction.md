@@ -16,10 +16,10 @@
 6. Carlson symmetric forms 适合具名 root topology 内的 terminal accelerator 或 CPU oracle，不是完整 geodesic solver。root classification、turning count、积分反演、$t/\phi$ 极点项和 source event 仍是必要工作；near-degenerate、near-axis、near-extreme 与 unsupported branch 必须回退 Cartesian Kerr–Schild。
 
 > **后续采用记录：** scalar slab、diluted-blackbody boxcar bands、v3 fixtures、最小 branch key、
-> 五射线 surface footprint 与 tagged scientific capture 已按本记录的保守边界落地。当前契约与证据见
+> 五射线 surface footprint 与 tagged scene-linear radiance capture 已按本记录的保守边界落地。当前契约与证据见
 > [`physics.md`](../physics.md#7-frequency-与-radiative-transfer)、[`validation.md`](../validation.md#32-surface-observable)、
 > [`reference-implementation.md`](../reference-implementation.md)和 [`gpu-renderer.md`](../gpu-renderer.md)；
-> production reconstruction 与 Carlson accelerator 仍未实现。
+> production 的有界 path inspection、reconstruction 与 Carlson accelerator 仍未实现。
 
 ## 1. 问题、方法与当前差距
 
@@ -48,7 +48,7 @@ uv run --isolated --project docs/research/scripts --locked \
 | 能力 | 基线/后续采用证据 | 本轮确认的缺口 |
 | --- | --- | --- |
 | source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml) | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins |
-| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有持久化 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
+| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有有界 path inspection、semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
 | execution seam | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
 | appearance/reconstruction | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向 | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现 |
 | analytic acceleration | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino | 尚无 root-aware Carlson implementation 或 accepted-domain classifier |
@@ -511,7 +511,7 @@ Carlson duplication 本身较规整，不代表前后的 root sorting、case sel
 
 | 候选 | 本轮决策 | 进入 production / 重开条件 |
 | --- | --- | --- |
-| scalar invariant emission/absorption | **优先补齐**，先 CPU analytic fixture，再 GPU | 规范固定 coefficient、orientation、frequency sampling；第 2.3 节 fixture 和 CPU/GPU agreement 通过 |
+| scalar invariant emission/absorption | **已采用为 homogeneous path-integrated operator** | 空间变化 coefficient、ordered checkpoints 与通用 volume transport 仍需新的合同和独立 evidence |
 | 对普通 RGB 直接应用 spectral redshift | **拒绝** | 引入具名 spectrum/bandpass 与频率轴后才可讨论；bolometric 继续只用 $g^4$ |
 | 把 timelike circular existence 当 stable disk | **拒绝** | 独立 effective-potential/epicyclic gate 和 ISCO fixture 通过，且产品确实需要 stable disk 语义 |
 | 持久化完整 `GeometricSample` G-buffer | **暂不采用** | branch-aware reconstruction 证明有 consumer，并通过 layout、显存、误差与 Metal/Vulkan A/B |
@@ -522,6 +522,8 @@ Carlson duplication 本身较规整，不代表前后的 root sorting、case sel
 
 后续采用记录显示，标量 invariant transport、spectral/blackbody fixture、最小 branch key 与 test-only
 finite-difference footprint 已完成；第 5.6 节的 production reconstruction 候选未通过端到端 A/B，
-所以当前生产路径仍保持 full KS。下一轮只能从新的 coarse/adaptive 或 stationary-amortized transfer-map
-设计重开，再考虑 pure-Kerr root-aware Carlson CPU oracle/transfer-map candidate。每一步只引入当下
+所以当前生产路径仍保持 full KS。下一项工作应先补有界 path inspection 与更广 continuous-field
+quality ladder，明确 interactive/science-quality execution policy 的支持域而不放宽 observable budget；只有真实 filterable source 或 history
+consumer 和基线同时存在后，才从新的 coarse/adaptive 或 stationary-amortized transfer-map 设计重开。
+pure-Kerr root-aware Carlson 可以先建立 CPU oracle，但不是该产品闭环的前置条件。每一步只引入当下
 consumer 需要的字段，并继续让 full-KS 定义 unsupported domain 的行为。

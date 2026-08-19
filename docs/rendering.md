@@ -6,7 +6,7 @@
 
 1. **生产顺序是 Schwarzschild → Kerr → Kerr 专用加速；Kerr–Newman 是 research geometry。** Kerr 是解析轨迹、transfer map 和观测解释的主干，显著净电荷没有默认产品优先级所需的天体证据。
 2. **GPU Cartesian Kerr–Schild `f32` tracer 是数值基线。** CPU `f64` reference 与之独立；analytic/LUT 不能成为唯一路径。
-3. **先保存几何语义，再谈重建。** termination、branch/parity、source anchor、travel time、frequency ratio 和 source-space footprint 是 adaptive/filter/temporal 的输入。
+3. **先让几何语义可审计，再谈重建。** termination、branch/parity、source anchor、travel time、frequency ratio 和 source-space footprint 是 adaptive/filter/temporal 的输入；逻辑合同不等于默认常驻全帧缓冲。
 4. **表面 transfer map 可高价值复用，体传输必须谨慎。** scalar volume 和 Stokes transport 需要沿有序路径重积；不能把一张源坐标纹理冒充所有介质。
 5. **fast-light/slow-light 是 source 数据语义。** slow-light 需要 emission time、snapshot revision、插值与 out-of-domain policy。
 6. **active-ray compaction 和 temporal 必须用实测证明价值。** ODE 分支多不自动证明 wavefront/indirect queue 或普通 TAA 在 Vulkan/Metal 净赚。
@@ -48,6 +48,20 @@ Trace -> GeometricSample
 ```
 
 geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostics 或 validation。Appearance effect 从 scene-linear result 开始，不回写 geodesic 或 emission。
+
+### 2.3 物化与审计边界
+
+`GeometricSample` 是 geometry/transport/reconstruction 之间的逻辑合同，不规定唯一存储形态：
+
+1. direct trace 可以只在 invocation 内产生 sample，并立即完成 transport；
+2. sample inspection 可以只为选定像素或小区域创建有界 record/readback；
+3. reconstruction 只有在真实 consumer 已固定后，才按其 lookup 与质量需求物化最小 semantic、continuous-field 或 footprint planes。
+
+当前 production 属于第一种；scene-linear scientific capture 导出最终 radiance 与 texel kind，不等于第二种。test-only diagnostic planes 证明 ABI 与 CPU/GPU observable，但不能替代 production inspection、资源策略或用户可取得的 artifact。
+
+任何 host-shared plane 都必须独立验证 Rust/WGSL size、alignment、stride 与 round-trip，并按实际请求的 [WebGPU limits](https://www.w3.org/TR/webgpu/#limits)和 extent 在分配前 admission；adapter 可能支持更高上限，不代表 device 已请求到它，也不授权在 allocation failure 后静默降精度。
+
+进入 reconstruction 前，必须先让同一 observation 的 discrete branch 和 continuous source anchor、frequency ratio、travel time、radiance 能被结构化检查，并在 ordinary、boundary、multi-image 与 near-critical corpus 上建立质量基线。interactive 与 science-quality policy 可以使用不同 extent、refinement 和资源预算，但 accepted physical result 仍遵守同一 observable budget；低成本路径只能收窄支持域、fallback 或返回 uncertainty，不能让 reconstruction 平滑掉差异。
 
 ## 3. Geometry 路线
 
@@ -199,6 +213,8 @@ $\|J\|_F^2-\sqrt{\|J\|_F^4-4\det(J)^2}$ 在 near-degenerate 区域消减；这�
 
 比较三种输入：tone-mapped edge、geometry/status edge、source Jacobian + branch discontinuity。场景至少含 Schwarzschild 高频 sky、Kerr critical curve、薄盘多像和 cubemap seam。以 full-resolution trace 的 source coordinate、termination、branch 和 filtered radiance 为 reference；只有 source method 在同预算下降低 worst-case error 才进入主线。
 
+footprint evidence 本身不授权 production map。候选还必须有定义明确的 filterable source/history consumer，并证明它在完整 transport 后的 scene-linear radiance 上获益。已否决候选及恢复条件只保留在 [source-space reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#7-研究决策与恢复条件)。
+
 ## 7. Adaptive sampling 与 active-ray execution
 
 ### 7.1 两层 adaptive
@@ -215,11 +231,13 @@ image classifier 至少合并：
 
 ### 7.2 Execution routes
 
-按顺序做三条可比较路径：
+质量基线与真实 consumer 闭合后，按顺序比较三条 execution path：
 
 1. full-screen fixed dispatch，inactive lane early return；
 2. coarse + full-screen refine second dispatch；
 3. prefix/atomic active queue + indirect dispatch。
+
+跨 workgroup producer/consumer 必须位于有序的不同 dispatch 或 pass；`workgroupBarrier` 与 `storageBarrier` 的 execution/memory scope 都是 Workgroup，Relaxed storage atomic 也不能发布另一处 non-atomic payload。不得在同一 dispatch 模拟 grid barrier。[WGSL synchronization](https://www.w3.org/TR/WGSL/#barrier-builtin-functions) [WGSL atomics](https://www.w3.org/TR/WGSL/#atomic-builtin-functions)
 
 每条路径在 Metal/Vulkan 比较总 GPU time、active ratio、queue-build time 和 field error。register pressure、memory traffic 只有在具名 vendor profiler/offline compiler 提供可复现采集方法时才作为附加证据。只有第 3 条在目标 active ratio 分布上稳定获益才保留；wgpu 能编码 indirect dispatch 不证明它对该 workload 划算。
 
@@ -326,4 +344,4 @@ WGSL 没有可作为完整防线的 core `isFinite` 工作流。实现先在运�
 | scalar volume          | analytic slab + step/tolerance sequence                  | 限制 surface/vacuum                       |
 | polarization           | direct parallel transport/analytic slab/independent code | 不发行该能力                              |
 
-任何 accelerator 只有在适用域可检查、错误可观察，并相对数值基线满足同一 observable budget 时才能进入 resolved plan。完整实施顺序与阶段退出条件见[路线图](roadmap.md)。
+任何 accelerator 只有在适用域可检查、错误可观察，并相对数值基线满足同一 observable budget 时才能进入 resolved plan。完整依赖顺序与退出条件见[路线图](roadmap.md)。
