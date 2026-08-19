@@ -48,8 +48,8 @@ uv run --isolated --project docs/research/scripts --locked \
 | 能力 | 基线/后续采用证据 | 本轮确认的缺口 |
 | --- | --- | --- |
 | source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml) | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins |
-| GPU surface | [`kerr_schild_trace.wgsl`](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl) 产生 invocation-local sample；[`surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有持久化 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
-| execution seam | [`ray_tracer.rs`](../../crates/gravlume-render/src/ray_tracer.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
+| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有持久化 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
+| execution seam | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
 | appearance/reconstruction | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向 | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现 |
 | analytic acceleration | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino | 尚无 root-aware Carlson implementation 或 accepted-domain classifier |
 
@@ -99,7 +99,7 @@ I_{\nu,{\rm obs}}(\nu_{\rm obs})
 =g^3I_{\nu,{\rm em}}(\nu_{\rm obs}/g).
 \]
 
-把 $d\nu_{\rm obs}=g\,d\nu_{\rm em}$ 一并换元后才有 $I_{\rm obs}=g^4I_{\rm em}$。因此当前 [`surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/surface_preview.wgsl) 对明确标成 bolometric 的 source 连乘四次 $g$ 是正确的 baseline；将同一操作用于 spectral bin 或普通 RGB 则没有物理意义。对 Planck spectrum，上式等价于 $T_{\rm obs}=gT_{\rm em}$，可作为独立于“代码也乘四次”的验证。[Younsi et al. 2012](https://arxiv.org/abs/1207.4234) 给出 invariant transfer；[RAPTOR](https://doi.org/10.1051/0004-6361/201732149) 的原始实现论文也使用 $\nu=-k\cdot u$ 和 invariant emission coefficient。
+把 $d\nu_{\rm obs}=g\,d\nu_{\rm em}$ 一并换元后才有 $I_{\rm obs}=g^4I_{\rm em}$。因此当前 [`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 对明确标成 bolometric 的 source 连乘四次 $g$ 是正确的 baseline；将同一操作用于 spectral bin 或普通 RGB 则没有物理意义。对 Planck spectrum，上式等价于 $T_{\rm obs}=gT_{\rm em}$，可作为独立于“代码也乘四次”的验证。[Younsi et al. 2012](https://arxiv.org/abs/1207.4234) 给出 invariant transfer；[RAPTOR](https://doi.org/10.1051/0004-6361/201732149) 的原始实现论文也使用 $\nu=-k\cdot u$ 和 invariant emission coefficient。
 
 沿 volume ray，$j_\nu$ 与 $\alpha_\nu$ 必须在每个 accepted sample 的 local fluid frequency 上求值。一个固定的 observer spectral bin 会沿路径对应不同 local frequency；这正是 spectral LUT 需要频率坐标而 RGB 不足以替代它的原因。
 
@@ -179,7 +179,7 @@ production threshold 应由 observable error 与 false-accept sweep 反推。任
 
 structure member offset 必须向该 member alignment 取整，array stride 是 element size 向 element alignment 取整。`uniform` address space 对 array/structure 还有 16-byte 级的额外约束；`storage` 使用其 host-shareable natural layout，详见 [address-space layout constraints](https://www.w3.org/TR/WGSL/#address-space-layout-constraints)。dynamic uniform binding offset 的 `minUniformBufferOffsetAlignment` 是另一项 device limit，不能反过来推导 structure size。[WebGPU limits](https://www.w3.org/TR/webgpu/#limits)
 
-基线提交中的 [`TraceUniforms`](../../crates/gravlume-render/src/ray_tracer.rs) 是十个 `[f32; 4]`，
+基线提交中的 [`TraceUniforms`](../../crates/gravlume-render/src/trace/input.rs) 是十个 `[f32; 4]`，
 与当时 shader 的十个 `vec4<f32>` 一一对应，总计 160 byte；`TraceDispatch` 的两个 `vec2<u32>`
 总计 16 byte。采用 scalar transport 后 production ABI 增加一个具名 `surface_transport` block；当前
 176-byte 合同以 [GPU 证据](../gpu-renderer.md)为准。test-only record plane 每 element 16 byte。

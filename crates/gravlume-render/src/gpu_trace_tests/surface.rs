@@ -15,7 +15,7 @@ use crate::{
         capture_surface_footprint_sample, capture_surface_transport_case, capture_trace,
         capture_trace_sample,
     },
-    ray_tracer::{TraceTermination, TraceUniforms},
+    trace::{TraceTermination, TraceUniforms},
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [

@@ -51,37 +51,23 @@ fn transported_surface_bands(sample: GeometricSample) -> vec3<f32> {
         if any(source_log2_fractions > vec3<f32>(0.0)) {
             return vec3<f32>(-1.0);
         }
-        source_bands = vec3<f32>(
-            scaled_spectral_intensity(
-                trace_uniforms.surface_transport.w,
-                source_log2_fractions.x,
-            ),
-            scaled_spectral_intensity(
-                trace_uniforms.surface_transport.w,
-                source_log2_fractions.y,
-            ),
-            scaled_spectral_intensity(
-                trace_uniforms.surface_transport.w,
-                source_log2_fractions.z,
-            ),
+        source_bands = scaled_spectral_intensities(
+            trace_uniforms.surface_transport.w,
+            source_log2_fractions,
         );
         if any(source_bands < vec3<f32>(0.0)) {
             return vec3<f32>(-1.0);
         }
     }
-    let incoming = vec3<f32>(
-        attenuated_surface_intensity(sample, incoming_log2_fractions.x),
-        attenuated_surface_intensity(sample, incoming_log2_fractions.y),
-        attenuated_surface_intensity(sample, incoming_log2_fractions.z),
+    let incoming = attenuated_surface_spectrum(
+        radius_ratio,
+        frequency_ratio,
+        incoming_log2_fractions,
     );
     if any(incoming < vec3<f32>(0.0)) {
         return vec3<f32>(-1.0);
     }
-    return vec3<f32>(
-        bounded_surface_sum(incoming.x, source_bands.x),
-        bounded_surface_sum(incoming.y, source_bands.y),
-        bounded_surface_sum(incoming.z, source_bands.z),
-    );
+    return bounded_surface_sums(incoming, source_bands);
 }
 
 fn store_surface_scene_result(pixel: vec2<u32>, sample: GeometricSample) {
@@ -109,7 +95,7 @@ fn store_surface_scene_result(pixel: vec2<u32>, sample: GeometricSample) {
 }
 
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
-fn trace_spectral_surface_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
+fn trace_blackbody_surface_scene(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let extent = textureDimensions(scene_hdr);
     let pixel = trace_dispatch.tile_origin * TRACE_WORKGROUP_AXIS + global_id.xy;
     if any(pixel >= extent) {

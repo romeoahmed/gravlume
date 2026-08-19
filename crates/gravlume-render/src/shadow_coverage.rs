@@ -1,15 +1,10 @@
 //! Selective subpixel refinement for the capture/escape shadow boundary.
 
-use std::borrow::Cow;
-
 use wgpu::util::DeviceExt as _;
 
 use crate::{
     extent::RenderExtent,
-    ray_tracer::{
-        GEODESIC_ACCELERATION_SHADER, KERR_SCHILD_TRACE_SHADER, LENSING_PREVIEW_SHADER,
-        SHADOW_COVERAGE_SHADER, TraceUniforms, size_of,
-    },
+    trace::{TraceUniforms, shadow_coverage_shader_source, size_of},
 };
 
 const CLASSIFY_WORKGROUP_AXIS: u32 = 8;
@@ -92,9 +87,7 @@ impl ShadowCoverage {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selective shadow coverage shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Owned(format!(
-                "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{GEODESIC_ACCELERATION_SHADER}\n{SHADOW_COVERAGE_SHADER}"
-            ))),
+            source: wgpu::ShaderSource::Wgsl(shadow_coverage_shader_source().into()),
         });
         let classify_pipeline = create_pipeline(
             device,

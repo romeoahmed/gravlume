@@ -1,388 +1,25 @@
-use std::borrow::Cow;
-
-use gravlume_domain::{
-    EquatorialEmissionModel, EquatorialSurface, Extremality, KerrNewmanSpacetime, KerrSchildChart,
-    Observation, ScalarSlabEmissionModel, SceneRadiance, SurfaceTransport, ValidationReport,
-};
-use num_traits::ToPrimitive as _;
+use gravlume_domain::{EquatorialEmissionModel, Observation, SceneRadiance};
 use wgpu::util::DeviceExt as _;
+
+mod input;
+mod shader;
+
+pub use input::{GpuTraceInputError, INVARIANT_DRIFT_LIMIT, TraceUniforms};
+pub use shader::shadow_coverage as shadow_coverage_shader_source;
+
+use input::TraceDispatch;
 
 use crate::{
     extent::RenderExtent,
     scientific_capture::{ScientificCaptureMetadata, ScientificChannelModel},
     shadow_coverage::{ShadowCoverage, ShadowTarget},
-    spectral_lut::{
-        BLACKBODY_LUT_BYTE_SIZE, blackbody_log2_fraction_lut, maximum_temperature_kelvin,
-        minimum_temperature_kelvin,
-    },
+    spectral_lut::{BLACKBODY_LUT_BYTE_SIZE, blackbody_log2_fraction_lut},
 };
 
-pub const KERR_SCHILD_TRACE_SHADER: &str = include_str!("shaders/kerr_schild_trace.wgsl");
-pub const LENSING_PREVIEW_SHADER: &str = include_str!("shaders/lensing_preview.wgsl");
-pub const GEODESIC_ACCELERATION_SHADER: &str = include_str!("shaders/geodesic_acceleration.wgsl");
-pub const SHADOW_COVERAGE_SHADER: &str = include_str!("shaders/shadow_coverage.wgsl");
-pub const SURFACE_PREVIEW_SHADER: &str = include_str!("shaders/surface_preview.wgsl");
-const SURFACE_TRANSPORT_SHADER: &str = include_str!("shaders/surface_transport.wgsl");
-const SPECTRAL_SURFACE_PREVIEW_SHADER: &str = include_str!("shaders/spectral_surface_preview.wgsl");
-#[cfg(test)]
-const TRACE_CAPTURE_SHADER: &str = include_str!("shaders/trace_capture.wgsl");
-#[cfg(test)]
-const SURFACE_TRACE_CAPTURE_SHADER: &str = include_str!("shaders/surface_trace_capture.wgsl");
-#[cfg(test)]
-const SURFACE_FOOTPRINT_CAPTURE_SHADER: &str =
-    include_str!("shaders/surface_footprint_capture.wgsl");
-#[cfg(test)]
-const ACCELERATED_TRACE_CAPTURE_SHADER: &str =
-    include_str!("shaders/accelerated_trace_capture.wgsl");
-#[cfg(test)]
-const INITIAL_RAY_CAPTURE_SHADER: &str = include_str!("shaders/initial_ray_capture.wgsl");
-#[cfg(test)]
-const INVARIANT_GATE_CAPTURE_SHADER: &str = include_str!("shaders/invariant_gate_capture.wgsl");
-#[cfg(test)]
-const EVENT_POLICY_CAPTURE_SHADER: &str = include_str!("shaders/event_policy_capture.wgsl");
-pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
-const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
-const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M: f32 = 200.0;
-const GPU_EVENT_TIE_TOLERANCE_OVER_M: f32 = f32::from_bits(0x3700_0000);
-const GPU_EVENT_ARMING_BAND_OVER_M: f32 = f32::from_bits(0x3980_0000);
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
-pub const TRACE_WORKGROUP_WIDTH: u32 = 8;
-pub const TRACE_WORKGROUP_HEIGHT: u32 = 8;
+const TRACE_WORKGROUP_AXIS: u32 = 8;
 
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-pub struct TraceUniforms {
-    spacetime: [f32; 4],
-    observer_event: [f32; 4],
-    observer_velocity: [f32; 4],
-    image_right: [f32; 4],
-    image_up: [f32; 4],
-    arrival: [f32; 4],
-    camera: [f32; 4],
-    event_surfaces: [f32; 4],
-    surface_emitter: [f32; 4],
-    surface_transport: [f32; 4],
-    step_policy: [f32; 4],
-}
-
-const _: () = assert!(std::mem::size_of::<TraceUniforms>() == 176);
-
-#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
-struct TraceDispatch {
-    tile_origin: [u32; 2],
-    tile_count: [u32; 2],
-}
-
-impl TraceUniforms {
-    fn from_observation_with_surface(
-        observation: &Observation,
-        surface: Option<EquatorialSurface>,
-    ) -> Result<Self, GpuTraceInputError> {
-        let scene = observation.scene();
-        let physical_spacetime = *scene.spacetime();
-        let mass = physical_spacetime.mass_m();
-        let view = *observation.view();
-        let frame = scene.observer_frame();
-        let sample = view
-            .sample(0, 0, 0.5, 0.5)
-            .map_err(GpuTraceInputError::DomainInvariant)?;
-        let observer_frequency = observation
-            .initial_ray(sample)
-            .map_err(GpuTraceInputError::DomainInvariant)?
-            .observer_frequency();
-        if (observer_frequency - 1.0).abs() > NORMALIZED_FREQUENCY_TOLERANCE {
-            return Err(GpuTraceInputError::NonNormalizedObserverFrequency { observer_frequency });
-        }
-        let spacetime_uniform = pack4(
-            [
-                1.0,
-                physical_spacetime.spin_m() / mass,
-                physical_spacetime.charge_m() / mass,
-                match physical_spacetime.chart() {
-                    KerrSchildChart::Ingoing => 1.0,
-                    KerrSchildChart::Outgoing => -1.0,
-                },
-            ],
-            "spacetime",
-        )?;
-        let gpu_spacetime = KerrNewmanSpacetime::new(
-            f64::from(spacetime_uniform[0]),
-            f64::from(spacetime_uniform[1]),
-            f64::from(spacetime_uniform[2]),
-            physical_spacetime.chart(),
-        )
-        .map_err(GpuTraceInputError::DomainInvariant)?;
-        let canonical_state = physical_spacetime.extremality();
-        let gpu_extremality = gpu_spacetime.extremality();
-        if gpu_extremality != canonical_state {
-            return Err(GpuTraceInputError::ExtremalityChangedByPacking {
-                canonical_state,
-                gpu_extremality,
-            });
-        }
-        let horizon = gpu_spacetime.outer_horizon_radius().unwrap_or(-1.0);
-        let [_, observer_x, observer_y, observer_z] = scene.observer_event().to_txyz();
-        let surface_emitter = pack_surface_emitter(surface, mass)?;
-        let surface_transport = pack_surface_transport(surface, mass)?;
-
-        Ok(Self {
-            spacetime: spacetime_uniform,
-            // A nonzero binary64 height can round to zero in binary32. Preserve the discrete side
-            // before narrowing; the shader never consumes coordinate time from this lane.
-            // Source: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
-            observer_event: pack4(
-                [
-                    f64::from(encode_initial_polar_side(observer_z)),
-                    observer_x / mass,
-                    observer_y / mass,
-                    observer_z / mass,
-                ],
-                "observer_event",
-            )?,
-            observer_velocity: pack4(frame.four_velocity_txyz(), "observer_velocity")?,
-            image_right: pack4(frame.image_right_txyz(), "image_right")?,
-            image_up: pack4(frame.image_up_txyz(), "image_up")?,
-            arrival: pack4(frame.arrival_direction_txyz(), "arrival")?,
-            camera: pack4(
-                [(view.vertical_fov().radians() * 0.5).tan(), 1.0, 0.5, 0.5],
-                "camera",
-            )?,
-            event_surfaces: pack4(
-                [
-                    f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
-                    f64::from(f32::from_bits(0x2b80_0000)),
-                    horizon,
-                    f64::from(GPU_EVENT_TIE_TOLERANCE_OVER_M),
-                ],
-                "event_surfaces",
-            )?,
-            surface_emitter,
-            surface_transport,
-            step_policy: [0.1, 0.005, 8.0, INVARIANT_DRIFT_LIMIT],
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_observation(observation: &Observation) -> Result<Self, GpuTraceInputError> {
-        CompiledTraceInput::compile(observation).map(|compiled| compiled.uniforms)
-    }
-}
-
-fn pack_surface_transport(
-    surface: Option<EquatorialSurface>,
-    mass_m: f64,
-) -> Result<[f32; 4], GpuTraceInputError> {
-    let Some(surface) = surface else {
-        return Ok([0.0, 0.0, 1.0, 0.0]);
-    };
-    let emitter = surface.emitter();
-    let emitter_temperature = match emitter.emission_model() {
-        EquatorialEmissionModel::InverseCubeBolometricV1 => None,
-        EquatorialEmissionModel::InverseCubeBlackbodyV1 {
-            temperature_at_six_kelvin,
-        } => Some(temperature_at_six_kelvin),
-    };
-    if let Some(temperature_at_six_kelvin) = emitter_temperature {
-        for (radius_m, field) in [
-            (
-                emitter.inner_radius_m(),
-                "equatorial_circular_emitter.inner_temperature_kelvin",
-            ),
-            (
-                emitter.outer_radius_m(),
-                "equatorial_circular_emitter.outer_temperature_kelvin",
-            ),
-        ] {
-            let radius_ratio = radius_m / mass_m / 6.0;
-            let temperature =
-                temperature_at_six_kelvin / (radius_ratio * radius_ratio.sqrt()).sqrt();
-            validate_lut_temperature(temperature, field)?;
-        }
-    }
-
-    let (slab, transmittance, weighted_source_intensity, source_emission) =
-        match surface.transport() {
-            SurfaceTransport::Vacuum => (None, 1.0, 0.0, None),
-            SurfaceTransport::HomogeneousScalar(slab) => {
-                let transmittance = (-slab.optical_depth()).exp();
-                (
-                    Some(slab),
-                    transmittance,
-                    slab.integrated_bolometric_emission(),
-                    Some(slab.emission_model()),
-                )
-            }
-        };
-    let source_temperature = if emitter_temperature.is_some() && weighted_source_intensity > 0.0 {
-        let Some(ScalarSlabEmissionModel::BlackbodyV1 { temperature_kelvin }) = source_emission
-        else {
-            // `EquatorialSurface` construction rejects this combination. Keeping this assertion
-            // local documents the trusted domain invariant without restoring a duplicate error.
-            debug_assert!(
-                false,
-                "validated blackbody transport has a resolved source spectrum"
-            );
-            return Err(GpuTraceInputError::NotRepresentable {
-                field: "surface_transport",
-            });
-        };
-        validate_lut_temperature(
-            temperature_kelvin,
-            "homogeneous_scalar_slab.emission_temperature_kelvin",
-        )?;
-        temperature_kelvin
-    } else {
-        0.0
-    };
-    let packed = pack4(
-        [
-            emitter_temperature.unwrap_or(0.0),
-            source_temperature,
-            transmittance,
-            weighted_source_intensity,
-        ],
-        "surface_transport",
-    )?;
-    let transmittance_underflowed = slab.is_some_and(|slab| {
-        slab.optical_depth() > 0.0 && (transmittance == 0.0 || packed[2] == 0.0)
-    });
-    let source_underflowed = weighted_source_intensity > 0.0 && packed[3] == 0.0;
-    if transmittance_underflowed
-        || source_underflowed
-        || packed.iter().any(|value| value.is_subnormal())
-    {
-        return Err(GpuTraceInputError::NotRepresentable {
-            field: "surface_transport",
-        });
-    }
-    Ok(packed)
-}
-
-fn validate_lut_temperature(
-    temperature_kelvin: f64,
-    field: &'static str,
-) -> Result<(), GpuTraceInputError> {
-    let minimum_kelvin = minimum_temperature_kelvin();
-    let maximum_kelvin = maximum_temperature_kelvin();
-    if (minimum_kelvin..=maximum_kelvin).contains(&temperature_kelvin) {
-        Ok(())
-    } else {
-        Err(GpuTraceInputError::TemperatureOutsideSpectralLut {
-            field,
-            temperature_kelvin,
-            minimum_kelvin,
-            maximum_kelvin,
-        })
-    }
-}
-
-fn pack_surface_emitter(
-    surface: Option<EquatorialSurface>,
-    mass_m: f64,
-) -> Result<[f32; 4], GpuTraceInputError> {
-    let Some(surface) = surface else {
-        return Ok([0.0; 4]);
-    };
-    let emitter = surface.emitter();
-    let outer_radius_over_m = emitter.outer_radius_m() / mass_m;
-    if outer_radius_over_m >= f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M) {
-        return Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary {
-            outer_radius_over_m,
-            escape_radius_over_m: f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
-        });
-    }
-    let packed = pack4(
-        [
-            emitter.inner_radius_m() / mass_m,
-            outer_radius_over_m,
-            emitter.intensity_at_six_m(),
-            f64::from(GPU_EVENT_ARMING_BAND_OVER_M),
-        ],
-        "surface_emitter",
-    )?;
-    // A binary64 value inside the boundary can round onto it when packed for the shader.
-    // Source: https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast
-    if packed[1] >= OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M {
-        return Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary {
-            outer_radius_over_m,
-            escape_radius_over_m: f64::from(OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M),
-        });
-    }
-    let interval_collapsed = emitter.outer_radius_m() > emitter.inner_radius_m()
-        && packed[1].to_bits() == packed[0].to_bits();
-    let intensity_underflowed = emitter.intensity_at_six_m() > 0.0 && packed[2] == 0.0;
-    if packed[0] <= 0.0
-        || packed[1] < packed[0]
-        || packed[2] < 0.0
-        || packed[..3].iter().any(|value| value.is_subnormal())
-        || interval_collapsed
-        || intensity_underflowed
-    {
-        return Err(GpuTraceInputError::NotRepresentable {
-            field: "surface_emitter",
-        });
-    }
-    Ok(packed)
-}
-
-fn pack4(values: [f64; 4], field: &'static str) -> Result<[f32; 4], GpuTraceInputError> {
-    let [Some(a), Some(b), Some(c), Some(d)] =
-        values.map(|value| value.to_f32().filter(|packed| packed.is_finite()))
-    else {
-        return Err(GpuTraceInputError::NotRepresentable { field });
-    };
-    Ok([a, b, c, d])
-}
-
-const fn encode_initial_polar_side(height_m: f64) -> u32 {
-    if height_m < 0.0 {
-        0
-    } else if height_m > 0.0 {
-        2
-    } else {
-        1
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum GpuTraceInputError {
-    #[error("validated observation failed to resolve its initial ray: {0}")]
-    DomainInvariant(#[source] ValidationReport),
-    #[error(
-        "GPU trace inputs must be normalized to observer frequency 1, got {observer_frequency}"
-    )]
-    NonNormalizedObserverFrequency { observer_frequency: f64 },
-    #[error(
-        "spacetime extremality changes from {canonical_state:?} to {gpu_extremality:?} under the GPU f32 contract"
-    )]
-    ExtremalityChangedByPacking {
-        canonical_state: Extremality,
-        gpu_extremality: Extremality,
-    },
-    #[error("observation field {field} is not representable by the GPU f32 contract")]
-    NotRepresentable { field: &'static str },
-    #[error(
-        "surface outer radius {outer_radius_over_m} M must be strictly inside the GPU escape boundary {escape_radius_over_m} M"
-    )]
-    SurfaceOutsideEscapeBoundary {
-        outer_radius_over_m: f64,
-        escape_radius_over_m: f64,
-    },
-    #[error(
-        "{field} temperature {temperature_kelvin} K lies outside the GPU spectral LUT [{minimum_kelvin}, {maximum_kelvin}] K"
-    )]
-    TemperatureOutsideSpectralLut {
-        field: &'static str,
-        temperature_kelvin: f64,
-        minimum_kelvin: f64,
-        maximum_kelvin: f64,
-    },
-    #[error("surface footprint capture requires an equatorial surface source")]
-    SurfaceFootprintRequiresSurface,
-}
-
-pub struct RayTracer {
+pub struct TracePipeline {
     pipeline: wgpu::ComputePipeline,
     escape_map_node_pipeline: Option<wgpu::ComputePipeline>,
     bind_group_layout: wgpu::BindGroupLayout,
@@ -469,7 +106,7 @@ enum TraceTargetKind {
 }
 
 struct TracePipelineSpec {
-    shader_source: Cow<'static, str>,
+    shader_source: String,
     entry_point: &'static str,
     escape_map_node_entry_point: Option<&'static str>,
     has_shadow_refinement: bool,
@@ -477,28 +114,25 @@ struct TracePipelineSpec {
     target_kind: TraceTargetKind,
 }
 
-pub struct TraceBatchOptions<'a> {
+pub struct TraceTimestampWrites<'a> {
     escape_map_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
     trace_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
-    refine_final_batch: bool,
 }
 
-impl<'a> TraceBatchOptions<'a> {
-    pub const fn new(
+impl<'a> TraceTimestampWrites<'a> {
+    pub(crate) const fn new(
         escape_map_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
         trace_timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'a>>,
-        refine_final_batch: bool,
     ) -> Self {
         Self {
             escape_map_timestamp_writes,
             trace_timestamp_writes,
-            refine_final_batch,
         }
     }
 
     #[cfg(test)]
-    const fn untimed(refine_final_batch: bool) -> Self {
-        Self::new(None, None, refine_final_batch)
+    const fn untimed() -> Self {
+        Self::new(None, None)
     }
 }
 
@@ -506,7 +140,7 @@ impl TracePlan {
     fn presentation_spec(self) -> TracePipelineSpec {
         match self {
             Self::AcceleratedSky => TracePipelineSpec {
-                shader_source: accelerated_shader_source(),
+                shader_source: shader::accelerated_scene(),
                 entry_point: "trace_scene_accelerated",
                 escape_map_node_entry_point: Some("trace_escape_map_nodes"),
                 has_shadow_refinement: true,
@@ -514,16 +148,16 @@ impl TracePlan {
                 target_kind: TraceTargetKind::Presentation,
             },
             Self::EquatorialBolometricSurface => TracePipelineSpec {
-                shader_source: bolometric_surface_shader_source(),
-                entry_point: "trace_surface_scene",
+                shader_source: shader::bolometric_surface_scene(),
+                entry_point: "trace_bolometric_surface_scene",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
                 plan: self,
                 target_kind: TraceTargetKind::Presentation,
             },
             Self::EquatorialBlackbodySurface => TracePipelineSpec {
-                shader_source: spectral_surface_shader_source(),
-                entry_point: "trace_spectral_surface_scene",
+                shader_source: shader::blackbody_surface_scene(),
+                entry_point: "trace_blackbody_surface_scene",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
                 plan: self,
@@ -536,7 +170,7 @@ impl TracePlan {
     fn capture_spec(self) -> TracePipelineSpec {
         match self {
             Self::AcceleratedSky => TracePipelineSpec {
-                shader_source: trace_capture_shader_source(),
+                shader_source: shader::trace_capture(),
                 entry_point: "capture_trace_scene",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: true,
@@ -544,7 +178,7 @@ impl TracePlan {
                 target_kind: TraceTargetKind::Diagnostic,
             },
             Self::EquatorialBolometricSurface => TracePipelineSpec {
-                shader_source: bolometric_surface_capture_shader_source(),
+                shader_source: shader::bolometric_surface_capture(),
                 entry_point: "capture_surface_trace_scene",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
@@ -552,7 +186,7 @@ impl TracePlan {
                 target_kind: TraceTargetKind::Diagnostic,
             },
             Self::EquatorialBlackbodySurface => TracePipelineSpec {
-                shader_source: spectral_surface_capture_shader_source(),
+                shader_source: shader::blackbody_surface_capture(),
                 entry_point: "capture_surface_trace_scene",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
@@ -566,28 +200,33 @@ impl TracePlan {
     fn footprint_capture_spec(self) -> Result<TracePipelineSpec, GpuTraceInputError> {
         match self {
             Self::AcceleratedSky => Err(GpuTraceInputError::SurfaceFootprintRequiresSurface),
-            Self::EquatorialBolometricSurface | Self::EquatorialBlackbodySurface => {
-                Ok(TracePipelineSpec {
-                    shader_source: surface_footprint_capture_shader_source(self),
-                    entry_point: "capture_surface_footprint",
-                    escape_map_node_entry_point: None,
-                    has_shadow_refinement: false,
-                    plan: self,
-                    target_kind: TraceTargetKind::Diagnostic,
-                })
-            }
+            Self::EquatorialBolometricSurface => Ok(TracePipelineSpec {
+                shader_source: shader::bolometric_surface_footprint_capture(),
+                entry_point: "capture_surface_footprint",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: self,
+                target_kind: TraceTargetKind::Diagnostic,
+            }),
+            Self::EquatorialBlackbodySurface => Ok(TracePipelineSpec {
+                shader_source: shader::blackbody_surface_footprint_capture(),
+                entry_point: "capture_surface_footprint",
+                escape_map_node_entry_point: None,
+                has_shadow_refinement: false,
+                plan: self,
+                target_kind: TraceTargetKind::Diagnostic,
+            }),
         }
     }
 
     #[cfg(test)]
-    fn transport_capture_spec(self) -> TracePipelineSpec {
-        assert!(
-            !matches!(self, Self::AcceleratedSky),
-            "isolated transport capture requires a surface plan",
-        );
+    fn transport_capture_spec(self) -> Result<TracePipelineSpec, GpuTraceInputError> {
+        if matches!(self, Self::AcceleratedSky) {
+            return Err(GpuTraceInputError::SurfaceTransportRequiresSurface);
+        }
         let mut spec = self.capture_spec();
         spec.entry_point = "capture_surface_transport_case";
-        spec
+        Ok(spec)
     }
 }
 
@@ -677,8 +316,8 @@ fn trace_bind_group_layout_entries(
     entries
 }
 
-impl RayTracer {
-    pub fn new(
+impl TracePipeline {
+    pub(crate) fn new(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -688,54 +327,46 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub fn for_trace_capture(
+    pub(crate) fn for_trace_capture(
         device: &wgpu::Device,
         observation: &Observation,
         subpixel: [f64; 2],
     ) -> Result<Self, GpuTraceInputError> {
         let mut compiled = CompiledTraceInput::compile(observation)?;
-        let packed_subpixel = pack4(
-            [subpixel[0], subpixel[1], 0.0, 0.0],
-            "trace_capture_subpixel",
-        )?;
-        compiled.uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
+        compiled
+            .uniforms
+            .set_capture_subpixel(subpixel, "trace_capture_subpixel")?;
         let spec = compiled.plan.capture_spec();
         Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
-    pub fn for_surface_footprint_capture(
+    pub(crate) fn for_surface_footprint_capture(
         device: &wgpu::Device,
         observation: &Observation,
         subpixel: [f64; 2],
     ) -> Result<Self, GpuTraceInputError> {
         let mut compiled = CompiledTraceInput::compile(observation)?;
-        let packed_subpixel = pack4(
-            [subpixel[0], subpixel[1], 0.0, 0.0],
-            "surface_footprint_subpixel",
-        )?;
-        compiled.uniforms.camera[2..].copy_from_slice(&packed_subpixel[..2]);
-        // Source-chart differencing subtracts neighboring terminal anchors. Keep this diagnostic
-        // path below the presentation step ceiling so RK4 phase error does not dominate J.
-        compiled.uniforms.step_policy[0] = 0.0025;
-        compiled.uniforms.step_policy[1] = 0.000_125;
-        compiled.uniforms.step_policy[2] = 0.25;
+        compiled
+            .uniforms
+            .set_capture_subpixel(subpixel, "surface_footprint_subpixel")?;
+        compiled.uniforms.use_footprint_step_policy();
         let spec = compiled.plan.footprint_capture_spec()?;
         Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
-    pub fn for_surface_transport_capture(
+    pub(crate) fn for_surface_transport_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
         let compiled = CompiledTraceInput::compile(observation)?;
-        let spec = compiled.plan.transport_capture_spec();
+        let spec = compiled.plan.transport_capture_spec()?;
         Ok(Self::from_compiled(device, compiled, spec))
     }
 
     #[cfg(test)]
-    pub fn for_accelerated_trace_capture(
+    pub(crate) fn for_accelerated_trace_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -744,7 +375,7 @@ impl RayTracer {
             device,
             compiled,
             TracePipelineSpec {
-                shader_source: accelerated_capture_shader_source(),
+                shader_source: shader::accelerated_capture(),
                 entry_point: "capture_accelerated_trace_scene",
                 escape_map_node_entry_point: Some("trace_escape_map_nodes"),
                 has_shadow_refinement: true,
@@ -755,22 +386,19 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub fn for_initial_ray_capture(
+    pub(crate) fn for_initial_ray_capture(
         device: &wgpu::Device,
         observation: &Observation,
         subpixel: [f32; 2],
     ) -> Result<Self, GpuTraceInputError> {
         let mut compiled = CompiledTraceInput::compile(observation)?;
-        compiled.uniforms.camera[2..].copy_from_slice(&subpixel);
+        compiled.uniforms.set_packed_subpixel(subpixel);
         let plan = compiled.plan;
         Ok(Self::from_compiled(
             device,
             compiled,
             TracePipelineSpec {
-                shader_source: Cow::Owned(format!(
-                    "{}\n{INITIAL_RAY_CAPTURE_SHADER}",
-                    trace_capture_shader_source()
-                )),
+                shader_source: shader::initial_ray_capture(),
                 entry_point: "write_initial_rays",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
@@ -781,7 +409,7 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub fn for_invariant_gate_capture(
+    pub(crate) fn for_invariant_gate_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -791,10 +419,7 @@ impl RayTracer {
             device,
             compiled,
             TracePipelineSpec {
-                shader_source: Cow::Owned(format!(
-                    "{}\n{INVARIANT_GATE_CAPTURE_SHADER}",
-                    trace_capture_shader_source()
-                )),
+                shader_source: shader::invariant_gate_capture(),
                 entry_point: "write_invariant_gate_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
@@ -805,7 +430,7 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub fn for_event_policy_capture(
+    pub(crate) fn for_event_policy_capture(
         device: &wgpu::Device,
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
@@ -815,10 +440,7 @@ impl RayTracer {
             device,
             compiled,
             TracePipelineSpec {
-                shader_source: Cow::Owned(format!(
-                    "{}\n{EVENT_POLICY_CAPTURE_SHADER}",
-                    trace_capture_shader_source()
-                )),
+                shader_source: shader::event_policy_capture(),
                 entry_point: "write_event_policy_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
@@ -856,7 +478,7 @@ impl RayTracer {
             label: Some("GPU trace dispatch"),
             contents: bytemuck::bytes_of(&TraceDispatch {
                 tile_origin: [0; 2],
-                tile_count: [0; 2],
+                workgroup_count: [0; 2],
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -885,7 +507,7 @@ impl RayTracer {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Cartesian Kerr-Schild trace shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source),
+            source: wgpu::ShaderSource::Wgsl(shader_source.into()),
         });
         let pipeline_constants = [("SURFACE_EVENTS_ENABLED", plan.surface_events_enabled())];
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -928,7 +550,7 @@ impl RayTracer {
         }
     }
 
-    pub fn scratch_bytes(&self, extent: RenderExtent) -> u64 {
+    pub(crate) fn scratch_bytes(&self, extent: RenderExtent) -> u64 {
         self.plan.scratch_bytes(extent)
     }
 
@@ -940,7 +562,7 @@ impl RayTracer {
         self.scientific_capture_metadata.as_ref()
     }
 
-    pub fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceImage {
+    pub(crate) fn create_target(&self, device: &wgpu::Device, extent: RenderExtent) -> TraceTarget {
         let texture_usage = wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::TEXTURE_BINDING
             | wgpu::TextureUsages::COPY_SRC;
@@ -1031,7 +653,7 @@ impl RayTracer {
             .shadow_coverage
             .as_ref()
             .map(|coverage| coverage.create_target(device, &view, extent));
-        TraceImage {
+        TraceTarget {
             view,
             #[cfg(test)]
             record_planes,
@@ -1041,52 +663,65 @@ impl RayTracer {
     }
 
     #[cfg(test)]
-    pub fn encode(
+    pub(crate) fn encode(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        target: &TraceImage,
+        target: &TraceTarget,
         tiles: TileRegion,
     ) {
-        self.encode_batch(
+        self.encode_batch_with_refinement(
             queue,
             encoder,
             target,
             tiles,
-            TraceBatchOptions::untimed(true),
+            TraceTimestampWrites::untimed(),
+            true,
         );
     }
 
     #[cfg(test)]
-    pub fn encode_base(
+    pub(crate) fn encode_base(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        target: &TraceImage,
+        target: &TraceTarget,
         tiles: TileRegion,
     ) {
-        self.encode_batch(
+        self.encode_batch_with_refinement(
             queue,
             encoder,
             target,
             tiles,
-            TraceBatchOptions::untimed(false),
+            TraceTimestampWrites::untimed(),
+            false,
         );
     }
 
-    pub fn encode_batch(
+    pub(crate) fn encode_batch(
         &self,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
-        target: &TraceImage,
+        target: &TraceTarget,
         tiles: TileRegion,
-        options: TraceBatchOptions<'_>,
+        timestamp_writes: TraceTimestampWrites<'_>,
     ) {
-        let TraceBatchOptions {
+        self.encode_batch_with_refinement(queue, encoder, target, tiles, timestamp_writes, true);
+    }
+
+    fn encode_batch_with_refinement(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &TraceTarget,
+        tiles: TileRegion,
+        timestamp_writes: TraceTimestampWrites<'_>,
+        refine_final_batch: bool,
+    ) {
+        let TraceTimestampWrites {
             escape_map_timestamp_writes,
             trace_timestamp_writes,
-            refine_final_batch,
-        } = options;
+        } = timestamp_writes;
         self.set_tile_dispatch(queue, tiles);
         self.encode_escape_map_pass(encoder, target, tiles, escape_map_timestamp_writes);
         self.encode_trace_pass(
@@ -1101,7 +736,7 @@ impl RayTracer {
     fn encode_escape_map_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &TraceImage,
+        target: &TraceTarget,
         tiles: TileRegion,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
     ) {
@@ -1121,7 +756,7 @@ impl RayTracer {
     fn encode_trace_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
-        target: &TraceImage,
+        target: &TraceTarget,
         tiles: TileRegion,
         timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
         refine_final_batch: bool,
@@ -1153,7 +788,7 @@ impl RayTracer {
         let [workgroups_x, workgroups_y] = tiles.workgroups();
         let dispatch = TraceDispatch {
             tile_origin: [origin_x, origin_y],
-            tile_count: [workgroups_x, workgroups_y],
+            workgroup_count: [workgroups_x, workgroups_y],
         };
         // Small queue writes are staged immediately and execute before the following submission.
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Queue.html#method.write_buffer
@@ -1169,31 +804,42 @@ pub struct TileRegion {
 
 impl TileRegion {
     #[cfg(any(test, feature = "gpu-benchmarks"))]
-    pub const fn all(extent: RenderExtent) -> Self {
+    pub(crate) const fn all(extent: RenderExtent) -> Self {
         Self {
             origin: [0, 0],
             workgroups: tile_grid(extent),
         }
     }
 
-    pub const fn new(origin: [u32; 2], workgroups: [u32; 2]) -> Self {
+    pub(crate) const fn new(origin: [u32; 2], workgroups: [u32; 2]) -> Self {
         debug_assert!(workgroups[0] > 0 && workgroups[1] > 0);
         Self { origin, workgroups }
     }
 
-    pub const fn origin(self) -> [u32; 2] {
+    #[cfg(test)]
+    pub(crate) const fn containing_pixel(pixel: [u32; 2]) -> Self {
+        Self::new(
+            [
+                pixel[0] / TRACE_WORKGROUP_AXIS,
+                pixel[1] / TRACE_WORKGROUP_AXIS,
+            ],
+            [1, 1],
+        )
+    }
+
+    pub(crate) const fn origin(self) -> [u32; 2] {
         self.origin
     }
 
-    pub const fn workgroups(self) -> [u32; 2] {
+    pub(crate) const fn workgroups(self) -> [u32; 2] {
         self.workgroups
     }
 
-    pub const fn len(self) -> u32 {
+    pub(crate) const fn len(self) -> u32 {
         self.workgroups[0] * self.workgroups[1]
     }
 
-    pub const fn finishes(self, extent: RenderExtent) -> bool {
+    pub(crate) const fn finishes(self, extent: RenderExtent) -> bool {
         let grid = tile_grid(extent);
         let row_contiguous =
             self.workgroups[1] == 1 || (self.origin[0] == 0 && self.workgroups[0] == grid[0]);
@@ -1205,90 +851,32 @@ impl TileRegion {
 
 pub const fn tile_grid(extent: RenderExtent) -> [u32; 2] {
     [
-        extent.width().div_ceil(TRACE_WORKGROUP_WIDTH),
-        extent.height().div_ceil(TRACE_WORKGROUP_HEIGHT),
+        extent.width().div_ceil(TRACE_WORKGROUP_AXIS),
+        extent.height().div_ceil(TRACE_WORKGROUP_AXIS),
     ]
 }
 
 const fn escape_map_node_workgroups(tiles: TileRegion) -> [u32; 2] {
     let [tile_columns, tile_rows] = tiles.workgroups();
     [
-        (tile_columns * 2 + 1).div_ceil(TRACE_WORKGROUP_WIDTH),
-        (tile_rows * 2 + 1).div_ceil(TRACE_WORKGROUP_HEIGHT),
+        (tile_columns * 2 + 1).div_ceil(TRACE_WORKGROUP_AXIS),
+        (tile_rows * 2 + 1).div_ceil(TRACE_WORKGROUP_AXIS),
     ]
 }
 
 pub fn escape_map_scratch_bytes(extent: RenderExtent) -> u64 {
-    let columns = u64::from(extent.width().div_ceil(TRACE_WORKGROUP_WIDTH)) * 2 + 1;
-    let rows = u64::from(extent.height().div_ceil(TRACE_WORKGROUP_HEIGHT)) * 2 + 1;
+    let columns = u64::from(extent.width().div_ceil(TRACE_WORKGROUP_AXIS)) * 2 + 1;
+    let rows = u64::from(extent.height().div_ceil(TRACE_WORKGROUP_AXIS)) * 2 + 1;
     columns
         .saturating_mul(rows)
         .saturating_mul(size_of::<u32>())
-}
-
-fn accelerated_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{GEODESIC_ACCELERATION_SHADER}"
-    ))
-}
-
-fn bolometric_surface_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{SURFACE_TRANSPORT_SHADER}\n{SURFACE_PREVIEW_SHADER}"
-    ))
-}
-
-fn spectral_surface_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{SURFACE_TRANSPORT_SHADER}\n{SPECTRAL_SURFACE_PREVIEW_SHADER}"
-    ))
-}
-
-#[cfg(test)]
-fn trace_capture_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}"
-    ))
-}
-
-#[cfg(test)]
-fn bolometric_surface_capture_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{SURFACE_TRANSPORT_SHADER}\n{SURFACE_PREVIEW_SHADER}\n{SURFACE_TRACE_CAPTURE_SHADER}"
-    ))
-}
-
-#[cfg(test)]
-fn spectral_surface_capture_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{SURFACE_TRANSPORT_SHADER}\n{SPECTRAL_SURFACE_PREVIEW_SHADER}\n{SURFACE_TRACE_CAPTURE_SHADER}"
-    ))
-}
-
-#[cfg(test)]
-fn surface_footprint_capture_shader_source(plan: TracePlan) -> Cow<'static, str> {
-    let preview = match plan {
-        TracePlan::EquatorialBolometricSurface => SURFACE_PREVIEW_SHADER,
-        TracePlan::EquatorialBlackbodySurface => SPECTRAL_SURFACE_PREVIEW_SHADER,
-        TracePlan::AcceleratedSky => "",
-    };
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{SURFACE_TRANSPORT_SHADER}\n{preview}\n{SURFACE_FOOTPRINT_CAPTURE_SHADER}"
-    ))
-}
-
-#[cfg(test)]
-fn accelerated_capture_shader_source() -> Cow<'static, str> {
-    Cow::Owned(format!(
-        "{KERR_SCHILD_TRACE_SHADER}\n{LENSING_PREVIEW_SHADER}\n{TRACE_CAPTURE_SHADER}\n{GEODESIC_ACCELERATION_SHADER}\n{ACCELERATED_TRACE_CAPTURE_SHADER}"
-    ))
 }
 
 pub fn shadow_coverage_scratch_bytes(extent: RenderExtent) -> u64 {
     crate::shadow_coverage::scratch_bytes(extent)
 }
 
-pub struct TraceImage {
+pub struct TraceTarget {
     view: wgpu::TextureView,
     #[cfg(test)]
     record_planes: Option<DiagnosticPlanes>,
@@ -1296,18 +884,18 @@ pub struct TraceImage {
     shadow_coverage: Option<ShadowTarget>,
 }
 
-impl TraceImage {
-    pub const fn view(&self) -> &wgpu::TextureView {
+impl TraceTarget {
+    pub(crate) const fn view(&self) -> &wgpu::TextureView {
         &self.view
     }
 
     #[cfg(test)]
-    pub fn texture(&self) -> &wgpu::Texture {
+    pub(crate) fn texture(&self) -> &wgpu::Texture {
         self.view.texture()
     }
 
     #[cfg(test)]
-    pub const fn record_planes(&self) -> [&wgpu::Buffer; 4] {
+    pub(crate) const fn record_planes(&self) -> [&wgpu::Buffer; 4] {
         self.record_planes
             .as_ref()
             .expect("capture targets include diagnostic record planes")
@@ -1315,7 +903,7 @@ impl TraceImage {
     }
 
     #[cfg(test)]
-    pub const fn shadow_control(&self) -> &wgpu::Buffer {
+    pub(crate) const fn shadow_control(&self) -> &wgpu::Buffer {
         &self
             .shadow_coverage
             .as_ref()
@@ -1365,6 +953,7 @@ pub const fn size_of<T>() -> u64 {
     std::mem::size_of::<T>() as u64
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
 pub enum TraceTermination {
@@ -1377,16 +966,19 @@ pub enum TraceTermination {
     EquatorialSurface = 7,
 }
 
+#[cfg(test)]
 impl From<TraceTermination> for u32 {
     fn from(value: TraceTermination) -> Self {
         value as Self
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 #[error("unknown GPU trace termination discriminant {0}")]
 pub struct UnknownTraceTermination(pub u32);
 
+#[cfg(test)]
 impl TryFrom<u32> for TraceTermination {
     type Error = UnknownTraceTermination;
 
@@ -1400,53 +992,6 @@ impl TryFrom<u32> for TraceTermination {
             6 => Ok(Self::Uncertain),
             7 => Ok(Self::EquatorialSurface),
             unknown => Err(UnknownTraceTermination(unknown)),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::num::NonZeroU32;
-
-    use gravlume_domain::{
-        Angle, KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
-        StationaryObserverInput,
-    };
-
-    use super::TraceUniforms;
-
-    #[test]
-    fn trace_uniforms_preserve_polar_side_before_binary32_packing() {
-        for (observer_z, expected_side) in [(-1.0e-50, 0.0_f32), (0.0, 1.0_f32), (1.0e-50, 2.0_f32)]
-        {
-            let observer = StationaryObserverInput::new(
-                [0.0, 30.0, 0.0, observer_z],
-                [0.0; 4],
-                [0.0, 0.0, 1.0],
-                1.0,
-            );
-            let scene = PhysicalScene::new(PhysicalSceneInput::new(
-                1.0,
-                0.0,
-                0.0,
-                KerrSchildChart::Outgoing,
-                observer,
-            ))
-            .expect("the generated observer is stationary");
-            let view = PerspectiveView::new(
-                NonZeroU32::MIN,
-                NonZeroU32::MIN,
-                Angle::from_radians(std::f64::consts::FRAC_PI_4)
-                    .expect("the test field of view is finite"),
-            )
-            .expect("the test view is valid");
-            let uniforms = TraceUniforms::from_observation(&Observation::new(scene, view))
-                .expect("the observation is representable by the GPU contract");
-
-            assert_eq!(
-                uniforms.observer_event[0].to_bits(),
-                expected_side.to_bits()
-            );
         }
     }
 }

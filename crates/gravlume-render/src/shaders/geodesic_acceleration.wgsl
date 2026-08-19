@@ -496,7 +496,7 @@ fn escape_map_tile_is_stable(extent: vec2<u32>) -> bool {
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
 fn trace_escape_map_nodes(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let local_node = global_id.xy;
-    let node_span = trace_dispatch.tile_count * 2u + vec2<u32>(1u);
+    let node_span = trace_dispatch.workgroup_count * 2u + vec2<u32>(1u);
     if any(local_node >= node_span) {
         return;
     }

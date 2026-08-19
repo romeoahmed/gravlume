@@ -2,7 +2,7 @@ use gravlume_domain::{ImageSample, Observation};
 
 use crate::{
     extent::RenderExtent,
-    ray_tracer::{RayTracer, TileRegion, tile_grid, trace_record_plane_size},
+    trace::{TileRegion, TracePipeline, tile_grid, trace_record_plane_size},
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
@@ -32,18 +32,17 @@ impl TraceCapture {
 
 pub fn capture_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+    let trace = TracePipeline::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_trace_capture(&gpu.device, observation, sample.subpixel())
+    let trace = TracePipeline::for_trace_capture(&gpu.device, observation, sample.subpixel())
         .expect("observation packs for GPU");
-    let [pixel_x, pixel_y] = sample.pixel();
-    let tile = TileRegion::new([pixel_x / 8, pixel_y / 8], [1, 1]);
-    capture_region(gpu, observation, &compute, tile)
+    let tile = TileRegion::containing_pixel(sample.pixel());
+    capture_region(gpu, observation, &trace, tile)
 }
 
 pub fn capture_surface_footprint_sample(
@@ -58,42 +57,41 @@ pub fn capture_surface_footprint_sample(
         "surface footprint stencil must remain inside one pixel"
     );
     let gpu = crate::test_device::native_gpu();
-    let compute =
-        RayTracer::for_surface_footprint_capture(&gpu.device, observation, sample.subpixel())
+    let trace =
+        TracePipeline::for_surface_footprint_capture(&gpu.device, observation, sample.subpixel())
             .expect("surface observation packs for GPU footprint capture");
-    let [pixel_x, pixel_y] = sample.pixel();
-    let tile = TileRegion::new([pixel_x / 8, pixel_y / 8], [1, 1]);
-    capture_region(gpu, observation, &compute, tile)
+    let tile = TileRegion::containing_pixel(sample.pixel());
+    capture_region(gpu, observation, &trace, tile)
 }
 
 pub fn capture_surface_transport_case(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_surface_transport_capture(&gpu.device, observation)
+    let trace = TracePipeline::for_surface_transport_capture(&gpu.device, observation)
         .expect("surface observation packs for isolated GPU transport");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_accelerated_trace_capture(&gpu.device, observation)
+    let trace = TracePipeline::for_accelerated_trace_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 pub fn capture_refined_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+    let trace = TracePipeline::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, true)
+    capture(gpu, observation, &trace, true)
 }
 
 pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -> u32 {
     assert!(repetitions > 0, "at least one refinement is required");
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+    let trace = TracePipeline::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
         .expect("observation packs for GPU");
     let extent = observation_extent(observation);
-    let target = compute.create_target(&gpu.device, extent);
+    let target = trace.create_target(&gpu.device, extent);
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -101,7 +99,7 @@ pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -
         });
     let tiles = TileRegion::all(extent);
     for _ in 0..repetitions {
-        compute.encode(&gpu.queue, &mut encoder, &target, tiles);
+        trace.encode(&gpu.queue, &mut encoder, &target, tiles);
     }
     let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("shadow edge count readback"),
@@ -125,40 +123,40 @@ pub fn capture_accelerated_trace_in_batches(
     tiles_per_batch: u32,
 ) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_accelerated_trace_capture(&gpu.device, observation)
+    let trace = TracePipeline::for_accelerated_trace_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
-    capture_in_batches(gpu, observation, &compute, tiles_per_batch)
+    capture_in_batches(gpu, observation, &trace, tiles_per_batch)
 }
 
 pub fn capture_initial_rays(observation: &Observation, subpixel: [f32; 2]) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_initial_ray_capture(&gpu.device, observation, subpixel)
+    let trace = TracePipeline::for_initial_ray_capture(&gpu.device, observation, subpixel)
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 pub fn capture_invariant_gate_cases(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_invariant_gate_capture(&gpu.device, observation)
+    let trace = TracePipeline::for_invariant_gate_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 pub fn capture_event_policy_cases(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
-    let compute = RayTracer::for_event_policy_capture(&gpu.device, observation)
+    let trace = TracePipeline::for_event_policy_capture(&gpu.device, observation)
         .expect("observation packs for GPU");
-    capture(gpu, observation, &compute, false)
+    capture(gpu, observation, &trace, false)
 }
 
 fn capture(
     gpu: &crate::test_device::TestGpu,
     observation: &Observation,
-    compute: &RayTracer,
+    trace: &TracePipeline,
     refine_shadow: bool,
 ) -> TraceCapture {
     let extent = observation_extent(observation);
-    let target = compute.create_target(&gpu.device, extent);
+    let target = trace.create_target(&gpu.device, extent);
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -166,9 +164,9 @@ fn capture(
         });
     let tiles = TileRegion::all(extent);
     if refine_shadow {
-        compute.encode(&gpu.queue, &mut encoder, &target, tiles);
+        trace.encode(&gpu.queue, &mut encoder, &target, tiles);
     } else {
-        compute.encode_base(&gpu.queue, &mut encoder, &target, tiles);
+        trace.encode_base(&gpu.queue, &mut encoder, &target, tiles);
     }
     finish_capture(gpu, extent, &target, encoder)
 }
@@ -176,29 +174,29 @@ fn capture(
 fn capture_region(
     gpu: &crate::test_device::TestGpu,
     observation: &Observation,
-    compute: &RayTracer,
+    trace: &TracePipeline,
     tiles: TileRegion,
 ) -> TraceCapture {
     let extent = observation_extent(observation);
-    let target = compute.create_target(&gpu.device, extent);
+    let target = trace.create_target(&gpu.device, extent);
     let mut encoder = gpu
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("headless trace region encoder"),
         });
-    compute.encode_base(&gpu.queue, &mut encoder, &target, tiles);
+    trace.encode_base(&gpu.queue, &mut encoder, &target, tiles);
     finish_capture(gpu, extent, &target, encoder)
 }
 
 fn capture_in_batches(
     gpu: &crate::test_device::TestGpu,
     observation: &Observation,
-    compute: &RayTracer,
+    trace: &TracePipeline,
     tiles_per_batch: u32,
 ) -> TraceCapture {
     assert!(tiles_per_batch > 0, "tile batches must be nonzero");
     let extent = observation_extent(observation);
-    let target = compute.create_target(&gpu.device, extent);
+    let target = trace.create_target(&gpu.device, extent);
     let [tile_columns, tile_rows] = tile_grid(extent);
     let total_tiles = tile_columns * tile_rows;
     let mut next_tile = 0;
@@ -214,7 +212,7 @@ fn capture_in_batches(
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("headless trace batch encoder"),
             });
-        compute.encode_base(&gpu.queue, &mut encoder, &target, batch);
+        trace.encode_base(&gpu.queue, &mut encoder, &target, batch);
         let submission = gpu.queue.submit([encoder.finish()]);
         gpu.device
             .poll(wgpu::PollType::Wait {
@@ -244,7 +242,7 @@ fn observation_extent(observation: &Observation) -> RenderExtent {
 fn finish_capture(
     gpu: &crate::test_device::TestGpu,
     extent: RenderExtent,
-    target: &crate::ray_tracer::TraceImage,
+    target: &crate::trace::TraceTarget,
     mut encoder: wgpu::CommandEncoder,
 ) -> TraceCapture {
     let plane_size = trace_record_plane_size(extent);

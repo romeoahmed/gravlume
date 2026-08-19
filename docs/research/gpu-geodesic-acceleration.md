@@ -16,13 +16,13 @@
 
 [`Cargo.lock`](../../Cargo.lock) 锁定 `wgpu/wgpu-core/wgpu-hal/wgpu-types/Naga 30.0.0`、`bytemuck 1.25.2`、`glam 0.33.3`、`egui/egui-wgpu 0.36.1`、`pollster 1.0.1` 与 `winit 0.30.13`。macOS 只启用 wgpu Metal，Windows/Linux 只启用 Vulkan；当前 device 只请求 `TIMESTAMP_QUERY`。[workspace manifest](../../Cargo.toml) [render manifest](../../crates/gravlume-render/Cargo.toml) [capability baseline](../../crates/gravlume-render/src/capabilities.rs)
 
-研究基线的 production shader 是一 invocation 一 pixel 的 megakernel：8×8 workgroup、最多 2048 个 radius-scaled fixed RK4 step，普通 accepted step 复用 exact endpoint 后仍有 4 次 geometry/RHS 求值；当时最终写 `rgba16float` HDR 与三个 16 B/pixel record plane。[current solver](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl)
+研究基线的 production shader 是一 invocation 一 pixel 的 megakernel：8×8 workgroup、最多 2048 个 radius-scaled fixed RK4 step，普通 accepted step 复用 exact endpoint 后仍有 4 次 geometry/RHS 求值；当时最终写 `rgba16float` HDR 与三个 16 B/pixel record plane。[current solver](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl)
 
 默认场景的开发数据从平均/最坏 `882/2048` step 降到了 `61/132`，说明 outgoing Kerr–Schild chart、几何 step 与 endpoint reuse 已经拿掉了最明显的冗余；剩余时间更接近“每步数学本身 × 全屏像素数”，而不是发布调度问题。[实现证据](../gpu-renderer.md#适用域与限制) 坐标选择仍不可随意回退：backward ray 的方向与 horizon-penetrating chart 会改变数值适定性，相关分析见 Bozzola、Chan 与 Paschalidis 的[原论文](https://arxiv.org/abs/2310.02321)。
 
 ### 1.1 生产路径有一个独立的显存根因
 
-历史实现只在 test build 暴露三个 record buffer handle，却仍在 production 创建、持有并写入对应资源，因此 `#[cfg(test)]` 没有消除成本。当前 diagnostic capture 已与 production ABI 分离：[ray tracer](../../crates/gravlume-render/src/ray_tracer.rs) 与 [production solver](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl)。
+历史实现只在 test build 暴露三个 record buffer handle，却仍在 production 创建、持有并写入对应资源，因此 `#[cfg(test)]` 没有消除成本。当前 diagnostic capture 已与 production ABI 分离：[trace pipeline](../../crates/gravlume-render/src/trace.rs) 与 [production solver](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl)。
 
 研究基线的 frame accounting 是：record planes `48 B` + candidate HDR `8 B` + published HDR `8 B` + UI `4 B` = `68 B/pixel`。因而 2560×1440 是 `250,675,200` bytes（约 239.1 MiB），两阶段 rebuild 约 478.1 MiB。若 production presentation 不分配 full diagnostic planes，steady candidate+published+UI 核心变为 `20 B/pixel`，同一 extent 是 `73,728,000` bytes（约 70.3 MiB），下降 70.6%；当前实现又以 texture-view promotion 消除了 candidate 与同尺寸 published copy 在新 generation 内的重复。
 
@@ -213,7 +213,7 @@ uv run --isolated --project docs/research/scripts --locked \
 
 wavefront 的确定收益来自让每个 kernel 以更一致的工作开始并隔离 register-heavy 阶段；确定代价是 kernel 间所有 live state 都要读写 global memory。PBRT 的实现因此会融合部分阶段减少 memory traffic，而不是把算法机械地拆到最细。[PBRT v4](https://www.pbr-book.org/4ed/Wavefront_Rendering_on_GPUs/Mapping_Path_Tracing_to_the_GPU) Laine、Karras 与 Aila 也同时量化了 divergence/register 优势和每 path 212-byte global state/queue 成本，说明“wavefront”不是免费开关。[原论文](https://research.nvidia.com/sites/default/files/pubs/2013-07_Megakernels-Considered-Harmful/laine2013hpg_paper.pdf)
 
-Gravlume 若每 `K` 个完整 RK step 暂停，需要持久化至少 position/momentum、初始 invariants、maximum drift、travel time、step/flags；若还保存 endpoint RHS 来保留当前复用，状态更大。全屏 indexed state 很容易重新吃掉 production capture planes 刚释放的上百 MiB。持久化完整 `Geometry` 尤其错误：它含 radius、metric intermediates 与 gradients，应该在 resume 重算或通过实测决定只缓存 RHS。[Geometry definition](../../crates/gravlume-render/src/shaders/kerr_schild_trace.wgsl)
+Gravlume 若每 `K` 个完整 RK step 暂停，需要持久化至少 position/momentum、初始 invariants、maximum drift、travel time、step/flags；若还保存 endpoint RHS 来保留当前复用，状态更大。全屏 indexed state 很容易重新吃掉 production capture planes 刚释放的上百 MiB。持久化完整 `Geometry` 尤其错误：它含 radius、metric intermediates 与 gradients，应该在 resume 重算或通过实测决定只缓存 RHS。[Geometry definition](../../crates/gravlume-render/src/shaders/trace_protocol.wgsl)
 
 只有当 histogram 显示明显长尾（例如 p95/p50 与 late active ratio 足够高）时，才实现 `K=8/16/32` 三个 fused-step chunk 候选：
 

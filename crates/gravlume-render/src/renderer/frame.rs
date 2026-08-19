@@ -4,7 +4,7 @@ use crate::{
     display::{DisplayPipeline, DisplayTarget, PublishedScene, ScenePresentation},
     error::ResizeError,
     extent::RenderExtent,
-    ray_tracer::{RayTracer, TileRegion, TraceImage, tile_grid},
+    trace::{TileRegion, TracePipeline, TraceTarget, tile_grid},
 };
 
 const MAXIMUM_NATIVE_TRACE_PIXELS: u64 = 3_840 * 2_160;
@@ -29,7 +29,7 @@ pub struct FrameResources {
 }
 
 struct TraceCandidate {
-    trace: TraceImage,
+    trace: TraceTarget,
     completed_presentation: ScenePresentation,
     progress: TraceProgress,
 }
@@ -175,7 +175,7 @@ impl CompletedCandidate {
 impl FrameResources {
     pub fn new(
         device: &wgpu::Device,
-        trace: &RayTracer,
+        trace: &TracePipeline,
         display: &DisplayPipeline,
         published: &PublishedScene,
         extent: RenderExtent,
@@ -198,7 +198,7 @@ impl FrameResources {
 
     fn create_candidate(
         device: &wgpu::Device,
-        trace: &RayTracer,
+        trace: &TracePipeline,
         display: &DisplayPipeline,
         display_target: &DisplayTarget,
         extent: RenderExtent,
@@ -231,7 +231,7 @@ impl FrameResources {
         self.extent
     }
 
-    pub fn candidate_trace(&self) -> Option<&TraceImage> {
+    pub fn candidate_trace(&self) -> Option<&TraceTarget> {
         self.candidate.as_ref().map(|candidate| &candidate.trace)
     }
 
@@ -673,7 +673,7 @@ mod tests {
     }
 
     fn sky_trace_scratch(extent: RenderExtent) -> u64 {
-        crate::ray_tracer::shadow_coverage_scratch_bytes(extent)
-            .saturating_add(crate::ray_tracer::escape_map_scratch_bytes(extent))
+        crate::trace::shadow_coverage_scratch_bytes(extent)
+            .saturating_add(crate::trace::escape_map_scratch_bytes(extent))
     }
 }

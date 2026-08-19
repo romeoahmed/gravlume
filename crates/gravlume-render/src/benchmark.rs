@@ -17,8 +17,8 @@ use crate::{
     CapabilityError, GpuTraceInputError, TimingError,
     capabilities::{BASELINE_FEATURES, check_baseline_adapter, required_device_limits},
     extent::RenderExtent,
-    ray_tracer::{RayTracer, TileRegion, TraceBatchOptions, TraceImage},
     timing::GpuTimings,
+    trace::{TileRegion, TracePipeline, TraceTarget, TraceTimestampWrites},
 };
 
 const BENCHMARK_WIDTH: u32 = 1_280;
@@ -51,8 +51,8 @@ enum TraceBenchmarkError {
 struct TraceGpuBenchmark {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    compute: RayTracer,
-    target: TraceImage,
+    trace: TracePipeline,
+    target: TraceTarget,
     tiles: TileRegion,
     timings: GpuTimings<()>,
     adapter_info: wgpu::AdapterInfo,
@@ -72,15 +72,15 @@ impl TraceGpuBenchmark {
         let (device, queue, adapter_info) = pollster::block_on(request_benchmark_device())?;
         let extent = benchmark_extent(&device.limits())?;
         let observation = benchmark_observation()?;
-        let compute = RayTracer::new(&device, &observation)?;
-        let target = compute.create_target(&device, extent);
+        let trace = TracePipeline::new(&device, &observation)?;
+        let target = trace.create_target(&device, extent);
         let tiles = TileRegion::all(extent);
-        let timings = GpuTimings::new(&device, compute.has_escape_map());
+        let timings = GpuTimings::new(&device, trace.has_escape_map());
 
         Ok(Self {
             device,
             queue,
-            compute,
+            trace,
             target,
             tiles,
             timings,
@@ -114,15 +114,14 @@ impl TraceGpuBenchmark {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("production trace benchmark encoder"),
             });
-        self.compute.encode_batch(
+        self.trace.encode_batch(
             &self.queue,
             &mut encoder,
             &self.target,
             self.tiles,
-            TraceBatchOptions::new(
+            TraceTimestampWrites::new(
                 self.timings.escape_map_writes(),
                 Some(self.timings.trace_writes()),
-                true,
             ),
         );
         self.timings.encode_readback(&mut encoder, ())?;
@@ -131,7 +130,7 @@ impl TraceGpuBenchmark {
             submission_index: Some(submission),
             timeout: None,
         })?;
-        let (_, sample) = self
+        let ((), sample) = self
             .timings
             .poll(&self.device, self.queue.get_timestamp_period())?
             .ok_or(TraceBenchmarkError::MissingTimingSample)?;
@@ -178,7 +177,7 @@ pub fn register(criterion: &mut Criterion) {
 fn benchmark_extent(limits: &wgpu::Limits) -> Result<RenderExtent, TraceBenchmarkError> {
     let extent = RenderExtent::new(BENCHMARK_WIDTH, BENCHMARK_HEIGHT)
         .ok_or(TraceBenchmarkError::UnsupportedExtent)?;
-    let [workgroups_x, workgroups_y] = crate::ray_tracer::tile_grid(extent);
+    let [workgroups_x, workgroups_y] = crate::trace::tile_grid(extent);
     if BENCHMARK_WIDTH > limits.max_texture_dimension_2d
         || BENCHMARK_HEIGHT > limits.max_texture_dimension_2d
         || workgroups_x > limits.max_compute_workgroups_per_dimension
