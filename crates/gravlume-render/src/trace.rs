@@ -2,12 +2,22 @@ use gravlume_domain::{EquatorialEmissionModel, Observation, SceneRadiance};
 use wgpu::util::DeviceExt as _;
 
 mod input;
+pub mod inspection;
 mod shader;
 
 pub use input::{GpuTraceInputError, INVARIANT_DRIFT_LIMIT, TraceUniforms};
+pub use inspection::{
+    SampleArithmeticDomain, SampleBranchKey, SampleEventCandidates, SampleEventDiagnostics,
+    SampleInspection, SampleInspectionError, SampleInspectionOutcome, SampleInspectionProfile,
+    SampleInspectionRequest, SampleInspectionRequestId, SampleInspectionSource,
+    SampleInvariantDrift, SampleNumericalDiagnostics, SampleNumericalFlags,
+    SampleObservationIdentity, SamplePolarSide, SampleProducer, SampleSceneValue,
+    SampleTermination,
+};
 pub use shader::shadow_coverage as shadow_coverage_shader_source;
 
 use input::TraceDispatch;
+use inspection::SampleInspectionPipeline;
 
 use crate::{
     extent::RenderExtent,
@@ -317,6 +327,7 @@ fn trace_bind_group_layout_entries(
 }
 
 impl TracePipeline {
+    #[cfg(feature = "gpu-benchmarks")]
     pub(crate) fn new(
         device: &wgpu::Device,
         observation: &Observation,
@@ -324,6 +335,19 @@ impl TracePipeline {
         let compiled = CompiledTraceInput::compile(observation)?;
         let spec = compiled.plan.presentation_spec();
         Ok(Self::from_compiled(device, compiled, spec))
+    }
+
+    pub(crate) fn new_with_inspection(
+        device: &wgpu::Device,
+        observation: &Observation,
+    ) -> Result<(Self, SampleInspectionPipeline), GpuTraceInputError> {
+        let compiled = CompiledTraceInput::compile(observation)?;
+        let observation_identity =
+            inspection::SampleObservationIdentity::from_uniforms(compiled.uniforms);
+        let spec = compiled.plan.presentation_spec();
+        let trace = Self::from_compiled(device, compiled, spec);
+        let inspection = SampleInspectionPipeline::new(device, &trace, observation_identity);
+        Ok((trace, inspection))
     }
 
     #[cfg(test)]

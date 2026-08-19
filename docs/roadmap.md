@@ -6,7 +6,7 @@
 
 - equatorial surface 的 Source Anchor、Frequency Ratio、vacuum/homogeneous-slab transport 与固定 observer-frame spectral bands 已由 `surface-transport-v1` fixtures 闭合；exact branch key 与 ordinary-region footprint 另有独立 CPU/GPU 证据。这些只完成当前具名的 surface physical-transport slice，不等于完整观测仪器或完整 GRRT。
 - private sealed `TracePlan` 已按真实消费者选择 producer；surface plan 使用 invocation-local `GeometricSample` 和 full Kerr–Schild trace。引入这两个 seam、为 surface 禁用只回答 sky/capture 的 accelerator，均已是当前事实，不再列为后续任务。
-- production renderer 直接形成 scene-linear radiance；结构化 path diagnostics 仍主要属于 reference 与 test-only readback。现有 scientific capture 能区分 texel kind、scene/transport metadata 和最终 radiance，但不能按需回答一个像素的 source anchor、branch、$g$、travel time 与数值证据。
+- production renderer 直接形成 scene-linear radiance，并已有单在途、按需的 GPU sample inspection 基础设施：它把请求绑定已发布 generation，以新的 full Kerr–Schild trace 返回 typed terminal、exact branch、source/$g$/time、plan-specific scene value 与 event/invariant diagnostics；scientific capture 仍只负责整帧最终 radiance。当前尚未闭合的是连续字段 corpus、第二质量政策和交互消费者，而不是单样本回读 seam。
 - 两个固定二像素 semantic-map 原型均未达到正确性与性能的共同门槛。当前没有可接纳的 production reconstruction、temporal reuse 或全帧 transfer map。
 
 这些事实的细节和适用域不得复制到本文件；以实现证据和[验证合同](validation.md)为准。
@@ -30,6 +30,8 @@ Kerr 解析加速是旁路优化：它可以先建立 CPU oracle，但不能绕�
 ## 有界样本审计与质量基线
 
 这是下一项 resolved work。目标不是持久化全分辨率 G-buffer，而是让用户和验证工具能够对选定像素或小区域取得与画面同代、同 profile 的结构化物理证据。
+
+当前已完成 production 单样本基础切片及 canonical bolometric、blackbody、analytic GPU 接纳；本节仍保持开放，直到 source edge、critical/higher-order branch、正负自旋连续字段 corpus 与质量政策达到下列退出条件。
 
 **交付：**
 

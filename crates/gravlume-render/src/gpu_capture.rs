@@ -2,7 +2,10 @@ use gravlume_domain::{ImageSample, Observation};
 
 use crate::{
     extent::RenderExtent,
-    trace::{TileRegion, TracePipeline, tile_grid, trace_record_plane_size},
+    trace::{
+        SampleInspection, SampleInspectionError, SampleInspectionRequest, TileRegion,
+        TracePipeline, tile_grid, trace_record_plane_size,
+    },
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
@@ -43,6 +46,21 @@ pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> T
         .expect("observation packs for GPU");
     let tile = TileRegion::containing_pixel(sample.pixel());
     capture_region(gpu, observation, &trace, tile)
+}
+
+pub fn inspect_sample(
+    observation: &Observation,
+    request: SampleInspectionRequest,
+) -> Result<SampleInspection, SampleInspectionError> {
+    let gpu = crate::test_device::native_gpu();
+    let (_trace, mut inspection) = TracePipeline::new_with_inspection(&gpu.device, observation)
+        .expect("observation packs for bounded GPU inspection");
+    inspection.inspect_blocking(
+        &gpu.device,
+        &gpu.queue,
+        observation_extent(observation),
+        request,
+    )
 }
 
 pub fn capture_surface_footprint_sample(

@@ -20,7 +20,11 @@ use crate::{
     extent::{ExtentChange, ExtentTracker, RenderExtent},
     scientific_capture::{ScientificCapture, ScientificCaptureError, capture_texture},
     timing::GpuTimings,
-    trace::{TracePipeline, TraceTimestampWrites},
+    trace::{
+        SampleInspectionError, SampleInspectionOutcome, SampleInspectionRequest,
+        SampleInspectionRequestId, TracePipeline, TraceTimestampWrites,
+        inspection::SampleInspectionPipeline,
+    },
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,6 +48,7 @@ pub enum PresentResult {
 pub struct RendererUpdate {
     published_generation: Option<u64>,
     completed_present_generation: Option<u64>,
+    sample_inspections: Vec<SampleInspectionOutcome>,
     events: Vec<DeviceEvent>,
 }
 
@@ -56,6 +61,11 @@ impl RendererUpdate {
     #[must_use]
     pub const fn completed_present_generation(&self) -> Option<u64> {
         self.completed_present_generation
+    }
+
+    /// Takes every inspection completion observed during this poll.
+    pub fn take_sample_inspections(&mut self) -> Vec<SampleInspectionOutcome> {
+        std::mem::take(&mut self.sample_inspections)
     }
 
     pub fn take_events(&mut self) -> Vec<DeviceEvent> {
@@ -193,6 +203,7 @@ pub struct Renderer {
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
     trace: TracePipeline,
+    sample_inspection: SampleInspectionPipeline,
     display: DisplayPipeline,
     egui: egui_wgpu::Renderer,
     timings: GpuTimings<u64>,
@@ -251,7 +262,7 @@ impl Renderer {
 
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
-        let trace = TracePipeline::new(&device, observation)?;
+        let (trace, sample_inspection) = TracePipeline::new_with_inspection(&device, observation)?;
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -272,6 +283,7 @@ impl Renderer {
             frame_resources: None,
             published_scene,
             trace,
+            sample_inspection,
             display,
             egui,
             timings,
@@ -462,6 +474,42 @@ impl Renderer {
         )
     }
 
+    /// Submits one bounded, fresh trace for a sample of the currently published scene.
+    ///
+    /// At most one request can be in flight. Completion is delivered by
+    /// [`RendererUpdate::take_sample_inspections`] after [`Self::poll`] drives the asynchronous
+    /// readback. Cancelling after submission is logical: GPU work still completes and is cleaned
+    /// up before a `Cancelled` outcome is emitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a typed error before submission when no scene is published, the generation or
+    /// sample is invalid, or another request is still in flight.
+    pub fn request_sample_inspection(
+        &mut self,
+        request: SampleInspectionRequest,
+    ) -> Result<SampleInspectionRequestId, SampleInspectionError> {
+        self.sample_inspection.submit(
+            &self.device,
+            &self.queue,
+            self.published_scene.generation(),
+            self.published_scene.extent(),
+            request,
+        )
+    }
+
+    /// Marks an in-flight inspection for logical cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no request is active or the identity does not match it.
+    pub fn cancel_sample_inspection(
+        &mut self,
+        request_id: SampleInspectionRequestId,
+    ) -> Result<(), SampleInspectionError> {
+        self.sample_inspection.cancel(request_id)
+    }
+
     /// Submits one hidden full-resolution trace batch without acquiring or presenting a surface.
     ///
     /// # Errors
@@ -540,20 +588,49 @@ impl Renderer {
             .is_some_and(|status| status.is_queue_empty())
             .then(|| self.pending_present_generation.take())
             .flatten();
+        let sample_inspections = self
+            .sample_inspection
+            .poll(self.published_scene.generation())
+            .into_iter()
+            .collect();
         let events = self.device_events.try_iter().collect();
         Ok(RendererUpdate {
             published_generation,
             completed_present_generation,
+            sample_inspections,
             events,
         })
     }
 
     pub const fn has_pending_work(&self) -> bool {
-        self.timings.has_pending_readback() || self.pending_present_generation.is_some()
+        self.timings.has_pending_readback()
+            || self.sample_inspection.has_pending_readback()
+            || self.pending_present_generation.is_some()
     }
 
+    /// Returns the installed extent generation, which may still be tracing ahead of publication.
+    ///
+    /// Use [`Self::published_generation`] when constructing a sample-inspection request.
+    #[must_use]
     pub const fn generation(&self) -> u64 {
         self.extent.generation()
+    }
+
+    /// Returns the generation of the complete scene currently visible to presentation consumers.
+    #[must_use]
+    pub const fn published_generation(&self) -> Option<u64> {
+        self.published_scene.generation()
+    }
+
+    /// Returns the pixel extent associated with [`Self::published_generation`].
+    #[must_use]
+    pub const fn published_extent(&self) -> Option<[u32; 2]> {
+        if self.published_scene.generation().is_some() {
+            let extent = self.published_scene.extent();
+            Some([extent.width(), extent.height()])
+        } else {
+            None
+        }
     }
 
     pub fn suspend(&mut self) {

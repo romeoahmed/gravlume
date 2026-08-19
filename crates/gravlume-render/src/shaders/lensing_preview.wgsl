@@ -61,22 +61,16 @@ fn analytic_sky(unit_direction: vec3<f32>) -> vec3<f32> {
     return mix(sky, axis_color, clamp(weight_sum, 0.0, 1.0));
 }
 
-fn store_scene_result(pixel: vec2<u32>, termination: u32, direction: vec3<f32>) {
+fn scene_value(termination: u32, direction: vec3<f32>) -> vec4<f32> {
     if termination == TERMINATION_HORIZON {
-        textureStore(scene_hdr, vec2<i32>(pixel), vec4<f32>(0.0));
-        return;
+        return vec4<f32>(0.0);
     }
     if termination == TERMINATION_ESCAPE {
-        textureStore(
-            scene_hdr,
-            vec2<i32>(pixel),
-            vec4<f32>(analytic_sky(direction), 1.0),
-        );
-        return;
+        return vec4<f32>(analytic_sky(direction), 1.0);
     }
-    textureStore(
-        scene_hdr,
-        vec2<i32>(pixel),
-        vec4<f32>(visible_failure_color(termination), -f32(termination)),
-    );
+    return vec4<f32>(visible_failure_color(termination), -f32(termination));
+}
+
+fn store_scene_result(pixel: vec2<u32>, termination: u32, direction: vec3<f32>) {
+    textureStore(scene_hdr, vec2<i32>(pixel), scene_value(termination, direction));
 }
