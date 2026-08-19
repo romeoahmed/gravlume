@@ -2,7 +2,7 @@ use std::sync::mpsc;
 
 use gravlume_domain::EquatorialSurface;
 
-use crate::{error::GpuErrorScopes, extent::RenderExtent, ray_tracer::INVARIANT_DRIFT_LIMIT};
+use crate::{error::GpuErrorScopes, extent::RenderExtent, trace::INVARIANT_DRIFT_LIMIT};
 
 const RGBA16_FLOAT_BYTES_PER_PIXEL: u32 = 8;
 const SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET: f64 = 3.0e-6;

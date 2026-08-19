@@ -82,11 +82,11 @@ Reference 保留两个有意不同的接口：
 
 ## Renderer modules
 
-| 模块                 | 所有权                                                                                    |
-| -------------------- | ----------------------------------------------------------------------------------------- |
+| 模块 | 所有权 |
+| --- | --- |
 | `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
-| `ray_tracer.rs`      | Observation 的单次语义编译、GPU DTO、private sealed TracePlan、plan-specific pipeline/scratch 与 candidate image |
+| `trace.rs`、`trace/input.rs`、`trace/shader.rs` | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
 | `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
 | `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind 与解释 metadata               |
 | `shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                            |
@@ -100,21 +100,26 @@ Reference 保留两个有意不同的接口：
 
 WGSL 位于 `src/shaders/`：
 
-| shader                       | 职责                                                      |
-| ---------------------------- | --------------------------------------------------------- |
-| `kerr_schild_trace.wgsl`     | 精确 Cartesian Kerr–Schild integration 与 observables     |
+| shader | 职责 |
+| --- | --- |
+| `trace_protocol.wgsl`        | host-shareable ABI、trace 状态、termination 与公共数值 helper |
+| `kerr_schild_dynamics.wgsl`  | Cartesian Kerr–Schild geometry、Hamilton RHS 与 RK4       |
+| `geodesic_events.wgsl`       | dense event localization、invariant、observable 与 branch evidence |
+| `geodesic_integration.wgsl`  | per-ray integration state machine 与完整 KS entry points  |
 | `geodesic_acceleration.wgsl` | interval capture、escape-direction map 与完整 KS fallback |
 | `lensing_preview.wgsl`       | termination/direction 到 scene-linear preview             |
-| `surface_transport.wgsl`     | inverse-cube source 与 homogeneous-slab bolometric helper           |
-| `surface_preview.wgsl`       | equatorial source 的直接 bolometric transport                        |
-| `spectral_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport         |
+| `surface_transport.wgsl`     | inverse-cube/slab transport、范围安全缩放与三 band 向量运算          |
+| `bolometric_surface_preview.wgsl` | equatorial source 的直接 bolometric transport                  |
+| `blackbody_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport        |
 | `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
 | `surface_footprint_capture.wgsl` | test-only branch-checked source-chart finite difference         |
 | `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
 | `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
 | `*_capture.wgsl`             | test-only scientific readback entry points                |
 
-文件名描述数学或渲染职责，不使用 roadmap 阶段名。Rust 负责组合生产与 capture shader source；仓库不维护生成的 WGSL 副本。
+文件名描述数学或渲染职责，不使用 roadmap 阶段名。上述四个 trace core fragment 不是可独立编译的
+shader module；`trace/shader.rs` 是生产、shadow 与 test capture source 顺序的唯一所有者。仓库不维护
+生成的 WGSL 副本。
 
 ## GPU trace 与 publication
 

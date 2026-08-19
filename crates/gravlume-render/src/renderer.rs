@@ -18,9 +18,9 @@ use crate::{
         install_device_callbacks, scoped_gpu_operation,
     },
     extent::{ExtentChange, ExtentTracker, RenderExtent},
-    ray_tracer::{RayTracer, TraceBatchOptions},
     scientific_capture::{ScientificCapture, ScientificCaptureError, capture_texture},
     timing::GpuTimings,
+    trace::{TracePipeline, TraceTimestampWrites},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +192,7 @@ pub struct Renderer {
     extent: ExtentTracker,
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
-    trace: RayTracer,
+    trace: TracePipeline,
     display: DisplayPipeline,
     egui: egui_wgpu::Renderer,
     timings: GpuTimings<u64>,
@@ -202,7 +202,7 @@ pub struct Renderer {
 }
 
 impl Renderer {
-    /// Creates the GPU device, ray tracer, and presentation resources.
+    /// Creates the GPU device, trace pipeline, and presentation resources.
     ///
     /// # Errors
     ///
@@ -251,7 +251,7 @@ impl Renderer {
 
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
-        let trace = RayTracer::new(&device, observation)?;
+        let trace = TracePipeline::new(&device, observation)?;
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -284,7 +284,7 @@ impl Renderer {
             .finish()
             .await
             .map_err(|source| RendererInitError::GpuResource {
-                stage: "ray-tracing resources",
+                stage: "trace resources",
                 source,
             })?;
         resize_result.map_err(RendererInitError::InitialResize)?;
@@ -493,10 +493,9 @@ impl Renderer {
             &mut encoder,
             candidate,
             batch,
-            TraceBatchOptions::new(
+            TraceTimestampWrites::new(
                 self.timings.escape_map_writes(),
                 Some(self.timings.trace_writes()),
-                true,
             ),
         );
         let generation = self.extent.generation();

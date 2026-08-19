@@ -29,7 +29,7 @@ validated Observation
   observer frequency、f32 packing 后改变 extremality 分类、压扁非空 source interval、把正
   intensity、slab emission 或 transmittance 下溢为零/落入 subnormal、source 未严格落在 numerical
   escape boundary 内或 blackbody radial temperature 超出 LUT，返回 `GpuTraceInputError`。
-- Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。Host 在 binary32 转换前判定 initial polar side，并把离散值写入 `observer_event.x`；该 lane 不再伪装成未使用的 coordinate time。
+- Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。Host 在 binary32 转换前判定 initial polar side，并把离散值写入 `observer.x`；该 lane 不再伪装成未使用的 coordinate time。
 - `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 11 个连续 16-byte block、共 176 byte；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Blackbody plan 独占 binding 8 的 4097-entry read-only `array<vec4<f32>>`；WGSL array stride 为 16 byte。Production ABI 只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；四个 diagnostic record planes 仅由 test capture 创建。
 - Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。Surface sample 另携带 initial polar side、radial/equatorial crossing counts 与 signed azimuth winding 的 exact branch key。
 - Renderer 只匹配一次 `SceneRadiance`，同一 compiled input 同时生成 `TraceUniforms`、private sealed
@@ -39,7 +39,11 @@ validated Observation
 
 ### 数值基线
 
-- WGSL 独立实现 binary32 outgoing Cartesian Kerr–Schild geometry 与 negative-affine classical RK4。每 ray 的动态状态是 $(\mathbf x,\mathbf p)$，$E=-p_t$ 为构造常量；relative time 与 spatial derivative 一起用 `vec4` 做 RK accumulation。
+- WGSL core 按 protocol、Kerr–Schild dynamics、event/observable 与 integration state machine 拆分，
+  Rust 在 pipeline creation 前按唯一固定顺序组合；它不引入运行期 indirection 或持久化中间状态。
+  shader 独立实现 binary32 outgoing Cartesian Kerr–Schild geometry 与 negative-affine classical RK4。
+  每 ray 的动态状态是 $(\mathbf x,\mathbf p)$，$E=-p_t$ 为构造常量；relative time 与 spatial derivative
+  一起用 `vec4` 做 RK accumulation。
 - Geometry 复用 discriminant-root $\Sigma$、$1/r$ 与 $1/(r^2+a^2)$；Hamilton force 只计算 contracted principal-null Jacobian。Carter diagnostic 使用不借 $H=0$、无 axis seam 的 Cartesian 表达式。
 - Ordinary accepted step 复用 exact endpoint geometry/RHS 供 event、invariant 与下一步 $k_1$ 使用；它没有把 classical RK4 的 $k_4$ 错当成 FSAL。
 - Event 保留 endpoint bracket。每个 armed crossed guard 独立定位后选择 affine traversal 上最早 candidate；tie 以具单位 affine distance 判定，全部 candidates 按稳定 bit order 保留，ambiguity 独立记录并降为 `Uncertain`。Surface 从 profile arming band 外进入后才允许 crossing。仅当 Bézier derivative controls 证明 guard cubic 单调且 derivative 有条件时，执行固定六次 safeguarded Newton；否则保留 chord fraction。Radial turning 在同一 cubic dense state 上重算 geometry/RHS 并二分 bracket；若 terminal fraction 落入 bracket，则离散顺序降为 `Uncertain`。Branch key 只提交严格先于 terminal 的 turning/crossing。Travel time、source coordinate、event residual 与 drift 均来自同一个 localized state。
@@ -60,7 +64,7 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 - Surface event 使用 $z=0$ 双向 crossing；dense-localized radius 必须位于 source inclusive interval。
 - Localized state 独立求 Kerr–Newman prograde circular emitter、oblate chart azimuth 与 $g=\nu_{\rm obs}/\nu_{\rm em}$；非法 orbit/frequency 产生 visible numerical failure。
 - `GeometricSample` 只在 invocation-local function value 中存在；event ambiguity 从 candidate bitset 派生，不复制进该值。Production 不创建 G-buffer；neutral plan 将 $I_{\rm em}=I_6(r/6M)^{-3}$ 经 $g^4$ 与解析 slab 后直接写 `RGBA16F` candidate。完整乘积先按 `frexp` 分离 significand/exponent，只有最终 exponent 已证明可表示时才用 `ldexp` 物化；不会因为未输出的 vacuum 中间值溢出而拒绝最终可表示的 radiance。
-- Blackbody plan 使用 $T_{\rm obs}=gT_6(r/6M)^{-3/4}$，在固定 $\log_2T$ LUT 中插值 observer-frame `600–700/500–600/400–500 nm` boxcar 的 $\log_2$ fractions。三 channel 是具名 band-integrated intensity，不是 CIE/sRGB，也不覆盖剩余 bolometric power；shader 将 fraction 拆为 normal significand 与整数 exponent，并与 intensity、$g^4$、径向 dilution 和 transmittance 的分解一起累计，直到完整 radiance 的 exponent 已知后才用 `ldexp` 物化并交给 `RGBA16F` rounding。该路径不把 standalone subnormal fraction 传给 WGSL built-in，也不因未缩放 fraction 的 FTZ 静默丢失可表示 radiance。
+- Blackbody plan 使用 $T_{\rm obs}=gT_6(r/6M)^{-3/4}$，在固定 $\log_2T$ LUT 中插值 observer-frame `600–700/500–600/400–500 nm` boxcar 的 $\log_2$ fractions。三 channel 是具名 band-integrated intensity，不是 CIE/sRGB，也不覆盖剩余 bolometric power；shader 以 invocation-local `vec3` 一次分解、缩放和有界求和三个 band，将 fraction 的 normal significand/整数 exponent 与 intensity、$g^4$、径向 dilution 和 transmittance 一起累计，直到完整 radiance 的 exponent 已知后才用 vector `ldexp` 物化并交给 `RGBA16F` rounding。Storage LUT 仍使用 16-byte stride 的 `vec4`，没有把 local vector 写法误当作 12-byte host ABI。该路径不把 standalone subnormal fraction 传给 WGSL built-in，也不因未缩放 fraction 的 FTZ 静默丢失可表示 radiance。
 - `HomogeneousScalarSlab` 预先保存 $\tau$ 与稳定计算的 integrated emission；GPU 执行 $I_{out}=I_{vac}e^{-\tau}+E$。非零 spectral slab source 必须带自己的 blackbody temperature；neutral bolometric source 不被猜成 spectrum。它是 path-integrated 解析边界，不是 arbitrary volume integration。
 - `Renderer::capture_scene_linear` 显式等待 copy/map，读取已发布、tone-map/UI 之前的 scene。
   Surface alpha tag `2.0` 才表示 metadata 所述 radiance；escape tag `1.0` 仍是 analytic

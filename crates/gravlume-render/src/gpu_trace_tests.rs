@@ -18,7 +18,7 @@ use crate::{
         capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
         capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
     },
-    ray_tracer::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
+    trace::{INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination},
 };
 
 const EVENT_CANDIDATE_HORIZON: u32 = 1 << 1;
