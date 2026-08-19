@@ -1,19 +1,19 @@
 # 有界单样本 GPU 路径审计
 
-本文研究并记录 production 中按需审计一个像素样本的最小 GPU seam，回答 ABI、dispatch、readback、identity、取消与可观测量边界。它保存已采用设计及反证，不定义 production interface；当前实现事实见 [GPU 证据](../gpu-renderer.md)，权威产品要求仍是[路线图](../roadmap.md)，数值与物理阈值仍以[验证合同](../validation.md)和[数学物理合同](../physics.md)为准。
+本文研究并记录按需审计一个像素样本的最小 GPU protocol candidate，回答 ABI、dispatch、readback、identity、取消与可观测量边界。它保存 test-only 设计、反证与 production seam 的恢复条件，不定义 production interface；当前实现事实见 [GPU 证据](../gpu-renderer.md)，权威产品要求仍是[路线图](../roadmap.md)，数值与物理阈值仍以[验证合同](../validation.md)和[数学物理合同](../physics.md)为准。
 
-**状态：第一版已采用；`@workgroup_size(1)` 子候选已被 Metal 反例否决。** 研究以仓库 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad`为源码基线，实现在 Rust 2024、`wgpu 30.0.0` 与 Apple M5 Metal 上完成 TDD 接纳；依赖事实来自该 revision 的 [`Cargo.toml`](https://github.com/romeoahmed/gravlume/blob/9f39b8d798d3889ecb3032b5dcc92ad64103c6ad/Cargo.toml)和 `wgpu 30` 官方文档。本记录没有引入新物理恒等式，故未为此新增推导；实现后用锁定的 `uv` 环境复跑 `verify_scalar_transport.py`，$g^4$、blackbody shift、slab limits、80-digit fixture oracle 与 LUT midpoint scan 全部通过，LUT 最大绝对误差为 `2.52468526986e-6`。
+**状态：test-only 第一版已采用；production seam 因没有真实消费者而延后；`@workgroup_size(1)` 子候选已被 Metal 反例否决。** 研究以仓库 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad`为源码基线，实现在 Rust 2024、`wgpu 30.0.0` 与 Apple M5 Metal 上完成 TDD 接纳；依赖事实来自该 revision 的 [`Cargo.toml`](https://github.com/romeoahmed/gravlume/blob/9f39b8d798d3889ecb3032b5dcc92ad64103c6ad/Cargo.toml)和 `wgpu 30` 官方文档。本记录没有引入新物理恒等式，故未为此新增推导；实现后用锁定的 `uv` 环境复跑 `verify_scalar_transport.py`，$g^4$、blackbody shift、slab limits、80-digit fixture oracle 与 LUT midpoint scan 全部通过，LUT 最大绝对误差为 `2.52468526986e-6`。
 
 ## 问题与可否证假设
 
-路线图要求 inspection 与画面绑定同一 observation/generation/profile，返回 typed termination、exact branch、source anchor、frequency ratio、travel time、scene-linear radiance 与 event/invariant diagnostics，同时不让默认画面常驻全分辨率 G-buffer。当前 test-only [`capture_trace_sample`](https://github.com/romeoahmed/gravlume/blob/9f39b8d798d3889ecb3032b5dcc92ad64103c6ad/crates/gravlume-render/src/gpu_capture.rs)虽然只选择包含目标像素的一个 tile，却仍：
+路线图要求 inspection 与画面绑定同一 observation/generation/profile，返回 typed termination、在 terminal 可证明时的 exact branch、source anchor、frequency ratio、travel time、scene-linear radiance 与 event/invariant diagnostics，并在 `NumericalFailure` 或未经满足预算 refine 的 `Uncertain` 时显式保留 branch unavailable，同时不让默认画面常驻全分辨率 G-buffer。当前 test-only [`capture_trace_sample`](https://github.com/romeoahmed/gravlume/blob/9f39b8d798d3889ecb3032b5dcc92ad64103c6ad/crates/gravlume-render/src/gpu_capture.rs)虽然只选择包含目标像素的一个 tile，却仍：
 
 - dispatch 一个 `8×8` workgroup，即运行 64 条 ray；
 - 按完整 observation extent 分配四个 `16 B/pixel` record plane 和 HDR texture；
 - 复制并 map 全 extent，而不是一个 record；
 - 在 [`trace_capture.wgsl`](https://github.com/romeoahmed/gravlume/blob/9f39b8d798d3889ecb3032b5dcc92ad64103c6ad/crates/gravlume-render/src/shaders/trace_capture.wgsl)中把两个 branch count 饱和压成各 16 bit，不能作为 production 的 exact branch ABI。
 
-可否证假设是：**不改动 `trace_pixel_at`、RK4 step policy 或 event state machine，只增加单活跃 ray request、plan-specific radiance sink、一个定长 record 与异步 readback，即可闭合第一版 production inspection。** 若实现必须创建 extent-scaled diagnostics、改变 solver uniform、丢失完整 `u32` branch key，或相同 sample/profile 不能通过现有 observable budget，本候选即失败。该主假设通过；“workgroup 必须缩成一个 invocation”的更窄子假设被实机反例否决。
+可否证技术假设是：**不改动 `trace_pixel_at`、RK4 step policy 或 event state machine，只增加单活跃 ray request、plan-specific radiance sink、一个定长 record 与异步 readback，即可形成第一版 bounded inspection protocol。** 若实现必须创建 extent-scaled diagnostics、改变 solver uniform、丢失可证明 terminal 的完整 `u32` branch key，或相同 sample/profile 不能通过现有 observable budget，本候选即失败。该技术假设通过；“workgroup 必须缩成一个 invocation”的更窄子假设被实机反例否决。它没有证明 consumer interface，故实现只进入 `cfg(test)` evidence。
 
 ## 方法
 
@@ -36,13 +36,13 @@ g=\frac{-p\cdot u_{\rm obs}}{-p\cdot u_{\rm em}}.
 
 因此第二个真实 consumer 只证明在 **output seam** 提取共享的 plan-specific radiance function；它不证明需要 solver trait、render graph 或通用 record framework。
 
-## 决策：一个 deep module、一个在途 request
+## 决策：test-only deep module、一个在途 request
 
-采用内部 inspection deep module，Interface 只覆盖三项行为：提交一个绑定当前 published generation 的 sample、逻辑取消该 request、在 renderer 现有 non-blocking `poll` 中取得一次 typed completion。该 module 隐藏 pipeline、request/output/readback buffers、bind group、callback channel 与状态机；不为唯一的 wgpu implementation 引入 trait 或 adapter seam。
+采用 `cfg(test)` inspection deep module，内部 Interface 只覆盖三项行为：提交一个绑定给定 generation 的 sample、逻辑取消该 request、由测试驱动 `Device::poll` 后取得一次 typed completion。该 module 隐藏 pipeline、request/output/readback buffers、bind group、callback channel 与状态机；production `Renderer` 不实例化它，也不为唯一的 wgpu implementation 引入 trait、adapter 或公开 seam。Rust 只有在 item 及其所有 ancestor 都可访问时才允许外部访问；这里的私有 `trace` ancestor 关闭了 crate 外路径，见 [Rust Reference visibility and privacy](https://doc.rust-lang.org/reference/visibility-and-privacy.html)。
 
 第一版资源上限固定为 `N_MAX = 1`。拒绝并发第二个 request，返回 typed `Busy`，比隐含覆盖 request buffer 或无界排队更可证。将来若出现真实的 bounded-region consumer，可在不改变 artifact 语义的前提下把同一 112-byte record 组成数组并通过性能证据选择一维 workgroup；第一版不预先公开 batch、queue 或 quality-policy 抽象。
 
-采用的外部语义是：
+原型验证的语义是：
 
 1. request 必须携带 caller 看到的 published generation、pixel 与 subpixel；module 对当前 published extent 做边界/finite 验证，generation 不同立即返回 typed mismatch；
 2. module 生成 opaque `RequestId`，并自动绑定 exact packed observation words、published extent/generation、`gpu-ks-rk4-v1` profile、producer/domain tag 与 channel model；没有 canonical serialization 前，不把临时 hash 宣称为稳定 observation identity；
@@ -75,7 +75,7 @@ WGSL 的 uniform/storage 数据在 CPU 与 GPU 间不重排；双方若对 layou
 | 80 | `vec4<f32>` / `[f32; 4]` | final scene-linear RGB、event residual |
 | 96 | `vec4<f32>` / `[f32; 4]` | null、energy、$L_z$、Carter maximum drift |
 
-该 result 的 alignment、size 与 storage-array stride 都是 `16, 112, 112`；完整 branch key 不压缩。`output/source kind` 决定 `source/direction` 和 RGB 是否有物理意义：只有 accepted surface terminal 能构造 `SourceAnchor + FrequencyRatio + SurfaceRadiance`；Escape lanes 是 direction，analytic sky RGB 只能标为 orientation preview；Horizon/failure/Uncertain 不得把零或 failure marker 暴露成 physical radiance。
+该 result 的 alignment、size 与 storage-array stride 都是 `16, 112, 112`；可用 branch key 不压缩。`NumericalFailure` 没有 exact terminal branch，协议 v1 的全零 branch lane 是 unavailable sentinel，不能把它解码成 negative-side、zero-count branch；`Uncertain` 可能携带 provisional counters，但它们未满足确定 branch 的证明义务。Host 对两者都返回 `None`。`output/source kind` 决定 `source/direction` 和 RGB 是否有物理意义：只有 accepted surface terminal 能构造 `SourceAnchor + FrequencyRatio + SurfaceRadiance`；Escape lanes 是 direction，analytic sky RGB 只能标为 orientation preview；Horizon/failure/Uncertain 不得把零或 failure marker 暴露成 physical radiance。
 
 Rust DTO 使用 `#[repr(C, align(16))]`、同序 `[u32;4]/[f32;4]`、`Pod + Zeroable`，并对 size、alignment、每个 offset 做 compile-time/test assertion。Rust Reference 只对 `repr(C)`规定 declaration-order offset 算法，[Rust type layout](https://doc.rust-lang.org/reference/type-layout.html#the-c-representation)是 host 依据；`bytemuck::Pod` 要求无任何 padding/uninitialized byte、任意 bit pattern 合法且字段本身为 `Pod`，[`Pod` safety contract](https://docs.rs/bytemuck/1.25.2/bytemuck/trait.Pod.html#safety)是 byte-cast 依据。WGSL 仍须经 Naga 30 parser/validator 与真实 GPU round-trip 验证，不能仅凭 Rust `size_of` 推断 shader layout。[Naga 30 validator](https://docs.rs/naga/30.0.0/naga/valid/index.html)
 
@@ -154,7 +154,7 @@ Fresh on-demand trace 是“绑定旧 frame identity 的同输入重算”，不
 | --- | --- | --- |
 | typed termination / failure flags | 直接 | `GeometricSample.termination/flags`；host checked discriminant mapping保留 unknown code |
 | event candidates / ambiguity / residual | 直接 | candidates bitset、`countOneBits > 1` 与 normalized residual 已存在 |
-| exact branch key | 直接 | 四个完整 `u32` lanes；signed winding 用 bitcast round-trip，不采用 test-only 16-bit packing |
+| exact branch key | terminal-dependent | 确定终止使用四个完整 `u32` lanes，signed winding 用 bitcast round-trip；`NumericalFailure` 与 `Uncertain` 返回 unavailable |
 | surface source anchor | terminal-dependent | accepted Surface 时 `(r/M, phi)`；host 用 artifact mass 恢复 radius units |
 | Frequency Ratio | terminal-dependent | accepted Surface 时 source lane `z = g`；不能对 Escape/Horizon解释 |
 | travel time | 直接 | 当前 GPU 为 `M` 无量纲 coordinate-time duration；artifact 必须带 mass/profile |
@@ -166,10 +166,10 @@ Fresh on-demand trace 是“绑定旧 frame identity 的同输入重算”，不
 
 ## TDD 结果与剩余门槛
 
-实现先以缺少 production types/helper 的 canonical surface test 进入 RED，再完成以下 GREEN evidence：
+实现先以缺少 inspection types/helper 的 canonical surface test 进入 RED，再完成以下 GREEN evidence：
 
 1. **Host protocol：** pixel/subpixel boundary、无 published scene、generation mismatch、Busy、wrong RequestId、cancel/cleanup/reuse 与 generation supersession 均有 typed test。
-2. **ABI：** Rust size/alignment/offset 固定为 48/112 byte，逻辑资源为 272 byte；大于 `0xffff` 的 branch sentinel 保持完整 `u32` round-trip，ABI/producer/domain/identity 均 checked decode。
+2. **ABI：** Rust size/alignment/offset 固定为 48/112 byte，逻辑资源为 272 byte；大于 `0xffff` 的可用 branch count 保持完整 `u32` round-trip，numerical-failure 零 lane 与 uncertain provisional lane 都解码为 unavailable，ABI/producer/domain/identity 均 checked decode。
 3. **真实 GPU：** canonical bolometric Surface 对独立 reference 比较 termination、exact branch、anchor、$g$、time、radiance、event residual 与 drift；analytic Escape 保持 non-spectral kind；blackbody inspection 返回 f32 scene-linear bands并满足既有 spectral budget。
 4. **调度反证：** Apple M5 Metal 上 `@workgroup_size(1)` 的字段丢失 test 先失败；一个 `8×8` workgroup、单活跃 solver lane 的同形 specialization 通过同一 observable test。每次仍只 copy/map 112 byte。
 
@@ -179,8 +179,8 @@ CPU/GPU agreement 仍不是物理证明；Frequency Ratio、radiance、event 与
 
 ## 决策与恢复条件
 
-**已接纳的最小 slice：** production single-sample request，固定 48/112/112-byte resources，一个与 presentation 同形的 `8×8` workgroup且仅 lane 0 进入 solver，复用不变的 full-KS `trace_pixel_at`和 plan-specific transport，non-blocking map-on-submit，opaque request identity，generation-gated typed completion。它在 renderer 内形成一个 deep module，同时完全不改变 default frame resources。
+**已接纳的最小 slice：** test-only single-sample protocol，固定 48/112/112-byte resources，一个与 presentation 同形的 `8×8` workgroup且仅 lane 0 进入 solver，复用不变的 full-KS `trace_pixel_at`和 plan-specific transport，map-on-submit、opaque request identity 与 generation-gated typed completion。它完全不改变 production renderer resources 或 public interface。
 
 **明确不做：** full-frame record planes、small-region batch、inspection UI、science-quality第二 solver policy、reconstruction/history、active queue、trajectory checkpoint 与通用 solver Interface。
 
-只有出现真实 bounded-region consumer，并以 correctness-gated Metal/Vulkan benchmark 证明 `N_MAX > 1` 改善端到端 latency/throughput时，才重开 batch/workgroup tuning；恢复 `@workgroup_size(1)` 还必须在 Metal/Vulkan 的完整 observable record 上消除上述字段反例，不能只比较 terminal/radiance。只有独立 quality policy 实际存在时，才扩展 quality Interface。若单样本 result 与相同 profile reference 超预算，应收窄 support/返回 uncertainty，而不是放宽阈值或把 inspection 接到 test-only footprint step policy。
+只有至少两个真实 consumer 证明同一 interface，并以 correctness-gated Metal/Vulkan benchmark 证明 `N_MAX > 1` 改善端到端 latency/throughput时，才把 prototype 提升为 production seam 并重开 batch/workgroup tuning；恢复 `@workgroup_size(1)` 还必须在 Metal/Vulkan 的完整 observable record 上消除上述字段反例，不能只比较 terminal/radiance。只有独立 quality policy 实际存在时，才扩展 quality Interface。若单样本 result 与相同 profile reference 超预算，应收窄 support/返回 uncertainty，而不是放宽阈值或把 inspection 接到 test-only footprint step policy。

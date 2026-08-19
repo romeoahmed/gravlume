@@ -214,23 +214,8 @@ impl SampleEventCandidates {
     }
 
     #[must_use]
-    pub const fn singularity(self) -> bool {
-        self.0 & Self::SINGULARITY != 0
-    }
-
-    #[must_use]
-    pub const fn horizon(self) -> bool {
-        self.0 & Self::HORIZON != 0
-    }
-
-    #[must_use]
     pub const fn equatorial_surface(self) -> bool {
         self.0 & Self::EQUATORIAL_SURFACE != 0
-    }
-
-    #[must_use]
-    pub const fn escape(self) -> bool {
-        self.0 & Self::ESCAPE != 0
     }
 }
 
@@ -267,47 +252,12 @@ impl SampleNumericalFlags {
     pub const fn bits(self) -> u32 {
         self.0
     }
-
-    #[must_use]
-    pub const fn non_finite(self) -> bool {
-        self.0 & 1 != 0
-    }
-
-    #[must_use]
-    pub const fn invalid_radicand(self) -> bool {
-        self.0 & 2 != 0
-    }
-
-    #[must_use]
-    pub const fn invalid_denominator(self) -> bool {
-        self.0 & 4 != 0
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SampleInvariantDrift([f32; 4]);
 
 impl SampleInvariantDrift {
-    #[must_use]
-    pub const fn normalized_null(self) -> f32 {
-        self.0[0]
-    }
-
-    #[must_use]
-    pub const fn energy(self) -> f32 {
-        self.0[1]
-    }
-
-    #[must_use]
-    pub const fn angular_momentum_z(self) -> f32 {
-        self.0[2]
-    }
-
-    #[must_use]
-    pub const fn carter(self) -> f32 {
-        self.0[3]
-    }
-
     #[must_use]
     pub const fn as_array(self) -> [f32; 4] {
         self.0
@@ -349,7 +299,7 @@ pub struct SampleInspection {
     termination: SampleTermination,
     source: SampleInspectionSource,
     scene_value: SampleSceneValue,
-    branch_key: SampleBranchKey,
+    branch_key: Option<SampleBranchKey>,
     travel_time_over_m: f32,
     event_diagnostics: SampleEventDiagnostics,
     numerical_diagnostics: SampleNumericalDiagnostics,
@@ -377,17 +327,17 @@ impl SampleInspection {
     }
 
     #[must_use]
-    pub const fn profile(&self) -> SampleInspectionProfile {
+    pub const fn profile() -> SampleInspectionProfile {
         SampleInspectionProfile::GpuKsRk4V1
     }
 
     #[must_use]
-    pub const fn producer(&self) -> SampleProducer {
+    pub const fn producer() -> SampleProducer {
         SampleProducer::OnDemandFullKerrSchildRetrace
     }
 
     #[must_use]
-    pub const fn arithmetic_domain(&self) -> SampleArithmeticDomain {
+    pub const fn arithmetic_domain() -> SampleArithmeticDomain {
         SampleArithmeticDomain::WgslF32
     }
 
@@ -412,8 +362,9 @@ impl SampleInspection {
         self.scene_value
     }
 
+    /// Returns the exact terminal branch, or `None` when the trace could not determine one.
     #[must_use]
-    pub const fn branch_key(&self) -> SampleBranchKey {
+    pub const fn branch_key(&self) -> Option<SampleBranchKey> {
         self.branch_key
     }
 
@@ -449,18 +400,6 @@ pub enum SampleInspectionOutcome {
         request_id: SampleInspectionRequestId,
         error: SampleInspectionError,
     },
-}
-
-impl SampleInspectionOutcome {
-    #[must_use]
-    pub const fn request_id(&self) -> SampleInspectionRequestId {
-        match self {
-            Self::Completed(inspection) => inspection.request_id(),
-            Self::Cancelled { request_id }
-            | Self::Superseded { request_id, .. }
-            | Self::Failed { request_id, .. } => *request_id,
-        }
-    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -972,12 +911,7 @@ impl SampleInspectionPipeline {
                 field: "event candidates",
             });
         }
-        let initial_polar_side = match raw.branch_key[3] {
-            0 => SamplePolarSide::Negative,
-            1 => SamplePolarSide::Equatorial,
-            2 => SamplePolarSide::Positive,
-            unknown => return Err(SampleInspectionError::UnknownPolarSide(unknown)),
-        };
+        let branch_key = decode_branch_key(termination, raw.branch_key)?;
         let source = decode_source(termination, raw.source_time)?;
         let rgb =
             raw.scene_event[..3]
@@ -995,12 +929,7 @@ impl SampleInspectionPipeline {
             termination,
             source,
             scene_value,
-            branch_key: SampleBranchKey {
-                initial_polar_side,
-                radial_turnings: raw.branch_key[0],
-                equatorial_crossings: raw.branch_key[1],
-                azimuth_winding: i32::from_ne_bytes(raw.branch_key[2].to_ne_bytes()),
-            },
+            branch_key,
             travel_time_over_m: raw.source_time[3],
             event_diagnostics: SampleEventDiagnostics {
                 candidates,
@@ -1032,7 +961,10 @@ impl SampleInspectionPipeline {
             .expect("sample inspection submission completes");
         match self.poll(Some(request.generation())) {
             Some(SampleInspectionOutcome::Completed(inspection)) => Ok(*inspection),
-            Some(SampleInspectionOutcome::Failed { error, .. }) => Err(error),
+            Some(SampleInspectionOutcome::Failed { request_id, error }) => {
+                debug_assert_eq!(request_id, submitted.request_id);
+                Err(error)
+            }
             Some(
                 SampleInspectionOutcome::Cancelled { .. }
                 | SampleInspectionOutcome::Superseded { .. },
@@ -1124,6 +1056,38 @@ fn decode_source(
         | SampleTermination::StepExhaustion
         | SampleTermination::NumericalFailure
         | SampleTermination::Uncertain => Ok(SampleInspectionSource::None),
+    }
+}
+
+fn decode_branch_key(
+    termination: SampleTermination,
+    words: [u32; 4],
+) -> Result<Option<SampleBranchKey>, SampleInspectionError> {
+    if termination == SampleTermination::NumericalFailure {
+        if words != [0; 4] {
+            return Err(SampleInspectionError::InvalidRecord {
+                field: "numerical-failure branch",
+            });
+        }
+        return Ok(None);
+    }
+
+    let initial_polar_side = match words[3] {
+        0 => SamplePolarSide::Negative,
+        1 => SamplePolarSide::Equatorial,
+        2 => SamplePolarSide::Positive,
+        unknown => return Err(SampleInspectionError::UnknownPolarSide(unknown)),
+    };
+    let branch_key = SampleBranchKey {
+        initial_polar_side,
+        radial_turnings: words[0],
+        equatorial_crossings: words[1],
+        azimuth_winding: i32::from_ne_bytes(words[2].to_ne_bytes()),
+    };
+    if termination == SampleTermination::Uncertain {
+        Ok(None)
+    } else {
+        Ok(Some(branch_key))
     }
 }
 
@@ -1357,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn record_decoder_preserves_branch_counts_beyond_test_capture_packing() {
+    fn record_decoder_preserves_determinate_branch_and_marks_indeterminate_unavailable() {
         let (observation, _) = canonical_surface_case();
         let gpu = crate::test_device::native_gpu();
         let (_trace, inspector) = TracePipeline::new_with_inspection(&gpu.device, &observation)
@@ -1396,10 +1360,44 @@ mod tests {
                 raw,
             )
             .expect("known protocol record decodes");
-        assert_eq!(inspection.branch_key().radial_turnings(), 0x1_0000);
-        assert_eq!(inspection.branch_key().equatorial_crossings(), u32::MAX);
-        assert_eq!(inspection.branch_key().azimuth_winding(), winding);
-        assert_eq!(inspection.branch_key().initial_polar_side().code(), 2);
+        let branch = inspection
+            .branch_key()
+            .expect("step exhaustion retains an exact committed branch");
+        assert_eq!(branch.radial_turnings(), 0x1_0000);
+        assert_eq!(branch.equatorial_crossings(), u32::MAX);
+        assert_eq!(branch.azimuth_winding(), winding);
+        assert_eq!(branch.initial_polar_side().code(), 2);
+
+        let failure = inspector
+            .decode_record(
+                InspectionContext {
+                    request_id,
+                    request,
+                    extent,
+                },
+                GpuInspectionRecord {
+                    metadata: [SampleTermination::NumericalFailure as u32, 1, 17, 0],
+                    branch_key: [0; 4],
+                    ..raw
+                },
+            )
+            .expect("known numerical-failure record decodes");
+        assert!(failure.branch_key().is_none());
+
+        let uncertain = inspector
+            .decode_record(
+                InspectionContext {
+                    request_id,
+                    request,
+                    extent,
+                },
+                GpuInspectionRecord {
+                    metadata: [SampleTermination::Uncertain as u32, 0, 2_048, 3],
+                    ..raw
+                },
+            )
+            .expect("known uncertain record decodes");
+        assert!(uncertain.branch_key().is_none());
     }
 
     fn canonical_surface_case() -> (Observation, ImageSample) {

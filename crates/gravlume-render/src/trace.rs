@@ -2,21 +2,15 @@ use gravlume_domain::{EquatorialEmissionModel, Observation, SceneRadiance};
 use wgpu::util::DeviceExt as _;
 
 mod input;
+#[cfg(test)]
 pub mod inspection;
 mod shader;
 
 pub use input::{GpuTraceInputError, INVARIANT_DRIFT_LIMIT, TraceUniforms};
-pub use inspection::{
-    SampleArithmeticDomain, SampleBranchKey, SampleEventCandidates, SampleEventDiagnostics,
-    SampleInspection, SampleInspectionError, SampleInspectionOutcome, SampleInspectionProfile,
-    SampleInspectionRequest, SampleInspectionRequestId, SampleInspectionSource,
-    SampleInvariantDrift, SampleNumericalDiagnostics, SampleNumericalFlags,
-    SampleObservationIdentity, SamplePolarSide, SampleProducer, SampleSceneValue,
-    SampleTermination,
-};
 pub use shader::shadow_coverage as shadow_coverage_shader_source;
 
 use input::TraceDispatch;
+#[cfg(test)]
 use inspection::SampleInspectionPipeline;
 
 use crate::{
@@ -327,7 +321,6 @@ fn trace_bind_group_layout_entries(
 }
 
 impl TracePipeline {
-    #[cfg(feature = "gpu-benchmarks")]
     pub(crate) fn new(
         device: &wgpu::Device,
         observation: &Observation,
@@ -337,6 +330,7 @@ impl TracePipeline {
         Ok(Self::from_compiled(device, compiled, spec))
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_inspection(
         device: &wgpu::Device,
         observation: &Observation,

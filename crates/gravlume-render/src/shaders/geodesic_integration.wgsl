@@ -6,6 +6,8 @@ fn failure_result(
     travel_time: f32,
     maximum_drift: vec4<f32>,
 ) -> GeometricSample {
+    // A numerical failure has no exact terminal branch. Protocol consumers must interpret the
+    // zero branch lane as unavailable rather than as a negative-side, zero-count branch.
     return GeometricSample(
         TERMINATION_NUMERICAL_FAILURE,
         flags,

@@ -6,7 +6,7 @@
 
 - equatorial surface 的 Source Anchor、Frequency Ratio、vacuum/homogeneous-slab transport 与固定 observer-frame spectral bands 已由 `surface-transport-v1` fixtures 闭合；exact branch key 与 ordinary-region footprint 另有独立 CPU/GPU 证据。这些只完成当前具名的 surface physical-transport slice，不等于完整观测仪器或完整 GRRT。
 - private sealed `TracePlan` 已按真实消费者选择 producer；surface plan 使用 invocation-local `GeometricSample` 和 full Kerr–Schild trace。引入这两个 seam、为 surface 禁用只回答 sky/capture 的 accelerator，均已是当前事实，不再列为后续任务。
-- production renderer 直接形成 scene-linear radiance，并已有单在途、按需的 GPU sample inspection 基础设施：它把请求绑定已发布 generation，以新的 full Kerr–Schild trace 返回 typed terminal、exact branch、source/$g$/time、plan-specific scene value 与 event/invariant diagnostics；scientific capture 仍只负责整帧最终 radiance。当前尚未闭合的是连续字段 corpus、第二质量政策和交互消费者，而不是单样本回读 seam。
+- production renderer 直接形成 scene-linear radiance；scientific capture 只负责整帧最终 radiance。crate 内已有 test-only 单样本 protocol/真实 GPU evidence，但没有 production inspection interface 或真实消费者；连续字段 corpus、第二质量政策与 consumer contract 仍未闭合。
 - 两个固定二像素 semantic-map 原型均未达到正确性与性能的共同门槛。当前没有可接纳的 production reconstruction、temporal reuse 或全帧 transfer map。
 
 这些事实的细节和适用域不得复制到本文件；以实现证据和[验证合同](validation.md)为准。
@@ -31,11 +31,11 @@ Kerr 解析加速是旁路优化：它可以先建立 CPU oracle，但不能绕�
 
 这是下一项 resolved work。目标不是持久化全分辨率 G-buffer，而是让用户和验证工具能够对选定像素或小区域取得与画面同代、同 profile 的结构化物理证据。
 
-当前已完成 production 单样本基础切片及 canonical bolometric、blackbody、analytic GPU 接纳；本节仍保持开放，直到 source edge、critical/higher-order branch、正负自旋连续字段 corpus 与质量政策达到下列退出条件。
+当前已完成 test-only 单样本 protocol 及 canonical bolometric、blackbody、analytic GPU 接纳；它不构成 production seam。本节仍保持开放，直到真实消费者、source edge、critical/higher-order branch、正负自旋连续字段 corpus 与质量政策达到下列退出条件。
 
 **交付：**
 
-- 有界、按需的 sample inspection，至少携带 observation/generation/profile identity、producer/domain tag、typed termination、exact branch key、source kind/anchor、frequency ratio、travel time、最终 scene-linear radiance 以及 event/invariant diagnostics；
+- 有界、按需的 sample inspection，至少携带 observation/generation/profile identity、producer/domain tag、typed termination、在 terminal 可证明时的 exact branch key、source kind/anchor、frequency ratio、travel time、最终 scene-linear radiance 以及 event/invariant diagnostics；`NumericalFailure` 与未经满足预算 refine 的 `Uncertain` 必须把 branch 显式标为 unavailable；
 - 同一不可变 observation 上的 CPU/GPU 结构化比较，不经过 tone map、display encoding 或 UI 合成；
 - 覆盖 ordinary surface、source edge、surface/capture boundary、不同 winding/higher-order branch、critical curve 两侧与正负 Kerr spin 的具名连续字段 corpus；
 - 把 interactive execution 与 science-quality policy 分开声明。两者对 accepted physical result 使用同一 observable budget；低成本路径只能收窄支持域、refine/fallback 或显式返回 uncertainty，不能另设更宽容差。
@@ -45,7 +45,7 @@ Kerr 解析加速是旁路优化：它可以先建立 CPU oracle，但不能绕�
 - inspection 的资源上限、读取范围、generation 一致性、取消和错误语义明确；增加 record sink 不静默改变 solver/step policy，另一次 science-quality trace 必须使用不同 request identity；默认画面不承担隐藏的全帧诊断存储；
 - discrete branch 与 continuous source anchor、$g$、travel time、radiance 分别通过独立 reference、high-precision case 或收敛证据；
 - 所有正式接纳域满足[验证合同](validation.md)中的 observable budget；不满足的域被收窄、分流到更高质量路径或保持 typed uncertainty，不放宽全局阈值；
-- `gpu-renderer.md` 能准确列出 production inspection 能力与仍未覆盖的域，且 fixture/profile 版本没有被原地改义。
+- `gpu-renderer.md` 能准确区分 test-only evidence、production inspection 能力与仍未覆盖的域，且 fixture/profile 版本没有被原地改义。
 
 **明确非目标：** full-frame persistent G-buffer、通用调试 UI、性能尚未证明的 active queue，以及在此工作中顺带实现 reconstruction。
 
