@@ -8,7 +8,7 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 
 “仪器”意味着：
 
-1. 像素能够追溯到 termination、source anchor、image branch、frequency ratio 与数值诊断；
+1. 用户能够按需对选定像素或有界区域追溯 termination、source anchor、image branch、frequency ratio 与数值诊断；这不要求默认画面常驻全分辨率 G-buffer；
 2. 交互路径能够与独立 reference 对同一不可变场景作结构化比较；
 3. 超出支持域、高误差或未验证的结果保持可见，不被黑色、平滑或漂亮画面掩盖。
 
@@ -17,7 +17,7 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 | 入口       | 用户目标                                  | 产品责任                                                                 |
 | ---------- | ----------------------------------------- | ------------------------------------------------------------------------ |
 | Explore    | 理解引力透镜、阴影、多像、频移和视角效应  | 安全的默认场景；明确区分物理量与外观控件                                 |
-| Instrument | 复现图像和字段                            | 保存场景、质量政策、revision、GPU profile、shader contract 与资产摘要    |
+| Instrument | 复现图像和字段                            | 保存场景、质量政策、revision、GPU profile、shader contract、资产摘要与有界 sample inspection artifact |
 | Research   | 比较 solver、精度、时空、偏振或 transport | 有界任务、取消、资源政策和独立 artifact；不共享 live viewport 的可变状态 |
 
 ## 产品边界
@@ -29,7 +29,7 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 - 独立 CPU `f64` reference 和 GPU WGSL `f32` trace；
 - typed physical terminal、数值 guard、step exhaustion、uncertainty 与 failure；
 - sky、薄表面、frequency ratio 与标量 emission/absorption；
-- scene-linear HDR、可审计 capture 与中性 display transform；
+- scene-linear HDR、tagged radiance capture、按需结构化 path inspection 与中性 display transform；
 - branch-aware classifier、选择性 refine 与不跨物理不连续面的重建；
 - resize、zero extent、suspend、surface/device loss、资产失败和无效输入的显式生命周期。
 
@@ -38,7 +38,7 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 ### 允许的扩展
 
 - Kerr 解析/半解析 terminal solver、Schwarzschild LUT 与 transfer map；
-- source-space differential、stationary accumulation、受约束 temporal correspondence 与动态分辨率；
+- transfer-map accelerator、stationary accumulation、受约束 temporal correspondence 与动态分辨率；
 - 可解释的薄盘模型、标量体介质和 retarded-time 数据合同；
 - Kerr 真空偏振与 Jacobi beam；reference 闭合后的 Stokes/Faraday 研究；
 - 明确标为永恒解析解理想化展示的 Analytic-Extension View。
@@ -80,4 +80,4 @@ Gravlume 是一个桌面黑洞观测仪器。用户定义时空、观察者、�
 
 ## 完成定义
 
-“有代码”“能出图”“通过物理与数值验证”“达到交互预算”“可发行”是五个独立状态。一项能力只有在数学、observable、GPU 协议、生命周期、性能、资产与声明边界同时通过时才能称为完成。最低发布条件见[可发行核心](roadmap.md#可发行核心)。
+“有代码”“能出图”“通过物理与数值验证”“达到交互预算”“可发行”是五个独立状态。一项能力只有在数学、observable、GPU 协议、生命周期、性能、资产与声明边界同时通过时才能称为完成。子能力可以在明确适用域内完成，例如 `surface-transport-v1`；不得把它外推为完整观测闭环或完整 GRRT。最低发布条件见[视觉、资产与发行闭环](roadmap.md#视觉资产与发行闭环)。

@@ -78,7 +78,9 @@ Reference 保留两个有意不同的接口：
   `ScientificTexel` slice 与 bolometric/final-spectral/LUT 模型误差 metadata，不经过 display 或
   UI。每个 texel 把 `Rgba16Float` binary16 words 与 alpha-tag classification 绑定在同一接口；只有
   `SurfaceRadiance` 可读取 physical RGB。Metadata 直接复用 validated `EquatorialSurface`，vacuum
-  由 `SurfaceTransport::Vacuum` 显式表达。
+  由 `SurfaceTransport::Vacuum` 显式表达。该接口导出最终 radiance 与 texel kind，不导出每像素
+  source anchor、branch、frequency ratio、travel time 或 event diagnostics；test-only record capture
+  也不构成 production inspection API。
 
 ## Renderer modules
 

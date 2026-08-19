@@ -71,7 +71,9 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
   orientation preview，zero 是 horizon，negative tag 是 trace failure。API 返回
   `ScientificTexel` slice；raw RGBA binary16 words、texel kind 与只对 `SurfaceRadiance` 开放的 RGB
   projection 不能发生索引错配。Metadata 原子携带 source/transport/channel，以及 bolometric
-  `2e-3`、final spectral `4e-3` 与 LUT 分项误差预算。
+  `2e-3`、final spectral `4e-3` 与 LUT 分项误差预算。它只导出最终 radiance、texel kind 与整次
+  capture 的解释 metadata，不导出逐像素 source anchor、branch、$g$、travel time 或 event/invariant
+  records；后者目前只存在于 small-extent test capture。
 - 该 source 只声称运动学 circular thin surface 与 diluted blackbody；不声称 orbit radial stability、Novikov–Thorne/Page–Thorne disk 或完整 GRRT。
 
 ### Publication 与 display
@@ -118,7 +120,7 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - RK4 使用固定 radius-scaled step policy；当前没有 `Uncertain` ray 的第二遍更高精度追迹。
 - CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
 - Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
-- Scientific capture 是内存 readback API，不是稳定的磁盘 container；它给出声明预算与 texel kind，不是每像素独立误差 certificate。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
+- Scientific capture 是最终 radiance 的内存 readback API，不是 path inspector 或稳定的磁盘 container；它给出声明预算与 texel kind，不是每像素独立误差 certificate。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。
