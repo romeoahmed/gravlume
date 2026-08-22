@@ -17,11 +17,6 @@ validated Observation
   -> optional tagged scientific readback before display
   -> linear scene/UI composition
   -> HDR/scRGB or SDR surface
-
-published generation + one sample request
-  -> fresh plan-matched full-KS trace
-  -> fixed structured record + asynchronous 112-byte readback
-  -> Completed / Cancelled / Superseded / Failed
 ```
 
 ## 已实现
@@ -84,10 +79,10 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 
 ### Test-only 有界 sample evidence
 
-- `cfg(test)` inspection module 接受 generation、pixel 与 subpixel，并以一个在途 slot 验证 `Busy`、取消、复用、代际淘汰与 typed protocol error。它携带 44 个 exact packed observation words、`GpuKsRk4V1` profile、`OnDemandFullKerrSchildRetrace` producer、`WgslF32` domain 与 surface channel model；production `Renderer` 不创建这套 pipeline、buffer 或 completion queue，也没有公开 inspection interface。
-- Request、storage result 与 staging readback 分别为 48、112、112 byte，合计 272 logical bytes，与 viewport extent 无关。Host/WGSL 都只用七个或三个 16-byte `vec4` lane，ABI version 与 request/generation echo 必须完全匹配。确定终止 record 的 branch 两个 count、signed winding 与 initial polar side 各占完整 `u32` lane；numerical failure 的全零 lane 是 unavailable sentinel，`Uncertain` 的 provisional counters 也不构成 exact branch，host 对两者都返回 `None`。
+- `cfg(test)` inspection module 的唯一 Interface 是对 validated `ImageSample` 执行一次同步、plan-matched full-KS retrace 并返回 typed record。它复用 `TracePipeline` 的 uniform、surface policy、blackbody LUT 与 channel model；production `Renderer` 不创建这套 pipeline 或 buffer，也没有公开 inspection interface。Generation、request identity、queue、取消和 supersession 都留给未来真实 consumer 定义，不在测试 helper 中预演。
+- Request、storage result 与 staging readback分别为 32、96、96 byte，合计 224 logical bytes，与 viewport extent 无关。Host/WGSL 分别只使用两个和六个 16-byte `vec4` lane；同一编译单元的短生命周期 record 不携带 version、producer/domain 或 host echo compatibility fields。确定终止的两个 branch count、signed winding 与 initial polar side 各占完整 `u32` lane；numerical failure 的全零 lane 是 unavailable sentinel，`Uncertain` 的 provisional counters 也不构成 exact branch，host 对两者都返回 `None`。
 - Test helper 提交一个 workgroup。Shader 保持与正确性基线相同的 `8×8` workgroup specialization，但只有 `local_invocation_index == 0` 进入 sequential RK/event solver，其余 lane 在建立 ray state 前返回，因此每个请求只重算一条 ray。`@workgroup_size(1)` 在当前 Metal 实测中丢失 travel/drift/branch 返回字段，已被反证；过程与恢复条件见[有界单样本审计](research/bounded-sample-inspection.md)。这不是 SIMD 性能声明。
-- Result 在 tone map、display encoding 与 UI 之前调用同一 plan-specific scene-value function；只有 Surface terminal 的 `SurfaceRadiance` 按 channel model 解释为物理输出，Escape RGB 明确是 orientation preview。Copy 后由 `map_buffer_on_submit` 安排回读，测试通过 `Device::poll` 驱动 callback，并在读取 mapped range 后 unmap。该证据验证候选 ABI 与 observable，不声明已发布 `RGBA16F` texel的 bitwise history，也不冻结 future consumer interface。
+- Result 在 tone map、display encoding 与 UI 之前调用同一 plan-specific scene-value function，并保存完整 f32 RGBA tag；只有 Surface terminal 的 `SurfaceRadiance` 按 channel model 解释为物理输出，Escape RGB 明确是 orientation preview。96-byte record copy 到 `MAP_READ | COPY_DST` staging 后，复用测试设备的 `map_async`、submission-bound `Device::poll(Wait)`、mapped-range read 与 `unmap`。该证据验证候选 layout 与 observable，不声明已发布 `RGBA16F` texel 的 bitwise history，也不冻结 future consumer interface。
 
 ### Publication 与 display
 
@@ -114,7 +109,7 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets  |
 | branch/footprint  | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
 | scientific export | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                |
-| sample inspection prototype | 48/112-byte ABI、request echo、确定终止的 `u32` branch、indeterminate unavailable、Busy/cancel/reuse/supersede；三种 plan 的真实 GPU record |
+| sample inspection prototype | 32/96-byte aligned layout、确定终止的 `u32` branch、indeterminate unavailable；三种 plan 的真实 GPU record |
 | dispatch          | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap      |
 | acceleration      | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback |
 | coverage          | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                |
@@ -135,7 +130,7 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
 - Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
 - Scientific capture 是最终 radiance 的整帧内存 readback API，不是稳定的磁盘 container；逐样本 path evidence 当前只有 test-only prototype，尚无 production artifact interface。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
-- Test-only inspection prototype 只覆盖一个 sample 与 presentation `GpuKsRk4V1` policy；没有真实 production consumer、bounded-region batch、inspection UI、trajectory/checkpoint、event bracket width、Jacobi/parity、独立 high-precision certificate 或第二 science-quality GPU policy。Canonical surface/analytic/blackbody 已接纳，但 source edge、critical curve 两侧、higher-order winding 与正负 spin 的连续字段 corpus 尚未闭合。
+- Test-only inspection prototype 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v1` policy；没有真实 production consumer、bounded-region batch、inspection UI、trajectory/checkpoint、event bracket width、Jacobi/parity、独立 high-precision certificate 或第二 science-quality GPU policy。Canonical surface/analytic/blackbody 已接纳，但 source edge、critical curve 两侧、higher-order winding 与正负 spin 的连续字段 corpus 尚未闭合。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。
