@@ -2,11 +2,7 @@ use gravlume_domain::{ImageSample, Observation};
 
 use crate::{
     extent::RenderExtent,
-    trace::{
-        TileRegion, TracePipeline,
-        inspection::{SampleInspection, SampleInspectionError, SampleInspectionRequest},
-        tile_grid, trace_record_plane_size,
-    },
+    trace::{SampleInspection, TileRegion, TracePipeline, tile_grid, trace_record_plane_size},
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
@@ -49,19 +45,17 @@ pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> T
     capture_region(gpu, observation, &trace, tile)
 }
 
-pub fn inspect_sample(
-    observation: &Observation,
-    request: SampleInspectionRequest,
-) -> Result<SampleInspection, SampleInspectionError> {
+pub fn inspect_sample(observation: &Observation, sample: ImageSample) -> SampleInspection {
+    let [pixel_x, pixel_y] = sample.pixel();
+    let [subpixel_x, subpixel_y] = sample.subpixel();
+    let sample = observation
+        .view()
+        .sample(pixel_x, pixel_y, subpixel_x, subpixel_y)
+        .expect("inspection sample belongs to the observation view");
     let gpu = crate::test_device::native_gpu();
-    let (_trace, mut inspection) = TracePipeline::new_with_inspection(&gpu.device, observation)
+    let trace = TracePipeline::new(&gpu.device, observation)
         .expect("observation packs for bounded GPU inspection");
-    inspection.inspect_blocking(
-        &gpu.device,
-        &gpu.queue,
-        observation_extent(observation),
-        request,
-    )
+    trace.inspect_sample(gpu, observation_extent(observation), sample)
 }
 
 pub fn capture_surface_footprint_sample(
@@ -310,11 +304,18 @@ fn finish_capture(
     let mapped = gpu.read_buffer(&readback, submission);
     let record_end = usize::try_from(record_bytes).expect("test trace size fits usize");
     let plane_size = usize::try_from(plane_size).expect("test record plane size fits usize");
-    let source_time = mapped[..plane_size].chunks_exact(RECORD_FIELD_SIZE);
-    let invariant_drift = mapped[plane_size..plane_size * 2].chunks_exact(RECORD_FIELD_SIZE);
-    let metadata = mapped[plane_size * 2..plane_size * 3].chunks_exact(RECORD_FIELD_SIZE);
-    let event = mapped[plane_size * 3..record_end].chunks_exact(RECORD_FIELD_SIZE);
+    let source_time = mapped[..plane_size].as_chunks::<RECORD_FIELD_SIZE>().0;
+    let invariant_drift = mapped[plane_size..plane_size * 2]
+        .as_chunks::<RECORD_FIELD_SIZE>()
+        .0;
+    let metadata = mapped[plane_size * 2..plane_size * 3]
+        .as_chunks::<RECORD_FIELD_SIZE>()
+        .0;
+    let event = mapped[plane_size * 3..record_end]
+        .as_chunks::<RECORD_FIELD_SIZE>()
+        .0;
     let records = source_time
+        .iter()
         .zip(invariant_drift)
         .zip(metadata)
         .zip(event)

@@ -15,10 +15,7 @@ use crate::{
         capture_surface_footprint_sample, capture_surface_transport_case, capture_trace,
         capture_trace_sample, inspect_sample,
     },
-    trace::{
-        TraceTermination, TraceUniforms,
-        inspection::{SampleInspectionRequest, SampleSceneValue},
-    },
+    trace::{SampleSceneValue, TraceTermination, TraceUniforms},
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
@@ -60,10 +57,8 @@ fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
             0x4000,
             "spectral surface radiance alpha tag"
         );
-        for (channel, expected) in pixel[..6].chunks_exact(2).zip(expected) {
-            let actual = decode_f16(u16::from_le_bytes(
-                channel.try_into().expect("half channel has two bytes"),
-            ));
+        for (channel, expected) in pixel[..6].as_chunks::<2>().0.iter().zip(expected) {
+            let actual = decode_f16(u16::from_le_bytes(*channel));
             assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
         }
     }
@@ -75,10 +70,7 @@ fn bounded_blackbody_inspection_returns_f32_scene_linear_bands() {
         .expect("repository transport fixture parses")
         .into_surface_observation()
         .expect("fixture is a surface observation");
-    let request =
-        SampleInspectionRequest::new(23, fixture.sample().pixel(), fixture.sample().subpixel());
-    let inspection =
-        inspect_sample(fixture.observation(), request).expect("blackbody inspection succeeds");
+    let inspection = inspect_sample(fixture.observation(), fixture.sample());
     let reference = ObservationTracer::baseline_v1()
         .trace(
             fixture
@@ -93,10 +85,10 @@ fn bounded_blackbody_inspection_returns_f32_scene_linear_bands() {
         .expect("reference resolves the three instrument bands");
 
     assert_eq!(
-        inspection.channel_model(),
+        inspection.channel_model,
         Some(crate::ScientificChannelModel::VisibleBoxcarV1)
     );
-    let SampleSceneValue::SurfaceRadiance(actual) = inspection.scene_value() else {
+    let SampleSceneValue::SurfaceRadiance(actual) = inspection.scene_value else {
         panic!("blackbody inspection must return surface radiance");
     };
     for (actual, expected) in actual.into_iter().zip(expected) {
@@ -434,10 +426,8 @@ fn low_temperature_diluted_spectrum_preserves_gpu_radiance() {
         "representable spectral radiance keeps its alpha tag",
     );
     let expected = [505.403_345_434_498_3, 1.380_353_634_125_891_2e-4];
-    for (channel, expected) in pixel[..4].chunks_exact(2).zip(expected) {
-        let actual = decode_f16(u16::from_le_bytes(
-            channel.try_into().expect("half channel has two bytes"),
-        ));
+    for (channel, expected) in pixel[..4].as_chunks::<2>().0.iter().zip(expected) {
+        let actual = decode_f16(u16::from_le_bytes(*channel));
         assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
     }
 }

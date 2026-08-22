@@ -20,12 +20,8 @@ use crate::{
         inspect_sample,
     },
     trace::{
-        INVARIANT_DRIFT_LIMIT, TraceTermination, TraceUniforms, UnknownTraceTermination,
-        inspection::{
-            SampleArithmeticDomain, SampleInspection, SampleInspectionProfile,
-            SampleInspectionRequest, SampleInspectionSource, SampleProducer, SampleSceneValue,
-            SampleTermination,
-        },
+        INVARIANT_DRIFT_LIMIT, SampleInspectionSource, SamplePolarSide, SampleSceneValue,
+        TraceTermination, TraceUniforms, UnknownTraceTermination,
     },
 };
 
@@ -133,10 +129,8 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
         0x4000,
         "surface radiance alpha tag"
     );
-    for channel in pixel[..6].chunks_exact(2) {
-        let actual = decode_f16(u16::from_le_bytes(
-            channel.try_into().expect("half channel has two bytes"),
-        ));
+    for channel in pixel[..6].as_chunks::<2>().0 {
+        let actual = decode_f16(u16::from_le_bytes(*channel));
         assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 2.0e-3 * expected);
     }
 }
@@ -151,8 +145,7 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         .expect("fixture is a surface observation");
     let observation = fixture.observation();
     let sample = fixture.sample();
-    let request = SampleInspectionRequest::new(17, sample.pixel(), sample.subpixel());
-    let inspection = inspect_sample(observation, request).expect("bounded inspection succeeds");
+    let inspection = inspect_sample(observation, sample);
     let reference = ObservationTracer::baseline_v1()
         .trace(
             fixture
@@ -165,13 +158,17 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         .surface_observable()
         .expect("canonical trace terminates on the surface");
 
-    assert_canonical_inspection_provenance(&inspection, request);
+    assert_eq!(
+        inspection.channel_model,
+        Some(crate::ScientificChannelModel::BolometricRepeated)
+    );
+    assert_eq!(inspection.termination, TraceTermination::EquatorialSurface);
 
     let SampleInspectionSource::EquatorialSurface {
         radius_over_m,
         azimuth_radians,
         frequency_ratio,
-    } = inspection.source()
+    } = inspection.source
     else {
         panic!("canonical inspection must expose an equatorial source anchor");
     };
@@ -192,25 +189,25 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         epsilon = 2.0e-3 * reference_observable.frequency_ratio().value()
     );
     assert_abs_diff_eq!(
-        f64::from(inspection.travel_time_over_m()),
+        f64::from(inspection.travel_time_over_m),
         reference.travel_time_m(),
         epsilon = 1.0e-3
     );
 
     let branch = inspection
-        .branch_key()
+        .branch_key
         .expect("accepted surface inspection has an exact branch");
     let reference_branch = reference.branch_key();
-    assert_eq!(branch.radial_turnings(), reference_branch.radial_turnings());
+    assert_eq!(branch.radial_turnings, reference_branch.radial_turnings());
     assert_eq!(
-        branch.equatorial_crossings(),
+        branch.equatorial_crossings,
         reference_branch.equatorial_crossings()
     );
-    assert_eq!(branch.azimuth_winding(), reference_branch.azimuth_winding());
+    assert_eq!(branch.azimuth_winding, reference_branch.azimuth_winding());
     assert_eq!(reference_branch.initial_polar_side(), PolarSide::Positive);
-    assert_eq!(branch.initial_polar_side().code(), 2);
+    assert_eq!(branch.initial_polar_side, SamplePolarSide::Positive);
 
-    let SampleSceneValue::SurfaceRadiance(rgb) = inspection.scene_value() else {
+    let SampleSceneValue::SurfaceRadiance(rgb) = inspection.scene_value else {
         panic!("canonical inspection must expose final scene-linear surface radiance");
     };
     let expected = reference_observable.observed_bolometric_intensity();
@@ -218,70 +215,41 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         assert_abs_diff_eq!(f64::from(channel), expected, epsilon = 2.0e-3 * expected);
     }
 
-    let event = inspection.event_diagnostics();
-    assert!(event.candidates().equatorial_surface());
-    assert!(!event.ambiguous());
-    assert!(event.residual().abs() <= 5.0e-3);
-    let numerical = inspection.numerical_diagnostics();
-    assert_eq!(numerical.flags().bits(), 0);
-    assert!(numerical.steps() > 0);
+    assert_ne!(inspection.event_candidates & EVENT_CANDIDATE_SURFACE, 0);
+    assert_eq!(inspection.event_candidates.count_ones(), 1);
+    assert!(inspection.event_residual.abs() <= 5.0e-3);
+    assert_eq!(inspection.numerical_flags, 0);
+    assert!(inspection.steps > 0);
     assert!(
-        numerical
-            .maximum_invariant_drift()
-            .as_array()
+        inspection
+            .maximum_invariant_drift
             .into_iter()
             .all(|drift| drift <= INVARIANT_DRIFT_LIMIT)
-    );
-}
-
-fn assert_canonical_inspection_provenance(
-    inspection: &SampleInspection,
-    request: SampleInspectionRequest,
-) {
-    assert_eq!(inspection.request(), request);
-    assert_eq!(inspection.extent(), [1280, 720]);
-    assert_eq!(inspection.observation_identity().words().len(), 44);
-    assert_eq!(
-        SampleInspection::profile(),
-        SampleInspectionProfile::GpuKsRk4V1
-    );
-    assert_eq!(
-        SampleInspection::producer(),
-        SampleProducer::OnDemandFullKerrSchildRetrace
-    );
-    assert_eq!(
-        inspection.channel_model(),
-        Some(crate::ScientificChannelModel::BolometricRepeated)
-    );
-    assert_eq!(
-        SampleInspection::arithmetic_domain(),
-        SampleArithmeticDomain::WgslF32
-    );
-    assert_eq!(
-        inspection.termination(),
-        SampleTermination::EquatorialSurface
     );
 }
 
 #[test]
 fn bounded_sample_inspection_keeps_analytic_escape_semantics_non_spectral() {
     let observation = default_observation(64, 32);
-    let request = SampleInspectionRequest::new(3, [0, 0], [0.25, 0.75]);
-    let inspection = inspect_sample(&observation, request).expect("analytic inspection succeeds");
+    let sample = observation
+        .view()
+        .sample(0, 0, 0.25, 0.75)
+        .expect("analytic sample belongs to the view");
+    let inspection = inspect_sample(&observation, sample);
 
-    assert_eq!(inspection.channel_model(), None);
-    assert_eq!(inspection.termination(), SampleTermination::Escape);
+    assert_eq!(inspection.channel_model, None);
+    assert_eq!(inspection.termination, TraceTermination::Escape);
     assert!(matches!(
-        inspection.source(),
+        inspection.source,
         SampleInspectionSource::AnalyticEscape { unit_direction }
             if unit_direction.into_iter().all(f32::is_finite)
     ));
     assert!(matches!(
-        inspection.scene_value(),
+        inspection.scene_value,
         SampleSceneValue::AnalyticEscapePreview(rgb)
             if rgb.into_iter().all(f32::is_finite)
     ));
-    assert!(inspection.travel_time_over_m() > 0.0);
+    assert!(inspection.travel_time_over_m > 0.0);
 }
 
 proptest! {

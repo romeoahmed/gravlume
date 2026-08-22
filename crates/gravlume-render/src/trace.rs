@@ -3,15 +3,16 @@ use wgpu::util::DeviceExt as _;
 
 mod input;
 #[cfg(test)]
-pub mod inspection;
+mod inspection;
 mod shader;
 
 pub use input::{GpuTraceInputError, INVARIANT_DRIFT_LIMIT, TraceUniforms};
 pub use shader::shadow_coverage as shadow_coverage_shader_source;
 
-use input::TraceDispatch;
 #[cfg(test)]
-use inspection::SampleInspectionPipeline;
+pub use inspection::{SampleInspection, SampleInspectionSource, SamplePolarSide, SampleSceneValue};
+
+use input::TraceDispatch;
 
 use crate::{
     extent::RenderExtent,
@@ -328,20 +329,6 @@ impl TracePipeline {
         let compiled = CompiledTraceInput::compile(observation)?;
         let spec = compiled.plan.presentation_spec();
         Ok(Self::from_compiled(device, compiled, spec))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new_with_inspection(
-        device: &wgpu::Device,
-        observation: &Observation,
-    ) -> Result<(Self, SampleInspectionPipeline), GpuTraceInputError> {
-        let compiled = CompiledTraceInput::compile(observation)?;
-        let observation_identity =
-            inspection::SampleObservationIdentity::from_uniforms(compiled.uniforms);
-        let spec = compiled.plan.presentation_spec();
-        let trace = Self::from_compiled(device, compiled, spec);
-        let inspection = SampleInspectionPipeline::new(device, &trace, observation_identity);
-        Ok((trace, inspection))
     }
 
     #[cfg(test)]
