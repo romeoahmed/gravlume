@@ -217,7 +217,7 @@ fn footprint_metrics(jacobian: [[f64; 2]; 2]) -> Option<FootprintMetrics> {
         .mul_add(squared_norm, -4.0 * determinant * determinant)
         .max(0.0)
         .sqrt();
-    let major = (0.5 * (squared_norm + discriminant)).sqrt();
+    let major = squared_norm.midpoint(discriminant).sqrt();
     // `sqrt((norm² - discriminant) / 2)` loses the minor axis near a critical curve.
     // For a 2x2 matrix, sigma_major * sigma_minor = |determinant|.
     let minor = if major == 0.0 {

@@ -60,7 +60,9 @@ impl TimingSample {
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
         let elapsed_ticks = ticks
             .as_slice()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| pair[1].saturating_sub(pair[0]))
             .fold(0, u64::saturating_add);
         Self {
@@ -74,14 +76,17 @@ impl TimingSample {
 }
 
 fn decode_query_ticks(bytes: &[u8]) -> Option<QueryTicks> {
-    let count = bytes.len() / size_of::<u64>();
-    if !matches!(count, 2 | 4) || bytes.len() != count * size_of::<u64>() {
+    let (encoded_ticks, []) = bytes.as_chunks::<{ size_of::<u64>() }>() else {
+        return None;
+    };
+    let count = encoded_ticks.len();
+    if !matches!(count, 2 | 4) {
         return None;
     }
 
     let mut values = [0; MAXIMUM_QUERY_COUNT];
-    for (tick, encoded) in values.iter_mut().zip(bytes.chunks_exact(8)) {
-        *tick = u64::from_le_bytes(encoded.try_into().ok()?);
+    for (tick, encoded) in values.iter_mut().zip(encoded_ticks) {
+        *tick = u64::from_le_bytes(*encoded);
     }
     Some(QueryTicks { values, count })
 }

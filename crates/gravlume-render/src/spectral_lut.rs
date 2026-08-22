@@ -113,7 +113,7 @@ fn log_high_frequency_planck_tail(x: f64) -> f64 {
 }
 
 fn integrate_gauss_legendre_segment(lower: f64, upper: f64) -> f64 {
-    let midpoint = 0.5 * (lower + upper);
+    let midpoint = lower.midpoint(upper);
     let half_width = 0.5 * (upper - lower);
     let weighted_sum = GAUSS_NODES
         .into_iter()

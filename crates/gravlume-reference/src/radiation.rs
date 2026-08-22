@@ -118,7 +118,7 @@ fn integrate_planck_kernel(lower: f64, upper: f64) -> f64 {
             (left < right).then_some((left, right))
         })
         .map(|(left, right)| {
-            let midpoint = 0.5 * (left + right);
+            let midpoint = left.midpoint(right);
             let whole = simpson(
                 left,
                 right,
@@ -147,9 +147,9 @@ fn log_high_frequency_planck_tail(x: f64) -> f64 {
 }
 
 fn adaptive_simpson(left: f64, right: f64, whole: f64, tolerance: f64, depth: u32) -> f64 {
-    let midpoint = 0.5 * (left + right);
-    let left_midpoint = 0.5 * (left + midpoint);
-    let right_midpoint = 0.5 * (midpoint + right);
+    let midpoint = left.midpoint(right);
+    let left_midpoint = left.midpoint(midpoint);
+    let right_midpoint = midpoint.midpoint(right);
     let left_integral = simpson(
         left,
         midpoint,

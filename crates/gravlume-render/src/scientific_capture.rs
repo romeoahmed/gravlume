@@ -295,7 +295,12 @@ pub fn capture_texture(
         .ok_or(ScientificCaptureError::LayoutOverflow)?;
     let mut texels = Vec::with_capacity(texel_capacity);
     for row in mapped.chunks_exact(padded) {
-        for texel in row[..unpadded].chunks_exact(RGBA16_FLOAT_BYTES_PER_PIXEL as usize) {
+        let (row_texels, []) =
+            row[..unpadded].as_chunks::<{ RGBA16_FLOAT_BYTES_PER_PIXEL as usize }>()
+        else {
+            return Err(ScientificCaptureError::LayoutOverflow);
+        };
+        for texel in row_texels {
             let rgba16_float_bits = std::array::from_fn(|channel| {
                 let offset = channel * size_of::<u16>();
                 u16::from_le_bytes([texel[offset], texel[offset + 1]])

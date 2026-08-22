@@ -680,7 +680,7 @@ impl KerrNewmanSpacetime {
         }
         let root = discriminant.sqrt();
         let radius_squared = if b >= 0.0 {
-            0.5 * (b + root)
+            b.midpoint(root)
         } else {
             let denominator = root - b;
             if denominator <= 0.0 || !denominator.is_finite() {

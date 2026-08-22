@@ -252,7 +252,9 @@ fn compare_surface_observables(
         baseline_anchor.azimuth_rad(),
         candidate_anchor.azimuth_rad(),
     );
-    let mean_radius = 0.5 * (baseline_anchor.radius_m() + candidate_anchor.radius_m());
+    let mean_radius = baseline_anchor
+        .radius_m()
+        .midpoint(candidate_anchor.radius_m());
     let source_anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
     if source_anchor_distance_m > 2.0e-9 {
         issues.push(ComparisonIssue::SourceAnchorBudgetExceeded);
