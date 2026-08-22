@@ -653,7 +653,7 @@ fn localize_dense_root(
         if (upper - lower) * step_m.abs() <= affine_tolerance_m {
             break;
         }
-        let middle = 0.5 * (lower + upper);
+        let middle = lower.midpoint(upper);
         let value = value_at(state_from_dense(dense, middle)?)?;
         if same_sign(lower_value, value) {
             lower = middle;

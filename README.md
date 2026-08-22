@@ -20,7 +20,7 @@ blackbody/boxcar 与 homogeneous scalar slab 也有独立证据，但都不代�
 
 ## 快速开始
 
-需要 Rust 1.97，以及满足项目 [GPU 基线](docs/platform.md#gpu-基线)的原生 Metal 或 Vulkan adapter。
+需要 [`Cargo.toml`](Cargo.toml) 声明的 Rust toolchain，以及满足项目 [GPU 基线](docs/platform.md#gpu-基线)的原生 Metal 或 Vulkan adapter。
 
 ```bash
 cargo run --locked

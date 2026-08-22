@@ -44,7 +44,8 @@ Use `GRAVLUME_SMOKE_ONCE=1 cargo run --locked` for native lifecycle, surface, pu
 
 ## Rust and WGSL
 
-- Use Rust 1.97, edition 2024, rustfmt defaults, and workspace lints.
+- Use the Rust version and edition declared by the workspace `Cargo.toml`, rustfmt defaults, and
+  workspace lints.
 - Fix warnings at the root cause. Do not use `#[allow]`; use `#[expect(..., reason = "...")]` only for a verified lint condition.
 - Avoid `unwrap` and `expect` in production. Preserve typed errors and their source chains.
 - Keep domain types private and validated; use explicit `#[repr(C)]` DTOs at GPU boundaries.
