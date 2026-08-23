@@ -30,7 +30,7 @@ validated Observation
   intensity、slab emission 或 transmittance 下溢为零/落入 subnormal、source 未严格落在 numerical
   escape boundary 内或 blackbody radial temperature 超出 LUT，返回 `GpuTraceInputError`。
 - Shader 初始 coordinate time 固定为零；GPU 累计相对 coordinate-time duration，因此共同平移 observer/target 时间原点不会改变 observable。Host 在 binary32 转换前判定 initial polar side，并把离散值写入 `observer.x`；该 lane 不再伪装成未使用的 coordinate time。
-- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane，当前 uniform 为 11 个连续 16-byte block、共 176 byte；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Blackbody plan 独占 binding 8 的 4097-entry read-only `array<vec4<f32>>`；WGSL array stride 为 16 byte。默认画面只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch；extent-scaled record planes 与定长单样本 record 都只在 test capture 创建。
+- `TraceUniforms` 与 dispatch DTO 使用自有 `#[repr(C)]` 标量数组。Event thresholds 填充既有 `vec4` lane；四类 event 以固定 `vec4<f32>` fraction 槽位表达，termination 由槽位映射。Blackbody plan 独占 versioned read-only spectral LUT。精确 size、offset、stride 与 binding 由 host/shader source 和 ABI tests 定义；默认画面只包含实际运行需要的 uniform、dispatch 与 plan-specific scratch，extent-scaled record planes 和定长单样本 record 都只在 test capture 创建。
 - Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。可证明的 determinate sample 另携带 initial polar side、radial/equatorial crossing counts 与 signed azimuth winding 的 exact branch key；numerical failure 与 `Uncertain` 都不输出确定 branch。
 - Renderer 只匹配一次 `SceneRadiance`，同一 compiled input 同时生成 `TraceUniforms`、private sealed
   `TracePlan` 与 scientific metadata；不存在三个消费者各自解释 Observation 的漂移。WGSL pipeline
@@ -79,16 +79,14 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 
 ### Test-only 有界 sample evidence
 
-- `cfg(test)` inspection module 的唯一 Interface 是对 validated `ImageSample` 执行一次同步、plan-matched full-KS retrace 并返回 typed record。它复用 `TracePipeline` 的 uniform、surface policy、blackbody LUT 与 channel model；production `Renderer` 不创建这套 pipeline 或 buffer，也没有公开 inspection interface。Generation、request identity、queue、取消和 supersession 都留给未来真实 consumer 定义，不在测试 helper 中预演。
-- Request、storage result 与 staging readback分别为 32、96、96 byte，合计 224 logical bytes，与 viewport extent 无关。Host/WGSL 分别只使用两个和六个 16-byte `vec4` lane；同一编译单元的短生命周期 record 不携带 version、producer/domain 或 host echo compatibility fields。确定终止的两个 branch count、signed winding 与 initial polar side 各占完整 `u32` lane；numerical failure 的全零 lane 是 unavailable sentinel，`Uncertain` 的 provisional counters 也不构成 exact branch，host 对两者都返回 `None`。
-- Test helper 提交一个 workgroup。Shader 保持与正确性基线相同的 `8×8` workgroup specialization，但只有 `local_invocation_index == 0` 进入 sequential RK/event solver，其余 lane 在建立 ray state 前返回，因此每个请求只重算一条 ray。`@workgroup_size(1)` 在当前 Metal 实测中丢失 travel/drift/branch 返回字段，已被反证；过程与恢复条件见[有界单样本审计](research/bounded-sample-inspection.md)。这不是 SIMD 性能声明。
-- Result 在 tone map、display encoding 与 UI 之前调用同一 plan-specific scene-value function，并保存完整 f32 RGBA tag；只有 Surface terminal 的 `SurfaceRadiance` 按 channel model 解释为物理输出，Escape RGB 明确是 orientation preview。96-byte record copy 到 `MAP_READ | COPY_DST` staging 后，复用测试设备的 `map_async`、submission-bound `Device::poll(Wait)`、mapped-range read 与 `unmap`。该证据验证候选 layout 与 observable，不声明已发布 `RGBA16F` texel 的 bitwise history，也不冻结 future consumer interface。
+- `cfg(test)` inspection module 对 validated `ImageSample` 执行一次同步、plan-matched full-KS retrace，并在 tone map、display encoding 与 UI 之前返回 typed record。它复用 production uniform、surface policy、blackbody LUT、channel model 与 plan-specific scene-value function；production `Renderer` 不创建这套 pipeline 或 buffer，也没有公开 inspection interface。Generation、request identity、queue、取消和 supersession 留给未来真实 consumer 定义。
+- Host 只为可证明的 determinate terminal 返回 exact branch；`NumericalFailure` 与 `Uncertain` 都返回 unavailable。三种 plan 的真实 GPU tests 覆盖固定 request/result ABI、source、travel time、scene value、event/invariant diagnostics 和非法组合拒绝。精确布局、资源、dispatch/readback 以及被拒绝的 `@workgroup_size(1)` 候选只在[有界单样本审计](research/bounded-sample-inspection.md)维护。
 
 ### Publication 与 display
 
 - 每个 extent generation 创建隐藏 candidate。Compute batch 不 acquire surface、不运行 egui、不
   present；timestamp resolve/copy 与 mapping 由
-  [`map_buffer_on_submit`](https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit)
+  [`map_buffer_on_submit`](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit)
   绑定到同一 encoder，callback completion 自带 submission generation；匹配当前 generation 后 candidate
   view 才成为 published scene。
 - Resize 继续显示上一张完整 scene，并按 aspect-fit 处理比例变化；没有整图 publication copy、低分辨率阶段或 tile 扫描。
@@ -143,5 +141,5 @@ Batching 只控制 watchdog 与事件循环响应；真正减少工作的是 out
 
 - [WGSL specification](https://www.w3.org/TR/WGSL/)：floating-point、layout、built-ins 与 execution semantics；
 - [Bozzola, Chan & Paschalidis 2023](https://doi.org/10.1103/PhysRevD.108.084004)：backward ray 的 horizon-penetrating chart 选择；
-- [wgpu 30 documentation](https://docs.rs/wgpu/30.0.0/wgpu/)：limits、bindings、dispatch、timestamp、surface 与 HDR color spaces；
+- [wgpu 30 documentation](https://docs.rs/wgpu/30.0.1/wgpu/)：limits、bindings、dispatch、timestamp、surface 与 HDR color spaces；
 - [Rust numeric casts](https://doc.rust-lang.org/reference/expressions/operator-expr.html#numeric-cast)、[type layout](https://doc.rust-lang.org/stable/reference/type-layout.html)与 [`bytemuck::Pod`](https://docs.rs/bytemuck/1.25.2/bytemuck/trait.Pod.html)：host narrowing 与 byte contract。

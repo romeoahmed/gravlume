@@ -55,7 +55,7 @@ macOS 是当前已执行平台；Windows 与 Wayland 的代码可编译和静态
 
 ## 官方依据
 
-- [wgpu 30 HDR surface guide](https://docs.rs/wgpu/30.0.0/wgpu/#surface-color-spaces-and-hdr-output) 与 [`SurfaceCapabilities`](https://docs.rs/wgpu/30.0.0/wgpu/struct.SurfaceCapabilities.html)；
+- [wgpu 30 HDR surface guide](https://docs.rs/wgpu/30.0.1/wgpu/#surface-color-spaces-and-hdr-output) 与 [`SurfaceCapabilities`](https://docs.rs/wgpu/30.0.1/wgpu/struct.SurfaceCapabilities.html)；
 - [Apple custom tone mapping](https://developer.apple.com/documentation/metal/performing-your-own-tone-mapping)；
 - [Microsoft Advanced Color/HDR](https://learn.microsoft.com/en-us/windows/win32/direct3darticles/high-dynamic-range) 与 [`GetForWindow`](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.display.interop/nf-windows-graphics-display-interop-idisplayinformationstaticsinterop-getforwindow)；
 - [Wayland color-management-v1](https://wayland.app/protocols/color-management-v1)；
