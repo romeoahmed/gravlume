@@ -342,18 +342,13 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        let previous_generation = renderer.generation();
-        match renderer.resize(width, height) {
+        let result = renderer.resize(width, height);
+        let current_generation = renderer.generation();
+        match result {
             Ok(()) => {
                 if width != 0 && height != 0 {
-                    let generation = renderer.generation();
-                    // A coalesced resize can settle back on the already-published extent without
-                    // producing another publication event.
-                    if generation == previous_generation
-                        && self.published_generation == Some(generation)
-                    {
-                        self.sample_inspection.on_unchanged_viewport();
-                    }
+                    self.sample_inspection
+                        .on_viewport_settled(current_generation, self.published_generation);
                     self.last_resize_event = None;
                     self.request_redraw();
                 }
@@ -368,8 +363,15 @@ impl DesktopApp {
                 }
                 if is_fatal {
                     self.fail(event_loop, error.into());
-                } else if report_changed {
-                    self.request_redraw();
+                } else {
+                    // A nonfatal transactional rejection retains the installed generation. It can
+                    // therefore settle a viewport wait without producing a publication event.
+                    let inspection_changed = self
+                        .sample_inspection
+                        .on_viewport_settled(current_generation, self.published_generation);
+                    if report_changed || inspection_changed {
+                        self.request_redraw();
+                    }
                 }
             }
         }
