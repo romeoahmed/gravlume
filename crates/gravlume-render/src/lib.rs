@@ -8,7 +8,6 @@ mod error;
 mod extent;
 mod renderer;
 mod scientific_capture;
-mod shadow_coverage;
 mod spectral_lut;
 mod timing;
 mod trace;

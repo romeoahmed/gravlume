@@ -5,9 +5,9 @@ mod input;
 #[cfg(test)]
 mod inspection;
 mod shader;
+mod shadow_coverage;
 
-pub use input::{GpuTraceInputError, INVARIANT_DRIFT_LIMIT, TraceUniforms};
-pub use shader::shadow_coverage as shadow_coverage_shader_source;
+pub use input::{GpuTraceInputError, TraceUniforms};
 
 #[cfg(test)]
 pub use inspection::{SampleInspection, SampleInspectionSource, SamplePolarSide, SampleSceneValue};
@@ -16,10 +16,10 @@ use input::TraceDispatch;
 
 use crate::{
     extent::RenderExtent,
-    scientific_capture::{ScientificCaptureMetadata, ScientificChannelModel},
-    shadow_coverage::{ShadowCoverage, ShadowTarget},
+    scientific_capture::ScientificCaptureMetadata,
     spectral_lut::{BLACKBODY_LUT_BYTE_SIZE, blackbody_log2_fraction_lut},
 };
+use shadow_coverage::{ShadowCoverage, ShadowTarget};
 
 const TRACE_RECORD_PLANE_ELEMENT_SIZE: u64 = 16;
 const TRACE_WORKGROUP_AXIS: u32 = 8;
@@ -54,25 +54,23 @@ struct CompiledTraceInput {
 impl CompiledTraceInput {
     fn compile(observation: &Observation) -> Result<Self, GpuTraceInputError> {
         let scene = observation.scene();
-        let (surface, plan, channels) = match scene.radiance() {
-            SceneRadiance::AnalyticSky => (None, TracePlan::AcceleratedSky, None),
+        let (surface, plan) = match scene.radiance() {
+            SceneRadiance::AnalyticSky => (None, TracePlan::AcceleratedSky),
             SceneRadiance::EquatorialSurface(surface) => {
-                let (plan, channels) = match surface.emitter().emission_model() {
-                    EquatorialEmissionModel::InverseCubeBolometricV1 => (
-                        TracePlan::EquatorialBolometricSurface,
-                        ScientificChannelModel::BolometricRepeated,
-                    ),
-                    EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => (
-                        TracePlan::EquatorialBlackbodySurface,
-                        ScientificChannelModel::VisibleBoxcarV1,
-                    ),
+                let plan = match surface.emitter().emission_model() {
+                    EquatorialEmissionModel::InverseCubeBolometricV1 => {
+                        TracePlan::EquatorialBolometricSurface
+                    }
+                    EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
+                        TracePlan::EquatorialBlackbodySurface
+                    }
                 };
-                (Some(surface), plan, Some(channels))
+                (Some(surface), plan)
             }
         };
-        let uniforms = TraceUniforms::from_observation_with_surface(observation, surface)?;
-        let scientific_capture_metadata = surface.zip(channels).map(|(surface, channels)| {
-            ScientificCaptureMetadata::for_surface(scene.spacetime().mass_m(), surface, channels)
+        let uniforms = TraceUniforms::from_observation(observation)?;
+        let scientific_capture_metadata = surface.map(|surface| {
+            ScientificCaptureMetadata::for_surface(scene.spacetime().mass_m(), surface)
         });
         Ok(Self {
             uniforms,
@@ -115,7 +113,6 @@ struct TracePipelineSpec {
     entry_point: &'static str,
     escape_map_node_entry_point: Option<&'static str>,
     has_shadow_refinement: bool,
-    plan: TracePlan,
     target_kind: TraceTargetKind,
 }
 
@@ -143,85 +140,76 @@ impl<'a> TraceTimestampWrites<'a> {
 
 impl TracePlan {
     fn presentation_spec(self) -> TracePipelineSpec {
-        match self {
-            Self::AcceleratedSky => TracePipelineSpec {
-                shader_source: shader::accelerated_scene(),
-                entry_point: "trace_scene_accelerated",
-                escape_map_node_entry_point: Some("trace_escape_map_nodes"),
-                has_shadow_refinement: true,
-                plan: self,
-                target_kind: TraceTargetKind::Presentation,
-            },
-            Self::EquatorialBolometricSurface => TracePipelineSpec {
-                shader_source: shader::bolometric_surface_scene(),
-                entry_point: "trace_bolometric_surface_scene",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Presentation,
-            },
-            Self::EquatorialBlackbodySurface => TracePipelineSpec {
-                shader_source: shader::blackbody_surface_scene(),
-                entry_point: "trace_blackbody_surface_scene",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Presentation,
-            },
+        let (shader_source, entry_point, escape_map_node_entry_point, has_shadow_refinement) =
+            match self {
+                Self::AcceleratedSky => (
+                    shader::accelerated_scene(),
+                    "trace_scene_accelerated",
+                    Some("trace_escape_map_nodes"),
+                    true,
+                ),
+                Self::EquatorialBolometricSurface => (
+                    shader::bolometric_surface_scene(),
+                    "trace_bolometric_surface_scene",
+                    None,
+                    false,
+                ),
+                Self::EquatorialBlackbodySurface => (
+                    shader::blackbody_surface_scene(),
+                    "trace_blackbody_surface_scene",
+                    None,
+                    false,
+                ),
+            };
+        TracePipelineSpec {
+            shader_source,
+            entry_point,
+            escape_map_node_entry_point,
+            has_shadow_refinement,
+            target_kind: TraceTargetKind::Presentation,
         }
     }
 
     #[cfg(test)]
     fn capture_spec(self) -> TracePipelineSpec {
-        match self {
-            Self::AcceleratedSky => TracePipelineSpec {
-                shader_source: shader::trace_capture(),
-                entry_point: "capture_trace_scene",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: true,
-                plan: self,
-                target_kind: TraceTargetKind::Diagnostic,
-            },
-            Self::EquatorialBolometricSurface => TracePipelineSpec {
-                shader_source: shader::bolometric_surface_capture(),
-                entry_point: "capture_surface_trace_scene",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Diagnostic,
-            },
-            Self::EquatorialBlackbodySurface => TracePipelineSpec {
-                shader_source: shader::blackbody_surface_capture(),
-                entry_point: "capture_surface_trace_scene",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Diagnostic,
-            },
+        let (shader_source, entry_point, has_shadow_refinement) = match self {
+            Self::AcceleratedSky => (shader::trace_capture(), "capture_trace_scene", true),
+            Self::EquatorialBolometricSurface => (
+                shader::bolometric_surface_capture(),
+                "capture_surface_trace_scene",
+                false,
+            ),
+            Self::EquatorialBlackbodySurface => (
+                shader::blackbody_surface_capture(),
+                "capture_surface_trace_scene",
+                false,
+            ),
+        };
+        TracePipelineSpec {
+            shader_source,
+            entry_point,
+            escape_map_node_entry_point: None,
+            has_shadow_refinement,
+            target_kind: TraceTargetKind::Diagnostic,
         }
     }
 
     #[cfg(test)]
     fn footprint_capture_spec(self) -> Result<TracePipelineSpec, GpuTraceInputError> {
-        match self {
-            Self::AcceleratedSky => Err(GpuTraceInputError::SurfaceFootprintRequiresSurface),
-            Self::EquatorialBolometricSurface => Ok(TracePipelineSpec {
-                shader_source: shader::bolometric_surface_footprint_capture(),
-                entry_point: "capture_surface_footprint",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Diagnostic,
-            }),
-            Self::EquatorialBlackbodySurface => Ok(TracePipelineSpec {
-                shader_source: shader::blackbody_surface_footprint_capture(),
-                entry_point: "capture_surface_footprint",
-                escape_map_node_entry_point: None,
-                has_shadow_refinement: false,
-                plan: self,
-                target_kind: TraceTargetKind::Diagnostic,
-            }),
-        }
+        let shader_source = match self {
+            Self::AcceleratedSky => {
+                return Err(GpuTraceInputError::SurfaceFootprintRequiresSurface);
+            }
+            Self::EquatorialBolometricSurface => shader::bolometric_surface_footprint_capture(),
+            Self::EquatorialBlackbodySurface => shader::blackbody_surface_footprint_capture(),
+        };
+        Ok(TracePipelineSpec {
+            shader_source,
+            entry_point: "capture_surface_footprint",
+            escape_map_node_entry_point: None,
+            has_shadow_refinement: false,
+            target_kind: TraceTargetKind::Diagnostic,
+        })
     }
 
     #[cfg(test)]
@@ -229,9 +217,10 @@ impl TracePlan {
         if matches!(self, Self::AcceleratedSky) {
             return Err(GpuTraceInputError::SurfaceTransportRequiresSurface);
         }
-        let mut spec = self.capture_spec();
-        spec.entry_point = "capture_surface_transport_case";
-        Ok(spec)
+        Ok(TracePipelineSpec {
+            entry_point: "capture_surface_transport_case",
+            ..self.capture_spec()
+        })
     }
 }
 
@@ -384,7 +373,6 @@ impl TracePipeline {
                 entry_point: "capture_accelerated_trace_scene",
                 escape_map_node_entry_point: Some("trace_escape_map_nodes"),
                 has_shadow_refinement: true,
-                plan: TracePlan::AcceleratedSky,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -398,7 +386,6 @@ impl TracePipeline {
     ) -> Result<Self, GpuTraceInputError> {
         let mut compiled = CompiledTraceInput::compile(observation)?;
         compiled.uniforms.set_packed_subpixel(subpixel);
-        let plan = compiled.plan;
         Ok(Self::from_compiled(
             device,
             compiled,
@@ -407,7 +394,6 @@ impl TracePipeline {
                 entry_point: "write_initial_rays",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -419,7 +405,6 @@ impl TracePipeline {
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
         let compiled = CompiledTraceInput::compile(observation)?;
-        let plan = compiled.plan;
         Ok(Self::from_compiled(
             device,
             compiled,
@@ -428,7 +413,6 @@ impl TracePipeline {
                 entry_point: "write_invariant_gate_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -440,7 +424,6 @@ impl TracePipeline {
         observation: &Observation,
     ) -> Result<Self, GpuTraceInputError> {
         let compiled = CompiledTraceInput::compile(observation)?;
-        let plan = compiled.plan;
         Ok(Self::from_compiled(
             device,
             compiled,
@@ -449,7 +432,6 @@ impl TracePipeline {
                 entry_point: "write_event_policy_cases",
                 escape_map_node_entry_point: None,
                 has_shadow_refinement: false,
-                plan,
                 target_kind: TraceTargetKind::Diagnostic,
             },
         ))
@@ -462,15 +444,14 @@ impl TracePipeline {
     ) -> Self {
         let CompiledTraceInput {
             uniforms,
+            plan,
             scientific_capture_metadata,
-            ..
         } = compiled;
         let TracePipelineSpec {
             shader_source,
             entry_point,
             escape_map_node_entry_point,
             has_shadow_refinement,
-            plan,
             target_kind,
         } = spec;
         // Source: https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init
@@ -878,7 +859,7 @@ pub fn escape_map_scratch_bytes(extent: RenderExtent) -> u64 {
 }
 
 pub fn shadow_coverage_scratch_bytes(extent: RenderExtent) -> u64 {
-    crate::shadow_coverage::scratch_bytes(extent)
+    shadow_coverage::scratch_bytes(extent)
 }
 
 pub struct TraceTarget {

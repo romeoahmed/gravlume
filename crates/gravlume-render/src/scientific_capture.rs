@@ -1,10 +1,11 @@
 use std::sync::mpsc;
 
-use gravlume_domain::EquatorialSurface;
+use gravlume_domain::{EquatorialEmissionModel, EquatorialSurface};
 
-use crate::{error::GpuErrorScopes, extent::RenderExtent, trace::INVARIANT_DRIFT_LIMIT};
+use crate::{error::GpuErrorScopes, extent::RenderExtent};
 
 const RGBA16_FLOAT_BYTES_PER_PIXEL: u32 = 8;
+pub const INVARIANT_RELATIVE_DRIFT_LIMIT: f32 = 0.05;
 const SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET: f64 = 3.0e-6;
 const SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET: f64 = 2.0e-3;
 const SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR: f64 = 1.0e-6;
@@ -114,11 +115,15 @@ pub struct ScientificCaptureMetadata {
 }
 
 impl ScientificCaptureMetadata {
-    pub(crate) fn for_surface(
-        mass_m: f64,
-        surface: EquatorialSurface,
-        channels: ScientificChannelModel,
-    ) -> Self {
+    pub(crate) fn for_surface(mass_m: f64, surface: EquatorialSurface) -> Self {
+        let channels = match surface.emitter().emission_model() {
+            EquatorialEmissionModel::InverseCubeBolometricV1 => {
+                ScientificChannelModel::BolometricRepeated
+            }
+            EquatorialEmissionModel::InverseCubeBlackbodyV1 { .. } => {
+                ScientificChannelModel::VisibleBoxcarV1
+            }
+        };
         let spectral_budget = channels == ScientificChannelModel::VisibleBoxcarV1;
         let optional_budget = |value| spectral_budget.then_some(value);
         Self {
@@ -126,7 +131,7 @@ impl ScientificCaptureMetadata {
             surface,
             channels,
             numerical: ScientificNumericalMetadata {
-                invariant_relative_drift_limit: INVARIANT_DRIFT_LIMIT,
+                invariant_relative_drift_limit: INVARIANT_RELATIVE_DRIFT_LIMIT,
                 bolometric_surface_relative_error_budget: BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
                 spectral_surface_relative_error_budget: optional_budget(
                     SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
@@ -366,7 +371,7 @@ mod tests {
     };
 
     use super::{
-        BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET, INVARIANT_DRIFT_LIMIT,
+        BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET, INVARIANT_RELATIVE_DRIFT_LIMIT,
         SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET, SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
         SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET, SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
         ScientificCaptureMetadata, ScientificChannelModel, ScientificNumericalMetadata,
@@ -379,11 +384,7 @@ mod tests {
         let bolometric = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
             .expect("test bolometric source is valid");
         let bolometric_surface = validated_surface(bolometric, SurfaceTransport::Vacuum);
-        let metadata = ScientificCaptureMetadata::for_surface(
-            1.0,
-            bolometric_surface,
-            ScientificChannelModel::BolometricRepeated,
-        );
+        let metadata = ScientificCaptureMetadata::for_surface(1.0, bolometric_surface);
 
         assert_eq!(metadata.mass_m().to_bits(), 1.0_f64.to_bits());
         assert_eq!(metadata.surface(), bolometric_surface);
@@ -398,11 +399,7 @@ mod tests {
         let slab = HomogeneousScalarSlab::constant_blackbody_v1(0.35, 0.05, 4_500.0)
             .expect("test slab is valid");
         let surface = validated_surface(emitter, SurfaceTransport::HomogeneousScalar(slab));
-        let metadata = ScientificCaptureMetadata::for_surface(
-            1.0,
-            surface,
-            ScientificChannelModel::VisibleBoxcarV1,
-        );
+        let metadata = ScientificCaptureMetadata::for_surface(1.0, surface);
 
         assert_eq!(metadata.surface(), surface);
         assert_eq!(metadata.channels(), ScientificChannelModel::VisibleBoxcarV1);
@@ -464,7 +461,6 @@ mod tests {
         let metadata = ScientificCaptureMetadata::for_surface(
             1.0,
             validated_surface(emitter, SurfaceTransport::Vacuum),
-            ScientificChannelModel::BolometricRepeated,
         );
 
         let capture = capture_texture(&gpu.device, &gpu.queue, &texture, extent, 17, metadata)
@@ -564,7 +560,7 @@ mod tests {
 
         assert_eq!(
             metadata.invariant_relative_drift_limit().to_bits(),
-            INVARIANT_DRIFT_LIMIT.to_bits()
+            INVARIANT_RELATIVE_DRIFT_LIMIT.to_bits()
         );
         assert_eq!(
             metadata

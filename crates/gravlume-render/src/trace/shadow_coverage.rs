@@ -2,10 +2,8 @@
 
 use wgpu::util::DeviceExt as _;
 
-use crate::{
-    extent::RenderExtent,
-    trace::{TraceUniforms, shadow_coverage_shader_source, size_of},
-};
+use super::{TraceUniforms, shader, size_of};
+use crate::extent::RenderExtent;
 
 const CLASSIFY_WORKGROUP_AXIS: u32 = 8;
 const REFINE_WORKGROUP_WIDTH: u32 = 64;
@@ -13,12 +11,20 @@ const EDGE_PIXEL_BYTES: u64 = size_of::<u32>();
 const CONTROL_BYTES: u64 = size_of::<ShadowControl>();
 
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[repr(C, align(8))]
 struct ShadowControl {
     count: u32,
     capacity: u32,
     padding: [u32; 2],
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<ShadowControl>() == 16);
+    assert!(std::mem::align_of::<ShadowControl>() == 8);
+    assert!(std::mem::offset_of!(ShadowControl, count) == 0);
+    assert!(std::mem::offset_of!(ShadowControl, capacity) == 4);
+    assert!(std::mem::offset_of!(ShadowControl, padding) == 8);
+};
 
 pub struct ShadowCoverage {
     classify_pipeline: wgpu::ComputePipeline,
@@ -87,7 +93,7 @@ impl ShadowCoverage {
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("selective shadow coverage shader"),
-            source: wgpu::ShaderSource::Wgsl(shadow_coverage_shader_source().into()),
+            source: wgpu::ShaderSource::Wgsl(shader::shadow_coverage().into()),
         });
         let classify_pipeline = create_pipeline(
             device,

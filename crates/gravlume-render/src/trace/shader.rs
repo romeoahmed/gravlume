@@ -90,7 +90,7 @@ pub(super) fn blackbody_sample_inspection() -> String {
     ])
 }
 
-pub fn shadow_coverage() -> String {
+pub(super) fn shadow_coverage() -> String {
     assemble(&[LENSING_PREVIEW, GEODESIC_ACCELERATION, SHADOW_COVERAGE])
 }
 

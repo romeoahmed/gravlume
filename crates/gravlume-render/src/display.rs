@@ -8,10 +8,15 @@ use crate::{capabilities::SurfaceSelection, extent::RenderExtent};
 pub const UI_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[repr(C, align(16))]
 struct OutputUniforms {
     tone_mapping: [f32; 4],
 }
+
+const _: () = {
+    assert!(std::mem::size_of::<OutputUniforms>() == 16);
+    assert!(std::mem::align_of::<OutputUniforms>() == 16);
+};
 
 pub struct DisplayPipeline {
     shader: wgpu::ShaderModule,

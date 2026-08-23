@@ -321,24 +321,21 @@ fn decode_source(
     termination: TraceTermination,
     source_time: [f32; 4],
 ) -> Result<SampleInspectionSource, SampleInspectionError> {
+    let [source_x, source_y, source_z, _] = source_time;
     match termination {
         TraceTermination::Escape => Ok(SampleInspectionSource::AnalyticEscape {
-            unit_direction: source_time[..3].try_into().map_err(|_| {
-                SampleInspectionError::InvalidRecord {
-                    field: "escape source",
-                }
-            })?,
+            unit_direction: [source_x, source_y, source_z],
         }),
         TraceTermination::EquatorialSurface => {
-            if source_time[0] <= 0.0 || source_time[2] <= 0.0 {
+            if source_x <= 0.0 || source_z <= 0.0 {
                 return Err(SampleInspectionError::InvalidRecord {
                     field: "surface source",
                 });
             }
             Ok(SampleInspectionSource::EquatorialSurface {
-                radius_over_m: source_time[0],
-                azimuth_radians: source_time[1],
-                frequency_ratio: source_time[2],
+                radius_over_m: source_x,
+                azimuth_radians: source_y,
+                frequency_ratio: source_z,
             })
         }
         TraceTermination::HorizonCrossing
@@ -383,13 +380,9 @@ fn decode_scene_value(
     termination: TraceTermination,
     value: [f32; 4],
 ) -> Result<SampleSceneValue, SampleInspectionError> {
-    let rgb: [f32; 3] =
-        value[..3]
-            .try_into()
-            .map_err(|_| SampleInspectionError::InvalidRecord {
-                field: "scene value",
-            })?;
-    let tag = value[3].to_bits();
+    let [red, green, blue, alpha] = value;
+    let rgb = [red, green, blue];
+    let tag = alpha.to_bits();
 
     if termination == TraceTermination::HorizonCrossing && tag == HORIZON_TAG {
         if rgb.map(f32::to_bits) != [0; 3] {

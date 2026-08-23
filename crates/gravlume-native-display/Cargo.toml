@@ -8,7 +8,6 @@ publish.workspace = true
 [dependencies]
 raw-window-handle.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2.workspace = true
@@ -33,10 +32,12 @@ objc2-foundation = { workspace = true, features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 num-traits.workspace = true
+tracing.workspace = true
 wayland-client = { workspace = true, features = ["dlopen", "system"] }
 wayland-protocols = { workspace = true, features = ["client", "staging"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
+tracing.workspace = true
 windows = { workspace = true, features = [
   "Foundation",
   "Graphics_Display",
