@@ -95,6 +95,30 @@ fn image_sample() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
     })
 }
 
+fn subpixel_coordinate() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        Just(0.0),
+        Just(1.0),
+        Just(0.0_f64.next_down()),
+        Just(1.0_f64.next_up()),
+        -1.0_f64..=2.0,
+        proptest::num::f64::ANY,
+    ]
+}
+
+fn image_sample_candidate() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
+    (1_u32..=u32::MAX, 1_u32..=u32::MAX).prop_flat_map(|(width, height)| {
+        (
+            Just(width),
+            Just(height),
+            prop_oneof![0..width, Just(width), Just(u32::MAX)],
+            prop_oneof![0..height, Just(height), Just(u32::MAX)],
+            subpixel_coordinate(),
+            subpixel_coordinate(),
+        )
+    })
+}
+
 fn thin_depth_exponent() -> impl Strategy<Value = i32> {
     prop_oneof![Just(10), Just(52), Just(55), Just(60), 10_i32..=60,]
 }
@@ -258,6 +282,26 @@ proptest! {
         ));
         prop_assert!(ray.observer_frequency() > 0.0);
     }
+
+    #[test]
+    fn image_view_accepts_exactly_the_pixel_and_subpixel_domain(
+        (width, height, x, y, offset_x, offset_y) in image_sample_candidate(),
+    ) {
+        let view = PerspectiveView::new(
+            NonZeroU32::new(width).expect("generated width is nonzero"),
+            NonZeroU32::new(height).expect("generated height is nonzero"),
+            Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
+        )
+        .expect("generated view is valid");
+        let is_valid = x < width
+            && y < height
+            && offset_x.is_finite()
+            && (0.0..=1.0).contains(&offset_x)
+            && offset_y.is_finite()
+            && (0.0..=1.0).contains(&offset_y);
+
+        prop_assert_eq!(view.sample(x, y, offset_x, offset_y).is_ok(), is_valid);
+    }
 }
 
 #[test]
@@ -298,21 +342,6 @@ fn blackbody_surface_rejects_a_nonzero_neutral_slab_source() {
         issue.code() == ValidationIssueCode::IncompatibleModel
             && issue.field_path() == "equatorial_surface.transport.emission_model"
     }));
-}
-
-#[test]
-fn image_view_rejects_pixels_and_subpixels_outside_the_seam() {
-    let view = PerspectiveView::new(
-        NonZeroU32::new(3).expect("width is nonzero"),
-        NonZeroU32::new(2).expect("height is nonzero"),
-        Angle::from_radians(FRAC_PI_4).expect("angle is finite"),
-    )
-    .expect("view is valid");
-
-    assert!(view.sample(3, 0, 0.5, 0.5).is_err());
-    assert!(view.sample(0, 2, 0.5, 0.5).is_err());
-    assert!(view.sample(0, 0, -f64::EPSILON, 0.5).is_err());
-    assert!(view.sample(0, 0, 0.5, 1.0 + f64::EPSILON).is_err());
 }
 
 proptest! {

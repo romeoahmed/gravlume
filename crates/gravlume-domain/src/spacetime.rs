@@ -775,7 +775,7 @@ mod tests {
     use approx::{abs_diff_eq, assert_abs_diff_eq};
     use proptest::prelude::*;
 
-    use super::{KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent};
+    use super::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent};
 
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(128))]
@@ -878,26 +878,37 @@ mod tests {
     }
 
     #[test]
-    fn axis_null_derivative_preserves_physical_spin_handedness() {
+    fn axis_hamiltonian_rhs_preserves_physical_spin_handedness() {
         let spin = 0.8_f64;
         let radius = 4.0_f64;
-        let expected_spin_derivative = spin / radius.mul_add(radius, spin * spin);
+        let radial_denominator = radius.mul_add(radius, spin * spin);
+        let scalar_f = 2.0 * radius / radial_denominator;
+        let expected_spin_force = scalar_f * spin / radial_denominator;
         let event =
             SpacetimeEvent::from_txyz([0.0, 0.0, 0.0, radius]).expect("fixture event is finite");
+        let x_force_state = GeodesicState::new(event.to_txyz(), [-1.0, 0.0, 1.0, 0.0])
+            .expect("fixture state is finite");
+        let y_force_state = GeodesicState::new(event.to_txyz(), [-1.0, 1.0, 0.0, 0.0])
+            .expect("fixture state is finite");
 
         for chart in [KerrSchildChart::Ingoing, KerrSchildChart::Outgoing] {
             let spacetime = KerrNewmanSpacetime::new(1.0, spin, 0.0, chart)
                 .expect("fixture parameters are valid");
-            let geometry = spacetime.geometry(event).expect("axis geometry is regular");
+            let x_force = spacetime
+                .hamiltonian_rhs(x_force_state)
+                .expect("axis geometry is regular");
+            let y_force = spacetime
+                .hamiltonian_rhs(y_force_state)
+                .expect("axis geometry is regular");
 
             assert_abs_diff_eq!(
-                geometry.null_vector_gradient[0][2],
-                -expected_spin_derivative,
+                x_force[5],
+                -expected_spin_force,
                 epsilon = 8.0 * f64::EPSILON
             );
             assert_abs_diff_eq!(
-                geometry.null_vector_gradient[1][1],
-                expected_spin_derivative,
+                y_force[6],
+                expected_spin_force,
                 epsilon = 8.0 * f64::EPSILON
             );
         }
