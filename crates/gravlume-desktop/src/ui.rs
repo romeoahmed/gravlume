@@ -1,6 +1,7 @@
 use gravlume_render::{
-    DeviceEvent, RendererDiagnostics, SampleInspection, SampleInspectionEvent,
-    SampleInspectionSource, SampleSceneValue,
+    DeviceEvent, RendererDiagnostics, SampleBranchKey, SampleInspection,
+    SampleInspectionCompletion, SampleInspectionDisposition, SampleInspectionTicket, SampleRetrace,
+    SampleSurfaceEvaluation, SampleTraceOutcome,
 };
 
 use crate::{inspection::InspectionStatus, preview::Preview};
@@ -97,10 +98,10 @@ fn show_sample_inspection(ui: &mut egui::Ui, status: &InspectionStatus) {
         InspectionStatus::ViewportChanging => {
             ui.weak("Inspection waits until the resized viewport has a current complete frame.");
         }
-        InspectionStatus::Pending { request_id, .. } => {
+        InspectionStatus::Pending(ticket) => {
             ui.label(format!(
-                "Request {} is tracing and reading back.",
-                request_id.get()
+                "Generation {} sample is tracing and reading back.",
+                ticket.generation()
             ));
         }
         InspectionStatus::Rejected(error) => {
@@ -109,58 +110,41 @@ fn show_sample_inspection(ui: &mut egui::Ui, status: &InspectionStatus) {
                 format!("Inspection not started: {error}"),
             );
         }
-        InspectionStatus::Finished(event) => show_inspection_event(ui, event),
+        InspectionStatus::Finished(completion) => show_inspection_completion(ui, completion),
     }
 }
 
-fn show_inspection_event(ui: &mut egui::Ui, event: &SampleInspectionEvent) {
-    match event {
-        SampleInspectionEvent::Completed(inspection) => show_completed_inspection(ui, inspection),
-        SampleInspectionEvent::Cancelled(identity) => {
-            ui.weak(format!(
-                "Request {} was cancelled after GPU drain.",
-                identity.request_id().get()
-            ));
+fn show_inspection_completion(ui: &mut egui::Ui, completion: &SampleInspectionCompletion) {
+    let ticket = completion.ticket();
+    match completion.disposition() {
+        SampleInspectionDisposition::Completed(inspection) => {
+            show_completed_inspection(ui, ticket, inspection);
         }
-        SampleInspectionEvent::Superseded(identity) => {
-            ui.weak(format!(
-                "Request {} was superseded after generation {} stopped being published.",
-                identity.request_id().get(),
-                identity.generation()
-            ));
+        SampleInspectionDisposition::Cancelled => {
+            ui.weak("Inspection was cancelled after GPU drain.");
         }
-        SampleInspectionEvent::Failed { identity, error } => {
+        SampleInspectionDisposition::Failed(error) => {
             ui.colored_label(
                 egui::Color32::from_rgb(255, 170, 80),
-                format!("Request {} failed: {error}", identity.request_id().get()),
+                format!("Inspection failed: {error}"),
             );
-        }
-        _ => {
-            ui.weak("The renderer returned a newer inspection event kind.");
         }
     }
 }
 
-fn show_completed_inspection(ui: &mut egui::Ui, inspection: &SampleInspection) {
-    let identity = inspection.identity();
-    let [pixel_x, pixel_y] = identity.sample().pixel();
-    let [subpixel_x, subpixel_y] = identity.sample().subpixel();
-    let [width, height] = identity.extent();
-    ui.label(format!(
-        "request {} | observation {} | generation {}",
-        identity.request_id().get(),
-        identity.observation_id().get(),
-        identity.generation()
-    ));
+fn show_completed_inspection(
+    ui: &mut egui::Ui,
+    ticket: SampleInspectionTicket,
+    inspection: &SampleInspection,
+) {
+    let [pixel_x, pixel_y] = ticket.sample().pixel();
+    let [subpixel_x, subpixel_y] = ticket.sample().subpixel();
+    let [width, height] = ticket.extent();
+    ui.label(format!("generation {}", ticket.generation()));
     ui.label(format!(
         "pixel ({pixel_x}, {pixel_y}) + ({subpixel_x:.3}, {subpixel_y:.3}) | {width}×{height}"
     ));
-    ui.weak(format!(
-        "{:?} | {:?} | {:?}",
-        identity.profile(),
-        identity.producer(),
-        identity.arithmetic_domain()
-    ));
+    ui.weak(SampleRetrace::METHOD_ID);
 
     let texel = inspection.published_texel();
     let [red, green, blue, alpha] = texel.rgba16_float_bits();
@@ -168,68 +152,105 @@ fn show_completed_inspection(ui: &mut egui::Ui, inspection: &SampleInspection) {
         "published {:?}: {red:04x} {green:04x} {blue:04x} {alpha:04x}",
         texel.kind()
     ));
-    ui.label(format!(
-        "fresh {:?}: {}",
-        inspection.termination(),
-        scene_value_label(inspection.evaluated_scene_value())
+    let retrace = inspection.fresh_retrace();
+    let [effective_x, effective_y] = retrace.effective_subpixel();
+    ui.weak(format!(
+        "effective binary32 subpixel ({effective_x:.7}, {effective_y:.7})"
     ));
-    ui.label(source_label(inspection.source()));
-    if let Some(branch) = inspection.branch_key() {
-        ui.label(format!(
-            "branch {:?} | radial {} | equatorial {} | winding {}",
-            branch.initial_polar_side(),
-            branch.radial_turnings(),
-            branch.equatorial_crossings(),
-            branch.azimuth_winding()
-        ));
-    } else {
-        ui.weak("branch unavailable for this terminal result");
-    }
+    show_trace_outcome(ui, retrace.outcome());
+    let diagnostics = retrace.diagnostics();
     ui.label(format!(
         "Δt/M {:.6} | steps {} | candidates 0x{:x}",
-        inspection.travel_time_over_m(),
-        inspection.steps(),
-        inspection.event_candidate_bits()
+        diagnostics.coordinate_time_delta_over_m(),
+        diagnostics.steps(),
+        diagnostics.event_candidate_bits()
     ));
     ui.label(format!(
         "event residual {:.3e} | flags 0x{:x} | max drift {:?}",
-        inspection.event_residual(),
-        inspection.numerical_flag_bits(),
-        inspection.maximum_invariant_drift()
+        diagnostics.event_residual(),
+        diagnostics.numerical_flag_bits(),
+        diagnostics.maximum_invariant_drift()
     ));
-    if let Some(channels) = inspection.channel_model() {
-        ui.weak(format!("surface channels: {channels:?}"));
-    }
 }
 
-fn source_label(source: SampleInspectionSource) -> String {
-    match source {
-        SampleInspectionSource::None => "source: none".to_owned(),
-        SampleInspectionSource::AnalyticEscape { unit_direction } => {
-            format!("source: analytic escape direction {unit_direction:?}")
+fn show_trace_outcome(ui: &mut egui::Ui, outcome: SampleTraceOutcome) {
+    match outcome {
+        SampleTraceOutcome::Horizon { branch } => {
+            ui.label("fresh Horizon: black");
+            show_branch(ui, "branch", branch);
         }
-        SampleInspectionSource::EquatorialSurface {
+        SampleTraceOutcome::Escape {
+            branch,
+            unit_direction,
+            preview_rgb,
+        } => {
+            ui.label(format!(
+                "fresh Escape: analytic preview RGB {preview_rgb:?}"
+            ));
+            ui.label(format!(
+                "source: analytic escape direction {unit_direction:?}"
+            ));
+            show_branch(ui, "branch", branch);
+        }
+        SampleTraceOutcome::EquatorialSurface {
+            branch,
             radius_over_m,
             azimuth_radians,
             frequency_ratio,
-        } => format!(
-            "source: r/M {radius_over_m:.6} | azimuth {azimuth_radians:.6} | g {frequency_ratio:.6}"
-        ),
-        _ => "source: newer renderer source kind".to_owned(),
+            channels,
+            evaluation,
+        } => {
+            match evaluation {
+                SampleSurfaceEvaluation::Radiance(rgb) => {
+                    ui.label(format!("fresh EquatorialSurface: radiance RGB {rgb:?}"));
+                }
+                SampleSurfaceEvaluation::NumericalFailure { visible_rgb } => {
+                    ui.label(format!(
+                        "fresh EquatorialSurface: numerical evaluation failure RGB {visible_rgb:?}"
+                    ));
+                }
+            }
+            ui.label(format!(
+                "source: r/M {radius_over_m:.6} | azimuth {azimuth_radians:.6} | g {frequency_ratio:.6}"
+            ));
+            ui.weak(format!("surface channels: {channels:?}"));
+            show_branch(ui, "branch", branch);
+        }
+        SampleTraceOutcome::SingularityGuard {
+            branch,
+            visible_rgb,
+        } => {
+            ui.label(format!(
+                "fresh SingularityGuard: visible RGB {visible_rgb:?}"
+            ));
+            show_branch(ui, "branch", branch);
+        }
+        SampleTraceOutcome::StepExhausted {
+            branch_prefix,
+            visible_rgb,
+        } => {
+            ui.label(format!("fresh StepExhausted: visible RGB {visible_rgb:?}"));
+            show_branch(ui, "branch prefix", branch_prefix);
+        }
+        SampleTraceOutcome::NumericalFailure { visible_rgb } => {
+            ui.label(format!(
+                "fresh NumericalFailure: visible RGB {visible_rgb:?}"
+            ));
+            ui.weak("branch unavailable for this terminal result");
+        }
+        SampleTraceOutcome::Uncertain { visible_rgb } => {
+            ui.label(format!("fresh Uncertain: visible RGB {visible_rgb:?}"));
+            ui.weak("branch unavailable for this terminal result");
+        }
     }
 }
 
-fn scene_value_label(value: SampleSceneValue) -> String {
-    match value {
-        SampleSceneValue::Horizon => "horizon black".to_owned(),
-        SampleSceneValue::AnalyticEscapePreview(rgb) => {
-            format!("analytic preview RGB {rgb:?}")
-        }
-        SampleSceneValue::SurfaceRadiance(rgb) => format!("surface radiance RGB {rgb:?}"),
-        SampleSceneValue::TraceFailure {
-            termination,
-            visible_rgb,
-        } => format!("visible failure {termination:?}, RGB {visible_rgb:?}"),
-        _ => "newer renderer scene-value kind".to_owned(),
-    }
+fn show_branch(ui: &mut egui::Ui, label: &str, branch: SampleBranchKey) {
+    ui.label(format!(
+        "{label} {:?} | radial {} | equatorial {} | winding {}",
+        branch.initial_polar_side(),
+        branch.radial_turnings(),
+        branch.equatorial_crossings(),
+        branch.azimuth_winding()
+    ));
 }

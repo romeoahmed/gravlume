@@ -21,7 +21,8 @@ use crate::{
     },
     scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
-        SampleInspectionSource, SamplePolarSide, SampleSceneValue, TraceTermination, TraceUniforms,
+        SamplePolarSide, SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination,
+        TraceUniforms,
     },
 };
 
@@ -51,7 +52,7 @@ fn trace_termination_discriminants_are_stable_and_checked() {
     for raw in [0, 8, u32::MAX] {
         assert!(matches!(
             TraceTermination::try_from(raw),
-            Err(error) if error.raw() == raw
+            Err(error) if error == raw
         ));
     }
 }
@@ -158,20 +159,19 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         .surface_observable()
         .expect("canonical trace terminates on the surface");
 
-    assert_eq!(
-        inspection.channel_model,
-        Some(crate::ScientificChannelModel::BolometricRepeated)
-    );
-    assert_eq!(inspection.termination, TraceTermination::EquatorialSurface);
-
-    let SampleInspectionSource::EquatorialSurface {
+    let retrace = inspection.fresh_retrace();
+    let SampleTraceOutcome::EquatorialSurface {
+        branch,
         radius_over_m,
         azimuth_radians,
         frequency_ratio,
-    } = inspection.source
+        channels,
+        evaluation,
+    } = retrace.outcome()
     else {
-        panic!("canonical inspection must expose an equatorial source anchor");
+        panic!("canonical inspection must expose an equatorial-surface outcome");
     };
+    assert_eq!(channels, crate::ScientificChannelModel::BolometricRepeated);
     let reference_anchor = reference_observable.source_anchor();
     assert_abs_diff_eq!(
         f64::from(radius_over_m),
@@ -189,25 +189,22 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         epsilon = 2.0e-3 * reference_observable.frequency_ratio().value()
     );
     assert_abs_diff_eq!(
-        f64::from(inspection.travel_time_over_m),
+        f64::from(retrace.diagnostics().coordinate_time_delta_over_m()),
         reference.travel_time_m(),
         epsilon = 1.0e-3
     );
 
-    let branch = inspection
-        .branch_key
-        .expect("accepted surface inspection has an exact branch");
     let reference_branch = reference.branch_key();
-    assert_eq!(branch.radial_turnings, reference_branch.radial_turnings());
+    assert_eq!(branch.radial_turnings(), reference_branch.radial_turnings());
     assert_eq!(
-        branch.equatorial_crossings,
+        branch.equatorial_crossings(),
         reference_branch.equatorial_crossings()
     );
-    assert_eq!(branch.azimuth_winding, reference_branch.azimuth_winding());
+    assert_eq!(branch.azimuth_winding(), reference_branch.azimuth_winding());
     assert_eq!(reference_branch.initial_polar_side(), PolarSide::Positive);
-    assert_eq!(branch.initial_polar_side, SamplePolarSide::Positive);
+    assert_eq!(branch.initial_polar_side(), SamplePolarSide::Positive);
 
-    let SampleSceneValue::SurfaceRadiance(rgb) = inspection.scene_value else {
+    let SampleSurfaceEvaluation::Radiance(rgb) = evaluation else {
         panic!("canonical inspection must expose final scene-linear surface radiance");
     };
     let expected = reference_observable.observed_bolometric_intensity();
@@ -215,14 +212,18 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         assert_abs_diff_eq!(f64::from(channel), expected, epsilon = 2.0e-3 * expected);
     }
 
-    assert_ne!(inspection.event_candidates & EVENT_CANDIDATE_SURFACE, 0);
-    assert_eq!(inspection.event_candidates.count_ones(), 1);
-    assert!(inspection.event_residual.abs() <= 5.0e-3);
-    assert_eq!(inspection.numerical_flags, 0);
-    assert!(inspection.steps > 0);
+    let diagnostics = retrace.diagnostics();
+    assert_ne!(
+        diagnostics.event_candidate_bits() & EVENT_CANDIDATE_SURFACE,
+        0
+    );
+    assert_eq!(diagnostics.event_candidate_bits().count_ones(), 1);
+    assert!(diagnostics.event_residual().abs() <= 5.0e-3);
+    assert_eq!(diagnostics.numerical_flag_bits(), 0);
+    assert!(diagnostics.steps() > 0);
     assert!(
-        inspection
-            .maximum_invariant_drift
+        diagnostics
+            .maximum_invariant_drift()
             .into_iter()
             .all(|drift| drift <= INVARIANT_RELATIVE_DRIFT_LIMIT)
     );
@@ -237,19 +238,22 @@ fn bounded_sample_inspection_keeps_analytic_escape_semantics_non_spectral() {
         .expect("analytic sample belongs to the view");
     let inspection = inspect_sample(&observation, sample);
 
-    assert_eq!(inspection.channel_model, None);
-    assert_eq!(inspection.termination, TraceTermination::Escape);
     assert!(matches!(
-        inspection.source,
-        SampleInspectionSource::AnalyticEscape { unit_direction }
-            if unit_direction.into_iter().all(f32::is_finite)
+        inspection.fresh_retrace().outcome(),
+        SampleTraceOutcome::Escape {
+            unit_direction,
+            preview_rgb,
+            ..
+        } if unit_direction.into_iter().all(f32::is_finite)
+            && preview_rgb.into_iter().all(f32::is_finite)
     ));
-    assert!(matches!(
-        inspection.scene_value,
-        SampleSceneValue::AnalyticEscapePreview(rgb)
-            if rgb.into_iter().all(f32::is_finite)
-    ));
-    assert!(inspection.travel_time_over_m > 0.0);
+    assert!(
+        inspection
+            .fresh_retrace()
+            .diagnostics()
+            .coordinate_time_delta_over_m()
+            > 0.0
+    );
 }
 
 proptest! {
@@ -259,7 +263,7 @@ proptest! {
     ) {
         prop_assert!(matches!(
             TraceTermination::try_from(raw),
-            Err(error) if error.raw() == raw
+            Err(error) if error == raw
         ));
     }
 }

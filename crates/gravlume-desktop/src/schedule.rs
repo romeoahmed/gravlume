@@ -14,7 +14,8 @@ pub enum ResizeAction {
 /// Owns all application deadlines and the live-resize publication gate.
 ///
 /// GPU polling remains independent from repaint requests. `about_to_wait` supplies only the native
-/// monitor deadline and current GPU-idle state, then installs the single returned wake deadline.
+/// monitor deadline and whether resize owners have drained, then installs the single returned wake
+/// deadline.
 /// Source: <https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html#method.about_to_wait>
 #[derive(Debug, Default)]
 pub struct DesktopSchedule {
@@ -34,9 +35,13 @@ impl DesktopSchedule {
         ResizeAction::Deferred
     }
 
-    pub fn take_ready_resize(&mut self, now: Instant, gpu_idle: bool) -> Option<PhysicalSize<u32>> {
+    pub fn take_ready_resize(
+        &mut self,
+        now: Instant,
+        resize_ready: bool,
+    ) -> Option<PhysicalSize<u32>> {
         let (size, deadline) = self.resize_request?;
-        if !gpu_idle || deadline > now {
+        if !resize_ready || deadline > now {
             return None;
         }
         self.resize_request = None;
@@ -96,9 +101,9 @@ impl DesktopSchedule {
     pub fn next_wake(
         &self,
         native_dispatch_deadline: Option<Instant>,
-        gpu_idle: bool,
+        resize_ready: bool,
     ) -> Option<Instant> {
-        let resize_deadline = if gpu_idle {
+        let resize_deadline = if resize_ready {
             self.resize_request.map(|(_, deadline)| deadline)
         } else {
             None
@@ -169,7 +174,8 @@ mod tests {
             repaint_ms in prop::option::of(0_u64..=100),
             native_ms in prop::option::of(0_u64..=100),
             resize_pending in any::<bool>(),
-            gpu_idle in any::<bool>(),
+            has_pending_work in any::<bool>(),
+            resize_ready in any::<bool>(),
         ) {
             let now = Instant::now();
             let mut schedule = DesktopSchedule::default();
@@ -180,19 +186,19 @@ mod tests {
                 let action = schedule.request_resize(now, PhysicalSize::new(1_280, 720));
                 prop_assert_eq!(action, ResizeAction::Deferred);
             }
-            schedule.after_gpu_poll(now, !gpu_idle);
+            schedule.after_gpu_poll(now, has_pending_work);
             let native = native_ms.map(|delay_ms| now + Duration::from_millis(delay_ms));
             let expected = [
                 repaint_ms.map(|delay_ms| now + Duration::from_millis(delay_ms)),
-                (!gpu_idle).then_some(now + GPU_POLL_INTERVAL),
-                (resize_pending && gpu_idle).then_some(now + RESIZE_SETTLE_INTERVAL),
+                has_pending_work.then_some(now + GPU_POLL_INTERVAL),
+                (resize_pending && resize_ready).then_some(now + RESIZE_SETTLE_INTERVAL),
                 native,
             ]
             .into_iter()
             .flatten()
             .min();
 
-            prop_assert_eq!(schedule.next_wake(native, gpu_idle), expected);
+            prop_assert_eq!(schedule.next_wake(native, resize_ready), expected);
         }
     }
 

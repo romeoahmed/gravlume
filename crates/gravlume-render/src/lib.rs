@@ -31,11 +31,10 @@ pub use scientific_capture::{
 };
 pub use timing::TimingError;
 pub use trace::{
-    GpuTraceInputError, SampleArithmeticDomain, SampleBranchKey, SampleInspection,
-    SampleInspectionError, SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
-    SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
-    SampleInspectionRequestId, SampleInspectionSource, SampleObservationId, SamplePolarSide,
-    SampleSceneValue, TraceTermination, UnknownTraceTermination,
+    GpuTraceInputError, SampleBranchKey, SampleInspection, SampleInspectionCompletion,
+    SampleInspectionDisposition, SampleInspectionError, SampleInspectionRequestError,
+    SampleInspectionTicket, SamplePolarSide, SampleRetrace, SampleSurfaceEvaluation,
+    SampleTraceDiagnostics, SampleTraceOutcome,
 };
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]

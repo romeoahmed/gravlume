@@ -2,7 +2,7 @@
 
 本文记录 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad` 上按需复算一个像素样本的 test-only GPU 基线、被拒绝的候选和恢复条件；它不定义当前 production interface。后续 production 采用决策见[按需单样本检查研究](on-demand-sample-inspection.md)，当前事实见 [GPU Renderer 实现与证据](../gpu-renderer.md)，未完成交付以[路线图](../roadmap.md)为准，物理定义与误差预算分别以[数学物理合同](../physics.md)和[验证合同](../validation.md)为准。
 
-**状态：历史 test-only 基线；固定 record 与 `8×8 + lane 0` correctness specialization 已被 production 采用，224-byte 一次性资源模型已由携带实际 published texel 的 392-byte 单槽模型取代；`@workgroup_size(1)` 候选仍因 Metal 反例而拒绝。** 当时使用 wgpu `30.0.0`；当前技术栈以 workspace [`Cargo.toml`](../../Cargo.toml) 与 `Cargo.lock` 为准。
+**状态：历史 test-only 基线；固定 record 与 `8×8 + lane 0` correctness specialization 已被 production 采用，224-byte 一次性资源模型已由携带实际 published texel 的 232-byte 单槽模型取代；`@workgroup_size(1)` 候选仍因 Metal 反例而拒绝。** 当时使用 wgpu `30.0.0`；当前技术栈以 workspace [`Cargo.toml`](../../Cargo.toml) 与 `Cargo.lock` 为准。
 
 ## 问题与结论
 
@@ -110,6 +110,6 @@ Inspection 是一次性 test pipeline，bind group 不与其他 pipeline 共享�
 4. analytic Escape 保持 non-spectral kind；blackbody plan 返回 f32 scene-linear bands 并满足既有 spectral budget；
 5. 该基线 revision 的 production renderer resources 与 crate public interface 不含 inspection。
 
-该基线尚未闭合 source edge、Surface/Escape boundary、不同 winding/higher-order branch、critical curve 两侧、正负 spin 连续字段 corpus，以及 resize/suspend/device-error 的 production lifecycle。当前 production 已闭合单槽 request/cancel/poll lifecycle，但上述连续字段 corpus 仍开放。CPU/GPU agreement 仍不是物理证明；所有正式接纳域继续受[验证合同](../validation.md)约束。
+该基线尚未闭合 source edge、Surface/Escape boundary、不同 winding/higher-order branch、critical curve 两侧、正负 spin 连续字段 corpus，以及 resize/suspend/device-error 的 production lifecycle。当前 production 已闭合单槽 ticket/completion 与 resize/suspend cancel-drain lifecycle，但上述连续字段 corpus 仍开放。CPU/GPU agreement 仍不是物理证明；所有正式接纳域继续受[验证合同](../validation.md)约束。
 
 Production generation、取消、排队与 error seam 已由 desktop consumer 触发并在[后续决策](on-demand-sample-inspection.md)中采用；artifact identity 与 quality 参数仍等待真实持久化消费者/第二执行政策。恢复 `@workgroup_size(1)` 必须在 Metal/Vulkan 的完整 record 上消除上述字段反例，不能只比较 terminal 或 radiance。若连续 observable 超预算，应收窄支持域、refine/fallback 或返回 typed uncertainty，不放宽阈值。

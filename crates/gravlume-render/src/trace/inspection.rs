@@ -1,13 +1,6 @@
-use std::{
-    num::NonZeroU64,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        mpsc::{self, TryRecvError},
-    },
-};
+use std::sync::mpsc::{self, TryRecvError};
 
 use gravlume_domain::ImageSample;
-use num_traits::ToPrimitive as _;
 
 use super::{TracePipeline, TracePlan, shader, size_of};
 use crate::{
@@ -17,19 +10,15 @@ use crate::{
 
 const INSPECTION_REQUEST_BYTES: u64 = size_of::<GpuInspectionRequest>();
 const INSPECTION_RECORD_BYTES: u64 = size_of::<GpuInspectionRecord>();
-const PUBLISHED_TEXEL_OFFSET: u64 = 256;
+const PUBLISHED_TEXEL_OFFSET: u64 = INSPECTION_RECORD_BYTES;
 const PUBLISHED_TEXEL_BYTES: u64 = 8;
 const INSPECTION_READBACK_BYTES: u64 = PUBLISHED_TEXEL_OFFSET + PUBLISHED_TEXEL_BYTES;
-const INSPECTION_LOGICAL_BUFFER_BYTES: u64 =
-    INSPECTION_REQUEST_BYTES + INSPECTION_RECORD_BYTES + INSPECTION_READBACK_BYTES;
 const _: () = {
-    assert!(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT == 256);
-    assert!(INSPECTION_RECORD_BYTES <= PUBLISHED_TEXEL_OFFSET);
     assert!(PUBLISHED_TEXEL_BYTES == size_of::<[u16; 4]>());
+    assert!(PUBLISHED_TEXEL_OFFSET.is_multiple_of(PUBLISHED_TEXEL_BYTES));
 };
 const KNOWN_NUMERICAL_FLAGS: u32 = 1 | 2 | 4;
 const KNOWN_EVENT_CANDIDATES: u32 = 1 | 2 | 4 | 8;
-static NEXT_OBSERVATION_ID: AtomicU64 = AtomicU64::new(1);
 
 const HORIZON_TAG: u32 = 0.0_f32.to_bits();
 const ANALYTIC_ESCAPE_TAG: u32 = 1.0_f32.to_bits();
@@ -41,7 +30,6 @@ const UNCERTAIN_FAILURE_TAG: u32 = (-6.0_f32).to_bits();
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u32)]
-#[non_exhaustive]
 pub enum TraceTermination {
     HorizonCrossing = 1,
     Escape = 2,
@@ -58,19 +46,8 @@ impl From<TraceTermination> for u32 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("unknown GPU trace termination discriminant {0}")]
-pub struct UnknownTraceTermination(u32);
-
-impl UnknownTraceTermination {
-    #[must_use]
-    pub const fn raw(self) -> u32 {
-        self.0
-    }
-}
-
 impl TryFrom<u32> for TraceTermination {
-    type Error = UnknownTraceTermination;
+    type Error = u32;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
@@ -81,105 +58,29 @@ impl TryFrom<u32> for TraceTermination {
             5 => Ok(Self::NumericalFailure),
             6 => Ok(Self::Uncertain),
             7 => Ok(Self::EquatorialSurface),
-            unknown => Err(UnknownTraceTermination(unknown)),
+            unknown => Err(unknown),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// Opaque identity for one renderer's immutable observation.
+#[derive(Clone, Copy, Debug)]
+/// Immutable target captured when one inspection request is admitted.
 ///
-/// This value is process-local and must not be used as a persisted artifact identity.
-pub struct SampleObservationId(NonZeroU64);
-
-impl SampleObservationId {
-    pub(crate) fn allocate() -> Option<Self> {
-        let raw = NEXT_OBSERVATION_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                current.checked_add(1)
-            })
-            .ok()?;
-        NonZeroU64::new(raw).map(Self)
-    }
-
-    #[cfg(test)]
-    const fn for_test(raw: u64) -> Self {
-        Self(NonZeroU64::new(raw).expect("test observation identity is nonzero"))
-    }
-
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-/// Opaque identity for one request within a renderer instance.
-pub struct SampleInspectionRequestId(NonZeroU64);
-
-impl SampleInspectionRequestId {
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0.get()
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SampleInspectionProfile {
-    GpuKerrSchildRk4V1,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SampleInspectionProducer {
-    FullKerrSchildRetrace,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum SampleArithmeticDomain {
-    WgslBinary32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-/// Host-owned identity captured when one inspection request is admitted.
-///
-/// The observation and request identifiers are process-local. Persisted scientific artifacts need
-/// their own canonical observation, producer revision, and backend identity.
-pub struct SampleInspectionIdentity {
-    request_id: SampleInspectionRequestId,
-    observation_id: SampleObservationId,
+/// This live renderer ticket is not a persisted artifact identity. Persisted evidence needs its
+/// own canonical observation, producer revision, and backend identity.
+pub struct SampleInspectionTicket {
     generation: u64,
     extent: [u32; 2],
     sample: ImageSample,
 }
 
-impl SampleInspectionIdentity {
-    const fn new(
-        request_id: SampleInspectionRequestId,
-        observation_id: SampleObservationId,
-        generation: u64,
-        extent: RenderExtent,
-        sample: ImageSample,
-    ) -> Self {
+impl SampleInspectionTicket {
+    const fn new(generation: u64, extent: RenderExtent, sample: ImageSample) -> Self {
         Self {
-            request_id,
-            observation_id,
             generation,
             extent: [extent.width(), extent.height()],
             sample,
         }
-    }
-
-    #[must_use]
-    pub const fn request_id(self) -> SampleInspectionRequestId {
-        self.request_id
-    }
-
-    #[must_use]
-    pub const fn observation_id(self) -> SampleObservationId {
-        self.observation_id
     }
 
     #[must_use]
@@ -195,63 +96,6 @@ impl SampleInspectionIdentity {
     #[must_use]
     pub const fn sample(self) -> ImageSample {
         self.sample
-    }
-
-    #[must_use]
-    pub const fn profile(self) -> SampleInspectionProfile {
-        SampleInspectionProfile::GpuKerrSchildRk4V1
-    }
-
-    #[must_use]
-    pub const fn producer(self) -> SampleInspectionProducer {
-        SampleInspectionProducer::FullKerrSchildRetrace
-    }
-
-    #[must_use]
-    pub const fn arithmetic_domain(self) -> SampleArithmeticDomain {
-        SampleArithmeticDomain::WgslBinary32
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SampleInspectionLimits {
-    _private: (),
-}
-
-impl SampleInspectionLimits {
-    #[must_use]
-    pub(crate) const fn production() -> Self {
-        Self { _private: () }
-    }
-
-    #[must_use]
-    pub const fn maximum_pending_requests(self) -> u32 {
-        1
-    }
-
-    #[must_use]
-    pub const fn request_buffer_bytes(self) -> u64 {
-        INSPECTION_REQUEST_BYTES
-    }
-
-    #[must_use]
-    pub const fn record_buffer_bytes(self) -> u64 {
-        INSPECTION_RECORD_BYTES
-    }
-
-    #[must_use]
-    pub const fn readback_buffer_bytes(self) -> u64 {
-        INSPECTION_READBACK_BYTES
-    }
-
-    #[must_use]
-    pub const fn maximum_logical_buffer_bytes(self) -> u64 {
-        INSPECTION_LOGICAL_BUFFER_BYTES
-    }
-
-    #[must_use]
-    pub const fn readback_range_bytes(self) -> u64 {
-        INSPECTION_READBACK_BYTES
     }
 }
 
@@ -293,127 +137,142 @@ impl SampleBranchKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum SampleInspectionSource {
-    None,
-    /// A normalized orientation used by the analytic sky preview, not a physical spectrum.
-    AnalyticEscape {
-        unit_direction: [f32; 3],
-    },
-    EquatorialSurface {
-        radius_over_m: f32,
-        azimuth_radians: f32,
-        frequency_ratio: f32,
-    },
+pub enum SampleSurfaceEvaluation {
+    Radiance([f32; 3]),
+    NumericalFailure { visible_rgb: [f32; 3] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-#[non_exhaustive]
-pub enum SampleSceneValue {
-    Horizon,
-    /// Scene-linear orientation preview; these channels are not spectral radiance.
-    AnalyticEscapePreview([f32; 3]),
-    SurfaceRadiance([f32; 3]),
-    TraceFailure {
-        termination: TraceTermination,
+pub enum SampleTraceOutcome {
+    Horizon {
+        branch: SampleBranchKey,
+    },
+    Escape {
+        branch: SampleBranchKey,
+        /// A normalized orientation used by the analytic sky preview, not a physical spectrum.
+        unit_direction: [f32; 3],
+        preview_rgb: [f32; 3],
+    },
+    EquatorialSurface {
+        branch: SampleBranchKey,
+        radius_over_m: f32,
+        azimuth_radians: f32,
+        frequency_ratio: f32,
+        channels: ScientificChannelModel,
+        evaluation: SampleSurfaceEvaluation,
+    },
+    SingularityGuard {
+        branch: SampleBranchKey,
+        visible_rgb: [f32; 3],
+    },
+    StepExhausted {
+        branch_prefix: SampleBranchKey,
+        visible_rgb: [f32; 3],
+    },
+    NumericalFailure {
+        visible_rgb: [f32; 3],
+    },
+    Uncertain {
         visible_rgb: [f32; 3],
     },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleTraceDiagnostics {
+    coordinate_time_delta_over_m: f32,
+    event_candidates: u32,
+    event_residual: f32,
+    steps: u32,
+    numerical_flags: u32,
+    maximum_invariant_drift: [f32; 4],
+}
+
+impl SampleTraceDiagnostics {
+    #[must_use]
+    pub const fn coordinate_time_delta_over_m(self) -> f32 {
+        self.coordinate_time_delta_over_m
+    }
+
+    #[must_use]
+    pub const fn event_candidate_bits(self) -> u32 {
+        self.event_candidates
+    }
+
+    #[must_use]
+    pub const fn event_residual(self) -> f32 {
+        self.event_residual
+    }
+
+    #[must_use]
+    pub const fn steps(self) -> u32 {
+        self.steps
+    }
+
+    #[must_use]
+    pub const fn numerical_flag_bits(self) -> u32 {
+        self.numerical_flags
+    }
+
+    #[must_use]
+    pub const fn maximum_invariant_drift(self) -> [f32; 4] {
+        self.maximum_invariant_drift
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleRetrace {
+    effective_subpixel: [f32; 2],
+    outcome: SampleTraceOutcome,
+    diagnostics: SampleTraceDiagnostics,
+}
+
+impl SampleRetrace {
+    /// Identifies the fixed full Kerr-Schild RK4 retrace and its WGSL binary32 arithmetic domain.
+    pub const METHOD_ID: &str = "gpu-ks-rk4-v1/full-kerr-schild-retrace/wgsl-binary32";
+
+    #[must_use]
+    pub const fn effective_subpixel(self) -> [f32; 2] {
+        self.effective_subpixel
+    }
+
+    #[must_use]
+    pub const fn outcome(self) -> SampleTraceOutcome {
+        self.outcome
+    }
+
+    #[must_use]
+    pub const fn diagnostics(self) -> SampleTraceDiagnostics {
+        self.diagnostics
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SampleInspection {
-    identity: SampleInspectionIdentity,
     published_texel: ScientificTexel,
-    pub(crate) channel_model: Option<ScientificChannelModel>,
-    pub(crate) termination: TraceTermination,
-    pub(crate) source: SampleInspectionSource,
-    pub(crate) scene_value: SampleSceneValue,
-    pub(crate) branch_key: Option<SampleBranchKey>,
-    pub(crate) travel_time_over_m: f32,
-    pub(crate) event_candidates: u32,
-    pub(crate) event_residual: f32,
-    pub(crate) steps: u32,
-    pub(crate) numerical_flags: u32,
-    pub(crate) maximum_invariant_drift: [f32; 4],
+    fresh_retrace: SampleRetrace,
 }
 
 impl SampleInspection {
-    #[must_use]
-    pub const fn identity(&self) -> SampleInspectionIdentity {
-        self.identity
-    }
-
     /// Returns the exact `Rgba16Float` texel copied from the bound published generation.
     #[must_use]
     pub const fn published_texel(&self) -> ScientificTexel {
         self.published_texel
     }
 
-    #[must_use]
-    pub const fn channel_model(&self) -> Option<ScientificChannelModel> {
-        self.channel_model
-    }
-
-    #[must_use]
-    pub const fn termination(&self) -> TraceTermination {
-        self.termination
-    }
-
-    #[must_use]
-    pub const fn source(&self) -> SampleInspectionSource {
-        self.source
-    }
-
-    /// Returns the f32 result of the fresh full Kerr-Schild retrace.
+    /// Returns the binary32 evidence from the fresh full Kerr-Schild retrace.
     ///
     /// This is deliberately separate from [`Self::published_texel`], which may include a
     /// conservative accelerator, shadow refinement, and `Rgba16Float` rounding.
     #[must_use]
-    pub const fn evaluated_scene_value(&self) -> SampleSceneValue {
-        self.scene_value
-    }
-
-    #[must_use]
-    pub const fn branch_key(&self) -> Option<SampleBranchKey> {
-        self.branch_key
-    }
-
-    #[must_use]
-    pub const fn travel_time_over_m(&self) -> f32 {
-        self.travel_time_over_m
-    }
-
-    #[must_use]
-    pub const fn event_candidate_bits(&self) -> u32 {
-        self.event_candidates
-    }
-
-    #[must_use]
-    pub const fn event_residual(&self) -> f32 {
-        self.event_residual
-    }
-
-    #[must_use]
-    pub const fn steps(&self) -> u32 {
-        self.steps
-    }
-
-    #[must_use]
-    pub const fn numerical_flag_bits(&self) -> u32 {
-        self.numerical_flags
-    }
-
-    #[must_use]
-    pub const fn maximum_invariant_drift(&self) -> [f32; 4] {
-        self.maximum_invariant_drift
+    pub const fn fresh_retrace(&self) -> SampleRetrace {
+        self.fresh_retrace
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
 pub enum SampleInspectionError {
-    #[error(transparent)]
-    UnknownTermination(#[from] UnknownTraceTermination),
+    #[error("unknown GPU trace termination discriminant {0}")]
+    UnknownTermination(u32),
     #[error("unknown GPU sample initial polar-side discriminant {0}")]
     UnknownPolarSide(u32),
     #[error("GPU sample inspection returned an invalid {field} record")]
@@ -429,34 +288,45 @@ pub enum SampleInspectionError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[non_exhaustive]
 pub enum SampleInspectionRequestError {
-    #[error("no complete scene generation has been published")]
-    NoPublishedScene,
-    #[error(
-        "published scene generation {published} is not the current renderer generation {current}"
-    )]
-    PublishedGenerationStale { published: u64, current: u64 },
+    #[error("the renderer has no complete publication for its current generation")]
+    NoCurrentPublication,
     #[error("sample pixel {pixel:?} lies outside the published extent {extent:?}")]
     SampleOutsideExtent { pixel: [u32; 2], extent: [u32; 2] },
-    #[error("sample inspection request {active:?} is still in flight")]
-    Busy { active: SampleInspectionRequestId },
-    #[error("validated sample subpixel coordinate {field} cannot enter WGSL binary32")]
-    SubpixelNotRepresentable { field: &'static str },
-    #[error("sample inspection request identity space is exhausted")]
-    RequestIdentityExhausted,
+    #[error("the fixed sample inspection slot is still in flight")]
+    Busy,
 }
 
 #[derive(Debug)]
-#[non_exhaustive]
-pub enum SampleInspectionEvent {
+pub struct SampleInspectionCompletion {
+    ticket: SampleInspectionTicket,
+    disposition: SampleInspectionDisposition,
+}
+
+impl SampleInspectionCompletion {
+    const fn new(ticket: SampleInspectionTicket, disposition: SampleInspectionDisposition) -> Self {
+        Self {
+            ticket,
+            disposition,
+        }
+    }
+
+    #[must_use]
+    pub const fn ticket(&self) -> SampleInspectionTicket {
+        self.ticket
+    }
+
+    #[must_use]
+    pub const fn disposition(&self) -> &SampleInspectionDisposition {
+        &self.disposition
+    }
+}
+
+#[derive(Debug)]
+pub enum SampleInspectionDisposition {
     Completed(SampleInspection),
-    Cancelled(SampleInspectionIdentity),
-    Superseded(SampleInspectionIdentity),
-    Failed {
-        identity: SampleInspectionIdentity,
-        error: SampleInspectionError,
-    },
+    Cancelled,
+    Failed(SampleInspectionError),
 }
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -467,28 +337,24 @@ struct GpuInspectionRequest {
 }
 
 impl GpuInspectionRequest {
-    fn new(
-        sample: ImageSample,
-        extent: RenderExtent,
-    ) -> Result<Self, SampleInspectionRequestError> {
+    const fn new(sample: ImageSample, extent: RenderExtent) -> Self {
         let [pixel_x, pixel_y] = sample.pixel();
-        let [subpixel_x, subpixel_y] = sample.subpixel();
-        let subpixel_x =
-            subpixel_x
-                .to_f32()
-                .ok_or(SampleInspectionRequestError::SubpixelNotRepresentable {
-                    field: "subpixel_x",
-                })?;
-        let subpixel_y =
-            subpixel_y
-                .to_f32()
-                .ok_or(SampleInspectionRequestError::SubpixelNotRepresentable {
-                    field: "subpixel_y",
-                })?;
-        Ok(Self {
+        let [subpixel_x, subpixel_y] = binary32_subpixel(sample);
+        Self {
             pixel_extent: [pixel_x, pixel_y, extent.width(), extent.height()],
             subpixel: [subpixel_x, subpixel_y, 0.0, 0.0],
-        })
+        }
+    }
+}
+
+const fn binary32_subpixel(sample: ImageSample) -> [f32; 2] {
+    let [subpixel_x, subpixel_y] = sample.subpixel();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "ImageSample guarantees finite subpixel coordinates in [0, 1], so binary32 rounding is total"
+    )]
+    {
+        [subpixel_x as f32, subpixel_y as f32]
     }
 }
 
@@ -527,8 +393,18 @@ const _: () = {
 
 struct PendingInspection {
     receiver: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
-    identity: SampleInspectionIdentity,
+    ticket: SampleInspectionTicket,
     cancelled: bool,
+}
+
+impl PendingInspection {
+    fn disposition(&self, accepted_generation: Option<u64>) -> Option<SampleInspectionDisposition> {
+        if self.cancelled || accepted_generation != Some(self.ticket.generation()) {
+            Some(SampleInspectionDisposition::Cancelled)
+        } else {
+            None
+        }
+    }
 }
 
 pub struct SampleInspector {
@@ -537,18 +413,12 @@ pub struct SampleInspector {
     request: wgpu::Buffer,
     record: wgpu::Buffer,
     readback: wgpu::Buffer,
-    observation_id: SampleObservationId,
     channel_model: Option<ScientificChannelModel>,
-    next_request_id: Option<NonZeroU64>,
     pending: Option<PendingInspection>,
 }
 
 impl SampleInspector {
-    pub(crate) fn new(
-        device: &wgpu::Device,
-        trace: &TracePipeline,
-        observation_id: SampleObservationId,
-    ) -> Self {
+    pub(crate) fn new(device: &wgpu::Device, trace: &TracePipeline) -> Self {
         let request = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sample inspection request"),
             size: INSPECTION_REQUEST_BYTES,
@@ -577,11 +447,9 @@ impl SampleInspector {
             request,
             record,
             readback,
-            observation_id,
             channel_model: trace
                 .scientific_capture_metadata()
                 .map(crate::scientific_capture::ScientificCaptureMetadata::channels),
-            next_request_id: Some(NonZeroU64::MIN),
             pending: None,
         }
     }
@@ -594,12 +462,7 @@ impl SampleInspector {
         extent: RenderExtent,
         generation: u64,
         sample: ImageSample,
-    ) -> Result<SampleInspectionRequestId, SampleInspectionRequestError> {
-        if let Some(pending) = &self.pending {
-            return Err(SampleInspectionRequestError::Busy {
-                active: pending.identity.request_id(),
-            });
-        }
+    ) -> Result<SampleInspectionTicket, SampleInspectionRequestError> {
         let pixel = sample.pixel();
         let extent_array = [extent.width(), extent.height()];
         if pixel[0] >= extent.width() || pixel[1] >= extent.height() {
@@ -608,19 +471,11 @@ impl SampleInspector {
                 extent: extent_array,
             });
         }
-        let request_id = self
-            .next_request_id
-            .map(SampleInspectionRequestId)
-            .ok_or(SampleInspectionRequestError::RequestIdentityExhausted)?;
-        let request = GpuInspectionRequest::new(sample, extent)?;
-        let identity = SampleInspectionIdentity::new(
-            request_id,
-            self.observation_id,
-            generation,
-            extent,
-            sample,
-        );
-        self.next_request_id = request_id.get().checked_add(1).and_then(NonZeroU64::new);
+        if self.pending.is_some() {
+            return Err(SampleInspectionRequestError::Busy);
+        }
+        let request = GpuInspectionRequest::new(sample, extent);
+        let ticket = SampleInspectionTicket::new(generation, extent, sample);
         // Queue writes are staged immediately and execute before the following submission.
         // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer
         queue.write_buffer(&self.request, 0, bytemuck::bytes_of(&request));
@@ -656,8 +511,14 @@ impl SampleInspector {
                 buffer: &self.readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: PUBLISHED_TEXEL_OFFSET,
+                    // Keep the native copy layout explicit. The portable 256-byte row stride does
+                    // not add trailing padding after this copy's only row, so the eight-byte texel
+                    // can immediately follow the record.
+                    // Sources:
+                    // - https://docs.rs/wgpu/30.0.1/wgpu/struct.TexelCopyBufferLayout.html
+                    // - https://docs.rs/wgpu/30.0.1/wgpu/struct.BufferTextureCopyInfo.html#structfield.bytes_in_copy
                     bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
-                    rows_per_image: Some(1),
+                    rows_per_image: None,
                 },
             },
             wgpu::Extent3d {
@@ -678,21 +539,10 @@ impl SampleInspector {
         queue.submit([encoder.finish()]);
         self.pending = Some(PendingInspection {
             receiver,
-            identity,
+            ticket,
             cancelled: false,
         });
-        Ok(request_id)
-    }
-
-    pub(crate) fn cancel(&mut self, request_id: SampleInspectionRequestId) -> bool {
-        let Some(pending) = self.pending.as_mut() else {
-            return false;
-        };
-        if pending.identity.request_id() != request_id {
-            return false;
-        }
-        pending.cancelled = true;
-        true
+        Ok(ticket)
     }
 
     pub(crate) const fn cancel_active(&mut self) {
@@ -704,7 +554,7 @@ impl SampleInspector {
     pub(crate) fn poll(
         &mut self,
         accepted_generation: Option<u64>,
-    ) -> Option<SampleInspectionEvent> {
+    ) -> Option<SampleInspectionCompletion> {
         let pending = self.pending.take()?;
         let map_result = match pending.receiver.try_recv() {
             Ok(result) => result,
@@ -713,66 +563,70 @@ impl SampleInspector {
                 return None;
             }
             Err(TryRecvError::Disconnected) => {
-                return Some(Self::disposition_or_failure(
-                    &pending,
-                    accepted_generation,
-                    SampleInspectionError::CallbackDisconnected,
-                ));
+                return Some(Self::disconnected_completion(&pending, accepted_generation));
             }
         };
 
-        let disposition = if pending.cancelled {
-            Some(SampleInspectionEvent::Cancelled(pending.identity))
-        } else if accepted_generation != Some(pending.identity.generation()) {
-            Some(SampleInspectionEvent::Superseded(pending.identity))
-        } else {
-            None
-        };
+        Some(self.complete_mapping(&pending, accepted_generation, map_result))
+    }
+
+    fn complete_mapping(
+        &self,
+        pending: &PendingInspection,
+        accepted_generation: Option<u64>,
+        map_result: Result<(), wgpu::BufferAsyncError>,
+    ) -> SampleInspectionCompletion {
+        let disposition = pending.disposition(accepted_generation);
         if let Err(error) = map_result {
             // The callback grants CPU access only with `Ok`; a failed mapping has no mapped range
             // to release. Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async
-            return Some(Self::disposition_or_failure(
-                &pending,
-                accepted_generation,
-                error.into(),
-            ));
+            return SampleInspectionCompletion::new(
+                pending.ticket,
+                disposition.unwrap_or_else(|| SampleInspectionDisposition::Failed(error.into())),
+            );
         }
-        if let Some(event) = disposition {
+        if let Some(disposition) = disposition {
             self.readback.unmap();
-            return Some(event);
+            return SampleInspectionCompletion::new(pending.ticket, disposition);
         }
 
-        let result = self.read_inspection(pending.identity);
+        let result = self.read_inspection(pending.ticket);
         self.readback.unmap();
-        Some(match result {
-            Ok(inspection) => SampleInspectionEvent::Completed(inspection),
-            Err(error) => SampleInspectionEvent::Failed {
-                identity: pending.identity,
-                error,
-            },
-        })
+        let disposition = match result {
+            Ok(inspection) => SampleInspectionDisposition::Completed(inspection),
+            Err(error) => SampleInspectionDisposition::Failed(error),
+        };
+        SampleInspectionCompletion::new(pending.ticket, disposition)
     }
 
-    fn disposition_or_failure(
+    fn disconnected_completion(
         pending: &PendingInspection,
         accepted_generation: Option<u64>,
-        error: SampleInspectionError,
-    ) -> SampleInspectionEvent {
-        if pending.cancelled {
-            SampleInspectionEvent::Cancelled(pending.identity)
-        } else if accepted_generation != Some(pending.identity.generation()) {
-            SampleInspectionEvent::Superseded(pending.identity)
-        } else {
-            SampleInspectionEvent::Failed {
-                identity: pending.identity,
-                error,
-            }
-        }
+    ) -> SampleInspectionCompletion {
+        let disposition = pending.disposition(accepted_generation).unwrap_or(
+            SampleInspectionDisposition::Failed(SampleInspectionError::CallbackDisconnected),
+        );
+        SampleInspectionCompletion::new(pending.ticket, disposition)
+    }
+
+    #[cfg(test)]
+    fn wait_for_completion(
+        &mut self,
+        accepted_generation: Option<u64>,
+    ) -> SampleInspectionCompletion {
+        let pending = self
+            .pending
+            .take()
+            .expect("test inspection has a pending mapping");
+        let Ok(map_result) = pending.receiver.recv() else {
+            return Self::disconnected_completion(&pending, accepted_generation);
+        };
+        self.complete_mapping(&pending, accepted_generation, map_result)
     }
 
     fn read_inspection(
         &self,
-        identity: SampleInspectionIdentity,
+        ticket: SampleInspectionTicket,
     ) -> Result<SampleInspection, SampleInspectionError> {
         let mapped = self.readback.get_mapped_range(..)?;
         let record_bytes = mapped
@@ -795,7 +649,7 @@ impl SampleInspector {
         decode_record(
             record,
             self.channel_model,
-            identity,
+            ticket,
             ScientificTexel::from_rgba16_float_bits(rgba16_float_bits),
         )
     }
@@ -895,8 +749,7 @@ impl TracePipeline {
             usage: wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let mut inspector =
-            SampleInspector::new(&gpu.device, self, SampleObservationId::for_test(1));
+        let mut inspector = SampleInspector::new(&gpu.device, self);
         inspector
             .request(&gpu.device, &gpu.queue, &published, extent, 1, sample)
             .expect("test inspection request is accepted");
@@ -907,9 +760,11 @@ impl TracePipeline {
                 timeout: None,
             })
             .expect("test inspection submission completes");
-        match inspector.poll(Some(1)) {
-            Some(SampleInspectionEvent::Completed(inspection)) => inspection,
-            event => panic!("test inspection must complete, got {event:?}"),
+        match inspector.wait_for_completion(Some(1)).disposition {
+            SampleInspectionDisposition::Completed(inspection) => inspection,
+            disposition => {
+                panic!("test inspection must complete, got {disposition:?}")
+            }
         }
     }
 }
@@ -917,7 +772,7 @@ impl TracePipeline {
 fn decode_record(
     raw: GpuInspectionRecord,
     channel_model: Option<ScientificChannelModel>,
-    identity: SampleInspectionIdentity,
+    ticket: SampleInspectionTicket,
     published_texel: ScientificTexel,
 ) -> Result<SampleInspection, SampleInspectionError> {
     if !raw
@@ -938,7 +793,8 @@ fn decode_record(
         });
     }
 
-    let termination = TraceTermination::try_from(raw.metadata[0])?;
+    let termination = TraceTermination::try_from(raw.metadata[0])
+        .map_err(SampleInspectionError::UnknownTermination)?;
     let numerical_flags = raw.metadata[1];
     if numerical_flags & !KNOWN_NUMERICAL_FLAGS != 0 {
         return Err(SampleInspectionError::InvalidRecord {
@@ -952,50 +808,28 @@ fn decode_record(
         });
     }
 
-    Ok(SampleInspection {
-        identity,
-        published_texel,
-        channel_model,
+    let outcome = decode_outcome(
         termination,
-        source: decode_source(termination, raw.source_time)?,
-        scene_value: decode_scene_value(termination, raw.scene_value)?,
-        branch_key: decode_branch_key(termination, raw.branch_key)?,
-        travel_time_over_m: raw.source_time[3],
-        event_candidates,
-        event_residual: raw.event_diagnostics[0],
-        steps: raw.metadata[2],
-        numerical_flags,
-        maximum_invariant_drift: raw.maximum_invariant_drift,
+        decode_branch_key(termination, raw.branch_key)?,
+        raw.source_time,
+        raw.scene_value,
+        channel_model,
+    )?;
+    Ok(SampleInspection {
+        published_texel,
+        fresh_retrace: SampleRetrace {
+            effective_subpixel: binary32_subpixel(ticket.sample()),
+            outcome,
+            diagnostics: SampleTraceDiagnostics {
+                coordinate_time_delta_over_m: raw.source_time[3],
+                event_candidates,
+                event_residual: raw.event_diagnostics[0],
+                steps: raw.metadata[2],
+                numerical_flags,
+                maximum_invariant_drift: raw.maximum_invariant_drift,
+            },
+        },
     })
-}
-
-fn decode_source(
-    termination: TraceTermination,
-    source_time: [f32; 4],
-) -> Result<SampleInspectionSource, SampleInspectionError> {
-    let [source_x, source_y, source_z, _] = source_time;
-    match termination {
-        TraceTermination::Escape => Ok(SampleInspectionSource::AnalyticEscape {
-            unit_direction: [source_x, source_y, source_z],
-        }),
-        TraceTermination::EquatorialSurface => {
-            if source_x <= 0.0 || source_z <= 0.0 {
-                return Err(SampleInspectionError::InvalidRecord {
-                    field: "surface source",
-                });
-            }
-            Ok(SampleInspectionSource::EquatorialSurface {
-                radius_over_m: source_x,
-                azimuth_radians: source_y,
-                frequency_ratio: source_z,
-            })
-        }
-        TraceTermination::HorizonCrossing
-        | TraceTermination::SingularityGuard
-        | TraceTermination::StepExhaustion
-        | TraceTermination::NumericalFailure
-        | TraceTermination::Uncertain => Ok(SampleInspectionSource::None),
-    }
 }
 
 fn decode_branch_key(
@@ -1028,76 +862,124 @@ fn decode_branch_key(
     }))
 }
 
-fn decode_scene_value(
+fn decode_outcome(
     termination: TraceTermination,
+    branch: Option<SampleBranchKey>,
+    source_time: [f32; 4],
     value: [f32; 4],
-) -> Result<SampleSceneValue, SampleInspectionError> {
+    channel_model: Option<ScientificChannelModel>,
+) -> Result<SampleTraceOutcome, SampleInspectionError> {
+    let [source_x, source_y, source_z, _] = source_time;
     let [red, green, blue, alpha] = value;
     let rgb = [red, green, blue];
     let tag = alpha.to_bits();
 
-    if termination == TraceTermination::HorizonCrossing && tag == HORIZON_TAG {
-        if rgb.map(f32::to_bits) != [0; 3] {
-            return Err(SampleInspectionError::InvalidRecord {
-                field: "horizon scene value",
-            });
+    match termination {
+        TraceTermination::HorizonCrossing => {
+            require_scene_tag(tag, HORIZON_TAG)?;
+            if rgb.map(f32::to_bits) != [0; 3] {
+                return Err(SampleInspectionError::InvalidRecord {
+                    field: "horizon scene value",
+                });
+            }
+            Ok(SampleTraceOutcome::Horizon {
+                branch: require_branch(branch)?,
+            })
         }
-        return Ok(SampleSceneValue::Horizon);
-    }
-    if termination == TraceTermination::Escape && tag == ANALYTIC_ESCAPE_TAG {
-        return Ok(SampleSceneValue::AnalyticEscapePreview(rgb));
-    }
-    if termination == TraceTermination::EquatorialSurface && tag == SURFACE_RADIANCE_TAG {
-        if rgb.into_iter().any(|channel| channel < 0.0) {
-            return Err(SampleInspectionError::InvalidRecord {
-                field: "surface radiance",
-            });
+        TraceTermination::Escape => {
+            require_scene_tag(tag, ANALYTIC_ESCAPE_TAG)?;
+            Ok(SampleTraceOutcome::Escape {
+                branch: require_branch(branch)?,
+                unit_direction: [source_x, source_y, source_z],
+                preview_rgb: rgb,
+            })
         }
-        return Ok(SampleSceneValue::SurfaceRadiance(rgb));
-    }
-
-    let visible_termination = match tag {
-        SINGULARITY_FAILURE_TAG => TraceTermination::SingularityGuard,
-        STEP_EXHAUSTION_FAILURE_TAG => TraceTermination::StepExhaustion,
-        NUMERICAL_FAILURE_TAG => TraceTermination::NumericalFailure,
-        UNCERTAIN_FAILURE_TAG => TraceTermination::Uncertain,
-        _ => {
-            return Err(SampleInspectionError::InvalidRecord { field: "scene tag" });
-        }
-    };
-    let valid_failure = match termination {
         TraceTermination::EquatorialSurface => {
-            visible_termination == TraceTermination::NumericalFailure
+            if source_x <= 0.0 || source_z <= 0.0 {
+                return Err(SampleInspectionError::InvalidRecord {
+                    field: "surface source",
+                });
+            }
+            let channels = channel_model.ok_or(SampleInspectionError::InvalidRecord {
+                field: "surface channel model",
+            })?;
+            let evaluation = if tag == SURFACE_RADIANCE_TAG {
+                if rgb.into_iter().any(|channel| channel < 0.0) {
+                    return Err(SampleInspectionError::InvalidRecord {
+                        field: "surface radiance",
+                    });
+                }
+                SampleSurfaceEvaluation::Radiance(rgb)
+            } else if tag == NUMERICAL_FAILURE_TAG {
+                SampleSurfaceEvaluation::NumericalFailure { visible_rgb: rgb }
+            } else {
+                return Err(SampleInspectionError::InvalidRecord {
+                    field: "termination/scene tag",
+                });
+            };
+            Ok(SampleTraceOutcome::EquatorialSurface {
+                branch: require_branch(branch)?,
+                radius_over_m: source_x,
+                azimuth_radians: source_y,
+                frequency_ratio: source_z,
+                channels,
+                evaluation,
+            })
         }
-        TraceTermination::SingularityGuard
-        | TraceTermination::StepExhaustion
-        | TraceTermination::NumericalFailure
-        | TraceTermination::Uncertain => visible_termination == termination,
-        TraceTermination::HorizonCrossing | TraceTermination::Escape => false,
-    };
-    if !valid_failure {
-        return Err(SampleInspectionError::InvalidRecord {
-            field: "termination/scene tag",
-        });
+        TraceTermination::SingularityGuard => {
+            require_scene_tag(tag, SINGULARITY_FAILURE_TAG)?;
+            Ok(SampleTraceOutcome::SingularityGuard {
+                branch: require_branch(branch)?,
+                visible_rgb: rgb,
+            })
+        }
+        TraceTermination::StepExhaustion => {
+            require_scene_tag(tag, STEP_EXHAUSTION_FAILURE_TAG)?;
+            Ok(SampleTraceOutcome::StepExhausted {
+                branch_prefix: require_branch(branch)?,
+                visible_rgb: rgb,
+            })
+        }
+        TraceTermination::NumericalFailure => {
+            require_scene_tag(tag, NUMERICAL_FAILURE_TAG)?;
+            Ok(SampleTraceOutcome::NumericalFailure { visible_rgb: rgb })
+        }
+        TraceTermination::Uncertain => {
+            require_scene_tag(tag, UNCERTAIN_FAILURE_TAG)?;
+            Ok(SampleTraceOutcome::Uncertain { visible_rgb: rgb })
+        }
     }
-    Ok(SampleSceneValue::TraceFailure {
-        termination: visible_termination,
-        visible_rgb: rgb,
+}
+
+fn require_branch(
+    branch: Option<SampleBranchKey>,
+) -> Result<SampleBranchKey, SampleInspectionError> {
+    branch.ok_or(SampleInspectionError::InvalidRecord {
+        field: "missing branch",
     })
+}
+
+const fn require_scene_tag(actual: u32, expected: u32) -> Result<(), SampleInspectionError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(SampleInspectionError::InvalidRecord {
+            field: "termination/scene tag",
+        })
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU64, sync::mpsc};
+    use std::sync::mpsc;
 
     use proptest::prelude::*;
 
     use super::{
-        PendingInspection, SampleArithmeticDomain, SampleBranchKey, SampleInspectionError,
-        SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
-        SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
-        SampleInspectionRequestId, SampleInspector, SampleObservationId, SamplePolarSide,
-        decode_branch_key,
+        INSPECTION_READBACK_BYTES, INSPECTION_RECORD_BYTES, INSPECTION_REQUEST_BYTES,
+        PendingInspection, SampleBranchKey, SampleInspectionDisposition, SampleInspectionError,
+        SampleInspectionRequestError, SampleInspectionTicket, SampleInspector, SamplePolarSide,
+        SampleRetrace, SampleTraceOutcome, decode_branch_key,
     };
     use crate::{
         error::GpuErrorScopes,
@@ -1114,6 +996,12 @@ mod tests {
         prop_oneof![Just(i32::MIN), Just(0), Just(i32::MAX), any::<i32>()]
     }
 
+    fn assert_same_ticket(actual: SampleInspectionTicket, expected: SampleInspectionTicket) {
+        assert_eq!(actual.generation(), expected.generation());
+        assert_eq!(actual.extent(), expected.extent());
+        assert_eq!(actual.sample(), expected.sample());
+    }
+
     #[test]
     fn numerical_failure_uses_an_explicit_zero_branch_sentinel() {
         assert_eq!(
@@ -1124,15 +1012,14 @@ mod tests {
     }
 
     #[test]
-    fn production_limits_keep_inspection_constant_and_single_flight() {
-        let limits = SampleInspectionLimits::production();
-
-        assert_eq!(limits.maximum_pending_requests(), 1);
-        assert_eq!(limits.request_buffer_bytes(), 32);
-        assert_eq!(limits.record_buffer_bytes(), 96);
-        assert_eq!(limits.readback_buffer_bytes(), 264);
-        assert_eq!(limits.maximum_logical_buffer_bytes(), 392);
-        assert_eq!(limits.readback_range_bytes(), 264);
+    fn fixed_buffers_match_the_documented_logical_budget() {
+        assert_eq!(INSPECTION_REQUEST_BYTES, 32);
+        assert_eq!(INSPECTION_RECORD_BYTES, 96);
+        assert_eq!(INSPECTION_READBACK_BYTES, 104);
+        assert_eq!(
+            INSPECTION_REQUEST_BYTES + INSPECTION_RECORD_BYTES + INSPECTION_READBACK_BYTES,
+            232
+        );
     }
 
     #[test]
@@ -1152,36 +1039,27 @@ mod tests {
         let gpu = native_gpu();
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
-        let observation_id = SampleObservationId::for_test(97);
-        let mut inspector = SampleInspector::new(&gpu.device, &trace, observation_id);
-        let identity = SampleInspectionIdentity::new(
-            SampleInspectionRequestId(NonZeroU64::MIN),
-            observation_id,
-            23,
-            extent,
-            fixture.sample(),
-        );
+        let mut inspector = SampleInspector::new(&gpu.device, &trace);
+        let ticket = SampleInspectionTicket::new(23, extent, fixture.sample());
         let (sender, receiver) = mpsc::sync_channel(1);
         sender
             .send(Err(wgpu::BufferAsyncError))
             .expect("synthetic map completion is delivered");
         inspector.pending = Some(PendingInspection {
             receiver,
-            identity,
+            ticket,
             cancelled: false,
         });
         let scopes = GpuErrorScopes::push(&gpu.device);
 
-        let event = inspector
+        let completion = inspector
             .poll(Some(23))
             .expect("map failure produces one terminal event");
 
+        assert_same_ticket(completion.ticket(), ticket);
         assert!(matches!(
-            event,
-            SampleInspectionEvent::Failed {
-                identity: failed_identity,
-                error: SampleInspectionError::Map(_),
-            } if failed_identity == identity
+            completion.disposition(),
+            SampleInspectionDisposition::Failed(SampleInspectionError::Map(_))
         ));
         let secondary_error = pollster::block_on(scopes.finish());
         assert!(
@@ -1208,8 +1086,7 @@ mod tests {
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
         let published = published_texture(&gpu.device, extent);
-        let mut inspector =
-            SampleInspector::new(&gpu.device, &trace, SampleObservationId::for_test(41));
+        let mut inspector = SampleInspector::new(&gpu.device, &trace);
 
         let request = inspector
             .request(
@@ -1230,9 +1107,9 @@ mod tests {
                 7,
                 fixture.sample(),
             ),
-            Err(SampleInspectionRequestError::Busy { active }) if active == request
+            Err(SampleInspectionRequestError::Busy)
         ));
-        assert!(inspector.cancel(request));
+        inspector.cancel_active();
         assert!(inspector.has_pending_request());
 
         let fence = gpu.queue.submit([]);
@@ -1242,13 +1119,11 @@ mod tests {
                 timeout: None,
             })
             .expect("cancelled inspection submission drains");
-        let event = inspector
-            .poll(Some(7))
-            .expect("drained cancellation produces one event");
+        let completion = inspector.wait_for_completion(Some(7));
+        assert_same_ticket(completion.ticket(), request);
         assert!(matches!(
-            event,
-            SampleInspectionEvent::Cancelled(identity)
-                if identity.request_id() == request && identity.generation() == 7
+            completion.disposition(),
+            SampleInspectionDisposition::Cancelled
         ));
         assert!(!inspector.has_pending_request());
 
@@ -1265,7 +1140,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_binds_observation_generation_profile_and_producer() {
+    fn completion_binds_ticket_and_fixed_retrace_method() {
         const SURFACE_OBSERVABLE: &str =
             include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
         let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
@@ -1282,8 +1157,7 @@ mod tests {
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
         let published = published_texture(&gpu.device, extent);
-        let observation_id = SampleObservationId::for_test(73);
-        let mut inspector = SampleInspector::new(&gpu.device, &trace, observation_id);
+        let mut inspector = SampleInspector::new(&gpu.device, &trace);
 
         let request = inspector
             .request(
@@ -1302,36 +1176,26 @@ mod tests {
                 timeout: None,
             })
             .expect("inspection submission completes");
-        let SampleInspectionEvent::Completed(inspection) = inspector
-            .poll(Some(11))
-            .expect("completion produces one event")
-        else {
-            panic!("completed GPU work must decode as a completed inspection");
+        let completion = inspector.wait_for_completion(Some(11));
+        assert_same_ticket(completion.ticket(), request);
+        let SampleInspectionDisposition::Completed(inspection) = completion.disposition() else {
+            panic!(
+                "completed GPU work must decode as a completed inspection, got {:?}",
+                completion.disposition()
+            );
         };
-        let identity = inspection.identity();
 
-        assert_eq!(identity.request_id(), request);
-        assert_eq!(identity.observation_id(), observation_id);
-        assert_eq!(identity.generation(), 11);
-        assert_eq!(identity.extent(), [extent.width(), extent.height()]);
-        assert_eq!(identity.sample(), fixture.sample());
+        assert_eq!(request.generation(), 11);
+        assert_eq!(request.extent(), [extent.width(), extent.height()]);
+        assert_eq!(request.sample(), fixture.sample());
         assert_eq!(
-            identity.profile(),
-            SampleInspectionProfile::GpuKerrSchildRk4V1
+            SampleRetrace::METHOD_ID,
+            "gpu-ks-rk4-v1/full-kerr-schild-retrace/wgsl-binary32"
         );
-        assert_eq!(
-            identity.producer(),
-            SampleInspectionProducer::FullKerrSchildRetrace
-        );
-        assert_eq!(
-            identity.arithmetic_domain(),
-            SampleArithmeticDomain::WgslBinary32
-        );
-        assert_eq!(
-            inspection.termination(),
-            TraceTermination::EquatorialSurface
-        );
-        assert!(inspection.branch_key().is_some());
+        assert!(matches!(
+            inspection.fresh_retrace().outcome(),
+            SampleTraceOutcome::EquatorialSurface { .. }
+        ));
         assert_eq!(
             inspection.published_texel().kind(),
             crate::ScientificPixelKind::Horizon,
@@ -1340,7 +1204,7 @@ mod tests {
     }
 
     #[test]
-    fn publication_change_supersedes_the_result_once_and_releases_the_slot() {
+    fn publication_mismatch_discards_the_result_once_and_releases_the_slot() {
         const SURFACE_OBSERVABLE: &str =
             include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
         let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
@@ -1357,8 +1221,7 @@ mod tests {
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
         let published = published_texture(&gpu.device, extent);
-        let mut inspector =
-            SampleInspector::new(&gpu.device, &trace, SampleObservationId::for_test(89));
+        let mut inspector = SampleInspector::new(&gpu.device, &trace);
 
         let request = inspector
             .request(
@@ -1378,10 +1241,11 @@ mod tests {
             })
             .expect("inspection submission completes");
 
+        let completion = inspector.wait_for_completion(Some(18));
+        assert_same_ticket(completion.ticket(), request);
         assert!(matches!(
-            inspector.poll(Some(18)),
-            Some(SampleInspectionEvent::Superseded(identity))
-                if identity.request_id() == request && identity.generation() == 17
+            completion.disposition(),
+            SampleInspectionDisposition::Cancelled
         ));
         assert!(inspector.poll(Some(18)).is_none());
         assert!(!inspector.has_pending_request());

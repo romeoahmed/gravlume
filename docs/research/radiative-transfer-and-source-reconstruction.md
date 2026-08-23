@@ -16,7 +16,7 @@
 6. Carlson symmetric forms 适合具名 root topology 内的 terminal accelerator 或 CPU oracle，不是完整 geodesic solver。root classification、turning count、积分反演、$t/\phi$ 极点项和 source event 仍是必要工作；near-degenerate、near-axis、near-extreme 与 unsupported branch 必须回退 Cartesian Kerr–Schild。
 
 > **后续采用记录：** scalar slab、diluted-blackbody boxcar bands、v3 fixtures、最小 branch key、
-> 五射线 surface footprint、tagged scene-linear radiance capture 与有界单样本 record 已按保守边界落地；后续又采用固定单槽 production request/cancel/poll seam 与 desktop consumer。当前契约与证据见
+> 五射线 surface footprint、tagged scene-linear radiance capture 与有界单样本 record 已按保守边界落地；后续又采用固定单槽 production ticket/completion seam、lifecycle cancel-drain 与 desktop consumer。当前契约与证据见
 > [`physics.md`](../physics.md#7-frequency-与-radiative-transfer)、[`validation.md`](../validation.md#32-surface-observable)、
 > [`reference-implementation.md`](../reference-implementation.md)、[`gpu-renderer.md`](../gpu-renderer.md)和[production inspection 决策](on-demand-sample-inspection.md)；
 > 连续字段质量梯、production reconstruction 与 Carlson accelerator 仍未实现。

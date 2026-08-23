@@ -15,7 +15,7 @@ use crate::{
         capture_surface_footprint_sample, capture_surface_transport_case, capture_trace,
         capture_trace_sample, inspect_sample,
     },
-    trace::{SampleSceneValue, TraceTermination, TraceUniforms},
+    trace::{SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms},
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
@@ -84,13 +84,15 @@ fn bounded_blackbody_inspection_returns_f32_scene_linear_bands() {
         .and_then(gravlume_reference::SurfaceObservable::observed_spectral_band_intensities)
         .expect("reference resolves the three instrument bands");
 
-    assert_eq!(
-        inspection.channel_model,
-        Some(crate::ScientificChannelModel::VisibleBoxcarV1)
-    );
-    let SampleSceneValue::SurfaceRadiance(actual) = inspection.scene_value else {
+    let SampleTraceOutcome::EquatorialSurface {
+        channels,
+        evaluation: SampleSurfaceEvaluation::Radiance(actual),
+        ..
+    } = inspection.fresh_retrace().outcome()
+    else {
         panic!("blackbody inspection must return surface radiance");
     };
+    assert_eq!(channels, crate::ScientificChannelModel::VisibleBoxcarV1);
     for (actual, expected) in actual.into_iter().zip(expected) {
         assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
     }
