@@ -93,6 +93,7 @@ struct DesktopApp {
     last_device_event: Option<DeviceEvent>,
     last_resize_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
+    published_generation: Option<u64>,
     completed_present_generation: Option<u64>,
     cursor_position: Option<PhysicalPosition<f64>>,
     sample_inspection: InspectionStatus,
@@ -115,6 +116,7 @@ impl DesktopApp {
             last_device_event: None,
             last_resize_event: None,
             fatal_error: None,
+            published_generation: None,
             completed_present_generation: None,
             cursor_position: None,
             sample_inspection: InspectionStatus::default(),
@@ -319,8 +321,12 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        let generation = renderer.generation();
         self.sample_inspection = match renderer.request_sample_inspection(sample) {
-            Ok(request_id) => InspectionStatus::Pending(request_id),
+            Ok(request_id) => InspectionStatus::Pending {
+                request_id,
+                generation,
+            },
             Err(error) => InspectionStatus::Rejected(error),
         };
         self.request_redraw();
@@ -336,9 +342,18 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
+        let previous_generation = renderer.generation();
         match renderer.resize(width, height) {
             Ok(()) => {
                 if width != 0 && height != 0 {
+                    let generation = renderer.generation();
+                    // A coalesced resize can settle back on the already-published extent without
+                    // producing another publication event.
+                    if generation == previous_generation
+                        && self.published_generation == Some(generation)
+                    {
+                        self.sample_inspection.on_unchanged_viewport();
+                    }
                     self.last_resize_event = None;
                     self.request_redraw();
                 }
@@ -518,7 +533,11 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 let completed_present_generation = update.completed_present_generation();
                 let sample_inspection = update.take_sample_inspection();
                 self.process_device_events(event_loop, update.take_events());
-                if published_generation.is_some() {
+                if let Some(generation) = published_generation {
+                    // Reconcile the previous UI state before installing a terminal event from this
+                    // poll; the renderer may intentionally report an old request as superseded.
+                    self.published_generation = Some(generation);
+                    self.sample_inspection.on_publication(generation);
                     self.request_redraw();
                 }
                 if let Some(generation) = completed_present_generation {

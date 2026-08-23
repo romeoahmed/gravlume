@@ -172,7 +172,8 @@ candidate、published texture 或默认 frame resource plan。
 - `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
 - window event 先交给 egui，再处理应用语义；
 - 未被 egui 消费的左键释放把 finite、非负、viewport 内的 physical cursor 映射为中心
-  `ImageSample`，并通过 production inspection seam 展示同代 texel 与结构化 retrace；
+  `ImageSample`，并通过 production inspection seam 展示同代 texel 与结构化 retrace；新 publication
+  使旧 generation 结果失效，已回到当前完整 publication 的 no-op resize 也会结束 viewport 等待；
 - 只有 `RedrawRequested` 执行 presentation；
 - `about_to_wait` 做非阻塞 GPU/native-display poll；`DesktopSchedule` 统一拥有 live resize、repaint、
   GPU poll 与 native monitor deadline，并返回唯一下一次 wake。
