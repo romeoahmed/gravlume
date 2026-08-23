@@ -39,7 +39,7 @@ Adapter 必须：
 
 Device 只请求 production 实际消费的 features，不调用 `Features::all()`，也不把 adapter 最大 buffer limits 当成项目内存预算。缺失基线意味着平台不受支持，不能通过改变物理模型、精度、资源语义或 tolerance 绕过。
 
-当前唯一必需的可选 GPU feature 是 [`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY)。
+当前唯一必需的可选 GPU feature 是 [`TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.1/wgpu/struct.FeaturesWebGPU.html#associatedconstant.TIMESTAMP_QUERY)。
 
 ## HDR 解析
 

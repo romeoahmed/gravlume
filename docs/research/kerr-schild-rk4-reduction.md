@@ -548,7 +548,7 @@ WGSL 对本研究有三个直接约束：
 [reassociation and fusion](https://www.w3.org/TR/WGSL/#floating-point-evaluation) 与
 [`fma`](https://www.w3.org/TR/WGSL/#fma-builtin)。
 
-仓库锁定 Naga `30.0.0` 源码审计显示 WGSL `fma` 当前分别下发为 MSL `fma`、SPIR-V
+研究基线锁定的 Naga `30.0.0` 源码审计显示 WGSL `fma` 当时分别下发为 MSL `fma`、SPIR-V
 `GLSL.std.450 Fma` 和 HLSL `mad`：
 
 - [MSL writer source](https://docs.rs/crate/naga/30.0.0/source/src/back/msl/writer.rs)

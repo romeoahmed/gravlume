@@ -16,9 +16,9 @@
 6. Carlson symmetric forms 适合具名 root topology 内的 terminal accelerator 或 CPU oracle，不是完整 geodesic solver。root classification、turning count、积分反演、$t/\phi$ 极点项和 source event 仍是必要工作；near-degenerate、near-axis、near-extreme 与 unsupported branch 必须回退 Cartesian Kerr–Schild。
 
 > **后续采用记录：** scalar slab、diluted-blackbody boxcar bands、v3 fixtures、最小 branch key、
-> 五射线 surface footprint 与 tagged scene-linear radiance capture 已按本记录的保守边界落地。当前契约与证据见
+> 五射线 surface footprint、tagged scene-linear radiance capture 与 test-only 有界单样本 record 已按保守边界落地。当前契约与证据见
 > [`physics.md`](../physics.md#7-frequency-与-radiative-transfer)、[`validation.md`](../validation.md#32-surface-observable)、
-> [`reference-implementation.md`](../reference-implementation.md)和 [`gpu-renderer.md`](../gpu-renderer.md)；
+> [`reference-implementation.md`](../reference-implementation.md)、[`gpu-renderer.md`](../gpu-renderer.md)和[单样本审计记录](bounded-sample-inspection.md)；
 > production 的有界 path inspection、reconstruction 与 Carlson accelerator 仍未实现。
 
 ## 1. 问题、方法与当前差距
@@ -48,7 +48,7 @@ uv run --isolated --project docs/research/scripts --locked \
 | 能力 | 基线/后续采用证据 | 本轮确认的缺口 |
 | --- | --- | --- |
 | source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml) | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins |
-| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key gate 与 finite-difference Jacobian | production 没有有界 path inspection、semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
+| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；test-only capture 已有完整 branch-key、finite-difference Jacobian 与[有界单样本 record](bounded-sample-inspection.md) | production 没有有界 path inspection、semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
 | execution seam | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
 | appearance/reconstruction | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向 | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现 |
 | analytic acceleration | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino | 尚无 root-aware Carlson implementation 或 accepted-domain classifier |
@@ -179,10 +179,10 @@ production threshold 应由 observable error 与 false-accept sweep 反推。任
 
 structure member offset 必须向该 member alignment 取整，array stride 是 element size 向 element alignment 取整。`uniform` address space 对 array/structure 还有 16-byte 级的额外约束；`storage` 使用其 host-shareable natural layout，详见 [address-space layout constraints](https://www.w3.org/TR/WGSL/#address-space-layout-constraints)。dynamic uniform binding offset 的 `minUniformBufferOffsetAlignment` 是另一项 device limit，不能反过来推导 structure size。[WebGPU limits](https://www.w3.org/TR/webgpu/#limits)
 
-基线提交中的 [`TraceUniforms`](../../crates/gravlume-render/src/trace/input.rs) 是十个 `[f32; 4]`，
-与当时 shader 的十个 `vec4<f32>` 一一对应，总计 160 byte；`TraceDispatch` 的两个 `vec2<u32>`
+研究基线的 `TraceUniforms` 是十个 `[f32; 4]`，与当时 shader 的十个 `vec4<f32>` 一一对应，
+总计 160 byte；`TraceDispatch` 的两个 `vec2<u32>`
 总计 16 byte。采用 scalar transport 后 production ABI 增加一个具名 `surface_transport` block；当前
-176-byte 合同以 [GPU 证据](../gpu-renderer.md)为准。test-only record plane 每 element 16 byte。
+合同以 host/shader source 和 [GPU 证据](../gpu-renderer.md)为准。test-only record plane 每 element 16 byte。
 这些布局是清晰、可审计的 ABI。shader 内 invocation-local `GeometricSample` 不是 host buffer
 layout，不需要为了 Rust packing 把其 `vec3` 拆掉；反过来，也不能把 local `vec3` 的写法当成
 “持久化时只需 12 byte”的证据。
@@ -194,8 +194,9 @@ layout，不需要为了 Rust packing 把其 `vec3` 拆掉；反过来，也不�
 - 解码后的 source、$g$、time、Jacobian 和 branch exactness/error gate；
 - Metal 与 Vulkan 上的 bandwidth/timestamp A/B。
 
-当前 [`Cargo.lock`](../../Cargo.lock) 固定 `wgpu 30.0.0`。该版本
-[`Limits::defaults`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html) 的相关值是：每 shader
+研究基线使用 `wgpu 30.0.0`；下列计算采用该版本
+[`Limits::defaults`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html) 的相关值。当前锁定版本以
+[`Cargo.lock`](../../Cargo.lock) 为准，依赖升级后必须重新核对实际 requested limits。基线值是：每 shader
 stage 最多 8 个 storage-buffer binding、单 binding 最多 128 MiB、单 buffer 最多 256 MiB、
 workgroup storage 16 KiB、每 workgroup 256 invocations、每 dispatch dimension 65535
 workgroups；device 只能使用创建时实际请求到的 limits，不能因 adapter 报告更高值就默认可用。由此可直接算出：
@@ -218,7 +219,7 @@ WebGPU 要求 `workgroup_size` 各维及乘积不超过 requested device limits�
 - WGSL [`select`](https://www.w3.org/TR/WGSL/#select-builtin) 没有 short-circuit 语义，不能用它藏住 invalid division、sqrt 或 out-of-bounds access；domain guard 应先成立；
 - `vec4` 是明确的语言与存储类型，不承诺编译成一次四宽 hardware instruction。vector expression 可保留可读性与 ABI 一致性，性能结论仍需 backend profile。
 
-当前一 invocation 一 pixel、8×8 tile、局部 `GeometricSample`、只写 production `RGBA16F` 的结构与这些边界一致。8×8 的 64 invocations 明确低于 `wgpu 30` 默认 256 上限；若 reconstruction 为 tile halo 增加 `var<workgroup>`，其静态总量仍须纳入 16 KiB 上限，而 dispatch batching 仍须封闭 65535 workgroups/dimension。[`wgpu 30 Limits`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html) 现阶段更大的风险是增加未被 consumer 使用的 per-pixel state，而不是缺少另一个向量 wrapper。
+现行一 invocation 一 pixel、8×8 tile、局部 `GeometricSample`、只写 production `RGBA16F` 的结构仍落在上述研究基线范围内。若 reconstruction 为 tile halo 增加 `var<workgroup>` 或改变 dispatch，必须按当前 requested limits 重新 admission，不能把历史默认值提升为长期合同。现阶段更大的风险是增加未被 consumer 使用的 per-pixel state，而不是缺少另一个向量 wrapper。
 
 ### 4.3 Workgroup barrier 与跨 dispatch 可见性
 
@@ -522,8 +523,8 @@ Carlson duplication 本身较规整，不代表前后的 root sorting、case sel
 
 后续采用记录显示，标量 invariant transport、spectral/blackbody fixture、最小 branch key 与 test-only
 finite-difference footprint 已完成；第 5.6 节的 production reconstruction 候选未通过端到端 A/B，
-所以当前生产路径仍保持 full KS。下一项工作应先补有界 path inspection 与更广 continuous-field
-quality ladder，明确 interactive/science-quality execution policy 的支持域而不放宽 observable budget；只有真实 filterable source 或 history
+所以当前生产路径仍保持 full KS。下一项工作应在已通过的 test-only 单样本 record 上补更广 continuous-field
+quality ladder，并等待真实 production consumer 明确 inspection 与 interactive/science-quality execution policy 的支持域，而不放宽 observable budget；只有真实 filterable source 或 history
 consumer 和基线同时存在后，才从新的 coarse/adaptive 或 stationary-amortized transfer-map 设计重开。
 pure-Kerr root-aware Carlson 可以先建立 CPU oracle，但不是该产品闭环的前置条件。每一步只引入当下
 consumer 需要的字段，并继续让 full-KS 定义 unsupported domain 的行为。

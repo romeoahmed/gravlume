@@ -49,8 +49,8 @@ trace batches -> shadow coverage -> timestamp -> generation check
 
 ## 主要依据
 
-- [`wgpu::Surface::configure`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Surface.html#method.configure) 的重配/idle 合同；
-- [`wgpu::Queue`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Queue.html) 的有序提交与 callback 接口；
+- [`wgpu::Surface::configure`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Surface.html#method.configure) 的重配/idle 合同；
+- [`wgpu::Queue`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html) 的有序提交与 callback 接口；
 - [`winit::ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html) 的 redraw/lifecycle 模型；
 - [WGSL execution model](https://www.w3.org/TR/WGSL/#execution)；
 - 项目的[验证合同](../validation.md)。

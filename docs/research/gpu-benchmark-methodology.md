@@ -19,8 +19,8 @@ Criterion 明确把 `iter_custom` 定义为由被测 workload 自行提供总 `D
 `Queue::get_timestamp_period` 缩放：
 
 - [Criterion 0.8.2 `Bencher::iter_custom`](https://docs.rs/criterion/0.8.2/criterion/struct.Bencher.html#method.iter_custom)
-- [wgpu 30 `TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Features.html#associatedconstant.TIMESTAMP_QUERY)
-- [wgpu 30 `ComputePassTimestampWrites`](https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePassTimestampWrites.html)
+- [wgpu 30 `TIMESTAMP_QUERY`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Features.html#associatedconstant.TIMESTAMP_QUERY)
+- [wgpu 30 `ComputePassTimestampWrites`](https://docs.rs/wgpu/30.0.1/wgpu/struct.ComputePassTimestampWrites.html)
 
 ## 2. 为什么不保留第二套 profiler
 

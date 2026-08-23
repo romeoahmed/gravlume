@@ -11,7 +11,7 @@
 | [Kerr–Schild RK4 约化](kerr-schild-rk4-reduction.md) | 已采用，step policy 仍研究 | reduced Hamiltonian、Carter、Hermite event 与 KN certificate 已进入 production |
 | [Kerr–Schild ↔ Mino seam](kerr-schild-mino-map.md)   | 数学 seam 已采用           | physical-spin/chart 修复已进入 domain/WGSL                                     |
 | [数值 Mino step 选择](mino-step-selection.md)        | 已拒绝                     | fixed-step candidate 因高分辨率 travel-time 反例删除                           |
-| [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策 | scalar slab、spectral fixture 与 footprint 证据已采用；path inspection/reconstruction/Carlson 待证 |
+| [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策 | scalar slab、spectral fixture 与 footprint 证据已采用；production reconstruction/Carlson 待证 |
 | [有界单样本 GPU 路径审计](bounded-sample-inspection.md) | 部分采用 | 固定 test-only record 与 exact branch evidence 已采用；production consumer interface 仍延后 |
 | [原生 HDR 输出](native-hdr-output.md)                | 已采用                     | native display state、extended-linear HDR 与 typed SDR fallback                |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)   | 当前方法                   | 只测固定 production workload；临时 variant 不形成永久接口                      |

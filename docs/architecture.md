@@ -116,6 +116,7 @@ WGSL 位于 `src/shaders/`：
 | `blackbody_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport        |
 | `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
 | `surface_footprint_capture.wgsl` | test-only branch-checked source-chart finite difference         |
+| `sample_inspection.wgsl`、`*_sample_inspection.wgsl` | test-only 单样本 record 与 plan-specific scene-value adapter |
 | `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
 | `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
 | `*_capture.wgsl`             | test-only scientific readback entry points                |
@@ -143,7 +144,7 @@ private TracePlan
 - shadow classification 从不可变 candidate 读取 alpha tag，refinement 在后续 dispatch 写回真实 subpixel 平均；
 - incomplete candidate 永不进入 display bind group；stale completion 只能回收资源；
 - candidate 完成后直接提升 texture view，不做同尺寸 publication copy。
-- [`CommandEncoder::map_buffer_on_submit`](https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit) 把 timestamp copy 与 mapping 绑定到 producing encoder；readback
+- [`CommandEncoder::map_buffer_on_submit`](https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit) 把 timestamp copy 与 mapping 绑定到 producing encoder；readback
   completion 携带自己的 extent generation，不另维护可错配的 parallel submission slot。
 - surface RGB 只有 alpha tag `2.0` 才是 metadata 所述 physical radiance；escape 的 `1.0` 是解析方向
   preview、horizon 是零、负 alpha 是 failure。Display 忽略 scene alpha，scientific capture 必须分类。
@@ -168,7 +169,7 @@ Surface 不变量：
 - live resize 合并最新 physical extent，避免为每个原始事件同步等待 GPU idle；
 - suspend 期间不分配 replacement；恢复 surface 后读取一次最新 inner size。
 
-这些语义来自 [`ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)与 [`Surface::configure`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Surface.html#method.configure)。
+这些语义来自 [`ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)与 [`Surface::configure`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Surface.html#method.configure)。
 
 ## HDR 与 native display seam
 
@@ -181,9 +182,7 @@ Surface 不变量：
 
 ## GPU ABI 与错误
 
-GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。领域类型和 `glam` 不直接上传；因此当前不启用 `glam/bytemuck`。`TraceUniforms` 是 11 个连续 `[f32;4]`/`vec4<f32>` block，
-共 176 byte；blackbody plan 另绑定 4097 个 `vec4<f32>` 的 read-only storage LUT。Host/WGSL
-size、offset、binding、access、format 与 discriminant 由 ABI/GPU contracts 验证。
+GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。领域类型和 `glam` 不直接上传；因此当前不启用 `glam/bytemuck`。`TraceUniforms` 由连续 `[f32; 4]`/`vec4<f32>` block 组成，blackbody plan 另绑定固定布局的 read-only storage LUT；精确 size、offset、binding、access、format 与 discriminant 以 host/shader source 和 ABI/GPU contracts 为准。
 
 错误按处理者分类：
 
@@ -206,7 +205,7 @@ Production 不常驻每像素科学 records：
 - UI target：`4 B/pixel`；
 - published scene：`8 B/pixel`；
 - escape map 与 shadow scratch：按 extent 精确计算；
-- blackbody plan 的固定 spectral LUT：`65,552 B`；
+- blackbody plan 的固定 spectral LUT；
 - 四个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
 
 显式 scientific export 临时分配 padded readback buffer，完成 map 后即释放；它不属于 steady frame
@@ -214,7 +213,7 @@ resources。WebGPU texel copy 对正常有限值保证数值等价，但允许�
 non-finite representation；export 因而让每个 `ScientificTexel` 同时提供 channel bit words 与
 semantic kind，不声称所有异常 bit pattern 跨 backend 原样保存。[WebGPU texel copies](https://www.w3.org/TR/webgpu/#texel-copies)
 
-分配 replacement 前，renderer 计算 published + installed + replacement 的完整 core plan，并同时执行 3840×2160 pixel policy 与 256 MiB core-resource gate。Surface images、driver heap 和 alignment 不在该逻辑账本内；这项 gate 不是实测显存峰值。
+分配 replacement 前，renderer 计算 published scene、installed frame 与 replacement frame 的 extent-scaled core plan，并同时执行 3840×2160 pixel policy 与 256 MiB frame-resource gate。固定 pipeline buffer/LUT、surface images、driver heap 和 alignment 不在该逻辑账本内；这项 gate 不是实测显存峰值。
 
 ## 验证与 benchmark
 
