@@ -22,7 +22,6 @@ use crate::{
     scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
         SampleInspectionSource, SamplePolarSide, SampleSceneValue, TraceTermination, TraceUniforms,
-        UnknownTraceTermination,
     },
 };
 
@@ -50,10 +49,10 @@ fn trace_termination_discriminants_are_stable_and_checked() {
     }
 
     for raw in [0, 8, u32::MAX] {
-        assert_eq!(
+        assert!(matches!(
             TraceTermination::try_from(raw),
-            Err(UnknownTraceTermination(raw)),
-        );
+            Err(error) if error.raw() == raw
+        ));
     }
 }
 
@@ -258,10 +257,10 @@ proptest! {
     fn non_boundary_unknown_trace_termination_discriminants_are_rejected(
         raw in 8_u32..u32::MAX,
     ) {
-        prop_assert_eq!(
+        prop_assert!(matches!(
             TraceTermination::try_from(raw),
-            Err(UnknownTraceTermination(raw)),
-        );
+            Err(error) if error.raw() == raw
+        ));
     }
 }
 

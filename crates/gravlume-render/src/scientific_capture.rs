@@ -56,7 +56,7 @@ pub struct ScientificTexel {
 }
 
 impl ScientificTexel {
-    const fn from_rgba16_float_bits(rgba16_float_bits: [u16; 4]) -> Self {
+    pub(crate) const fn from_rgba16_float_bits(rgba16_float_bits: [u16; 4]) -> Self {
         Self { rgba16_float_bits }
     }
 

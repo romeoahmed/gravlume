@@ -10,11 +10,8 @@ const SHADOW_COVERAGE: &str = include_str!("../shaders/shadow_coverage.wgsl");
 const SURFACE_TRANSPORT: &str = include_str!("../shaders/surface_transport.wgsl");
 const BOLOMETRIC_SURFACE_PREVIEW: &str = include_str!("../shaders/bolometric_surface_preview.wgsl");
 const BLACKBODY_SURFACE_PREVIEW: &str = include_str!("../shaders/blackbody_surface_preview.wgsl");
-#[cfg(test)]
 const SAMPLE_INSPECTION: &str = include_str!("../shaders/sample_inspection.wgsl");
-#[cfg(test)]
 const ANALYTIC_SAMPLE_INSPECTION: &str = include_str!("../shaders/analytic_sample_inspection.wgsl");
-#[cfg(test)]
 const SURFACE_SAMPLE_INSPECTION: &str = include_str!("../shaders/surface_sample_inspection.wgsl");
 
 #[cfg(test)]
@@ -59,7 +56,6 @@ pub(super) fn blackbody_surface_scene() -> String {
     ])
 }
 
-#[cfg(test)]
 pub(super) fn analytic_sample_inspection() -> String {
     assemble(&[
         LENSING_PREVIEW,
@@ -68,7 +64,6 @@ pub(super) fn analytic_sample_inspection() -> String {
     ])
 }
 
-#[cfg(test)]
 pub(super) fn bolometric_sample_inspection() -> String {
     assemble(&[
         LENSING_PREVIEW,
@@ -79,7 +74,6 @@ pub(super) fn bolometric_sample_inspection() -> String {
     ])
 }
 
-#[cfg(test)]
 pub(super) fn blackbody_sample_inspection() -> String {
     assemble(&[
         LENSING_PREVIEW,

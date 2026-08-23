@@ -3,6 +3,7 @@
 //! Native desktop lifecycle for Gravlume.
 
 mod app;
+mod inspection;
 mod lifecycle;
 mod preview;
 mod schedule;
