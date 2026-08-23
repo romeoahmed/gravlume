@@ -6,7 +6,7 @@
 
 - equatorial surface 的 Source Anchor、Frequency Ratio、vacuum/homogeneous-slab transport 与固定 observer-frame spectral bands 已由 `surface-transport-v1` fixtures 闭合；exact branch key 与 ordinary-region footprint 另有独立 CPU/GPU 证据。这些只完成当前具名的 surface physical-transport slice，不等于完整观测仪器或完整 GRRT。
 - private sealed `TracePlan` 已按真实消费者选择 producer；surface plan 使用 invocation-local `GeometricSample` 和 full Kerr–Schild trace。引入这两个 seam、为 surface 禁用只回答 sky/capture 的 accelerator，均已是当前事实，不再列为后续任务。
-- production renderer 直接形成 scene-linear radiance；scientific capture 只负责整帧最终 radiance。crate 内已有 test-only 单样本 protocol/真实 GPU evidence，但没有 production inspection interface 或真实消费者；连续字段 corpus、第二质量政策与 consumer contract 仍未闭合。
+- production renderer 直接形成 scene-linear radiance；scientific capture 负责整帧最终 radiance。Renderer 已提供固定单槽 sample inspection，桌面点击是首个真实消费者；它把实际 published texel 与 fresh full-KS record 分开，并闭合 request/cancel/poll 的 generation 与资源语义。连续字段 corpus、独立 high-precision evidence 与第二质量政策仍未闭合。
 - 两个固定二像素 semantic-map 原型均未达到正确性与性能的共同门槛。当前没有可接纳的 production reconstruction、temporal reuse 或全帧 transfer map。
 
 这些事实的细节和适用域不得复制到本文件；以实现证据和[验证合同](validation.md)为准。
@@ -31,11 +31,11 @@ Kerr 解析加速是旁路优化：它可以先建立 CPU oracle，但不能绕�
 
 这是下一项 resolved work。目标不是持久化全分辨率 G-buffer，而是让用户和验证工具能够对选定像素或小区域取得与画面同代、同 profile 的结构化物理证据。
 
-当前已完成 test-only 单样本 protocol 及 canonical bolometric、blackbody、analytic GPU 接纳；它不构成 production seam。本节仍保持开放，直到真实消费者、source edge、critical/higher-order branch、正负自旋连续字段 corpus 与质量政策达到下列退出条件。
+当前已完成 production 单样本 seam、桌面点击消费者、固定资源上限以及 canonical bolometric、blackbody、analytic GPU 接纳。本节仍保持开放，直到 source edge、critical/higher-order branch、正负自旋连续字段 corpus 与具名质量政策达到下列退出条件；当前 UI 不等于科学支持域已经扩大。
 
 **交付：**
 
-- 有界、按需的 sample inspection，至少携带 observation/generation/profile identity、producer/domain tag、typed termination、在 terminal 可证明时的 exact branch key、source kind/anchor、frequency ratio、travel time、最终 scene-linear radiance 以及 event/invariant diagnostics；`NumericalFailure` 与未经满足预算 refine 的 `Uncertain` 必须把 branch 显式标为 unavailable；
+- 有界、按需的 sample inspection，至少携带 observation/generation/profile identity、producer/domain tag、实际 published `Rgba16Float` texel、fresh full-KS evaluated scene value、typed termination、在 terminal 可证明时的 exact branch key、source kind/anchor、frequency ratio、travel time 以及 event/invariant diagnostics；两类像素证据不得混同，`NumericalFailure` 与未经满足预算 refine 的 `Uncertain` 必须把 branch 显式标为 unavailable；
 - 同一不可变 observation 上的 CPU/GPU 结构化比较，不经过 tone map、display encoding 或 UI 合成；
 - 覆盖 ordinary surface、source edge、surface/capture boundary、不同 winding/higher-order branch、critical curve 两侧与正负 Kerr spin 的具名连续字段 corpus；
 - 把 interactive execution 与 science-quality policy 分开声明。两者对 accepted physical result 使用同一 observable budget；低成本路径只能收窄支持域、refine/fallback 或显式返回 uncertainty，不能另设更宽容差。

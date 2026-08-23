@@ -15,14 +15,15 @@ use gravlume_render::{
 };
 use winit::{
     application::ApplicationHandler,
-    dpi::PhysicalSize,
+    dpi::{PhysicalPosition, PhysicalSize},
     error::{EventLoopError, OsError},
-    event::WindowEvent,
+    event::{ElementState, MouseButton, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
 };
 
 use crate::{
+    inspection::{InspectionStatus, cursor_pixel},
     lifecycle::Lifecycle,
     preview::DEFAULT_PREVIEW,
     schedule::{DesktopSchedule, ResizeAction},
@@ -93,6 +94,8 @@ struct DesktopApp {
     last_resize_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
     completed_present_generation: Option<u64>,
+    cursor_position: Option<PhysicalPosition<f64>>,
+    sample_inspection: InspectionStatus,
     smoke_once: bool,
     exit_requested: bool,
 }
@@ -113,6 +116,8 @@ impl DesktopApp {
             last_resize_event: None,
             fatal_error: None,
             completed_present_generation: None,
+            cursor_position: None,
+            sample_inspection: InspectionStatus::default(),
             smoke_once: std::env::var_os(SMOKE_ONCE_ENV)
                 .is_some_and(|value| value == OsStr::new("1")),
             exit_requested: false,
@@ -202,6 +207,7 @@ impl DesktopApp {
     }
 
     fn draw_frame(&mut self, event_loop: &ActiveEventLoop) {
+        let sample_inspection = &self.sample_inspection;
         let render_result = {
             let (Some(window_state), Some(renderer)) =
                 (self.window.as_mut(), self.renderer.as_mut())
@@ -219,6 +225,7 @@ impl DesktopApp {
                     root_ui.ctx(),
                     &diagnostics,
                     DEFAULT_PREVIEW,
+                    sample_inspection,
                     device_event,
                     resize_event,
                 );
@@ -284,6 +291,39 @@ impl DesktopApp {
         if let ResizeAction::ApplyNow(size) = self.schedule.request_resize(Instant::now(), size) {
             self.resize_renderer(event_loop, size.width, size.height);
         }
+    }
+
+    fn request_cursor_inspection(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
+        if self.schedule.resize_pending() {
+            self.sample_inspection = InspectionStatus::ViewportChanging;
+            self.request_redraw();
+            return;
+        }
+        let Some(position) = self.cursor_position else {
+            return;
+        };
+        let extent = window.inner_size();
+        let Some([pixel_x, pixel_y]) = cursor_pixel(position, extent) else {
+            return;
+        };
+        let sample = match DEFAULT_PREVIEW
+            .observation(extent.width, extent.height)
+            .and_then(|observation| observation.view().sample(pixel_x, pixel_y, 0.5, 0.5))
+        {
+            Ok(sample) => sample,
+            Err(error) => {
+                self.fail(event_loop, error.into());
+                return;
+            }
+        };
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+        self.sample_inspection = match renderer.request_sample_inspection(sample) {
+            Ok(request_id) => InspectionStatus::Pending(request_id),
+            Err(error) => InspectionStatus::Rejected(error),
+        };
+        self.request_redraw();
     }
 
     fn apply_pending_resize(&mut self, event_loop: &ActiveEventLoop, gpu_idle: bool) {
@@ -434,12 +474,27 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
 
         match event {
             WindowEvent::CloseRequested => self.request_exit(event_loop),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = Some(position);
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_position = None;
+            }
             WindowEvent::Resized(size) => {
+                self.cursor_position = None;
                 self.request_resize(event_loop, size);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
+                self.cursor_position = None;
                 let size = window.inner_size();
                 self.request_resize(event_loop, size);
+            }
+            WindowEvent::MouseInput {
+                state: ElementState::Released,
+                button: MouseButton::Left,
+                ..
+            } if !response.consumed => {
+                self.request_cursor_inspection(event_loop, &window);
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
             WindowEvent::RedrawRequested if self.schedule.redraw_allowed() => {
@@ -461,12 +516,17 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             Some(Ok(mut update)) => {
                 let published_generation = update.published_generation();
                 let completed_present_generation = update.completed_present_generation();
+                let sample_inspection = update.take_sample_inspection();
                 self.process_device_events(event_loop, update.take_events());
                 if published_generation.is_some() {
                     self.request_redraw();
                 }
                 if let Some(generation) = completed_present_generation {
                     self.completed_present_generation = Some(generation);
+                }
+                if let Some(event) = sample_inspection {
+                    self.sample_inspection = InspectionStatus::Finished(event);
+                    self.request_redraw();
                 }
                 let current_generation = self.renderer.as_ref().map(Renderer::generation);
                 if self.smoke_once

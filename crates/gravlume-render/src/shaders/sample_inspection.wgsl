@@ -1,5 +1,5 @@
-// Test-only single-sample evidence. Every host-shared lane is one aligned vec4; no vec3, bool,
-// implicit padding, trajectory, or extent-scaled record survives the invocation.
+// Bounded on-demand single-sample evidence. Every host-shared lane is one aligned vec4; no vec3,
+// bool, implicit padding, trajectory, or extent-scaled record survives the invocation.
 
 struct SampleInspectionRequest {
     pixel_extent: vec4<u32>,

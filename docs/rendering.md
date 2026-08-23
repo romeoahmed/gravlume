@@ -57,7 +57,7 @@ geometry accelerator 只替换 Trace，不能绕过 sample contract、diagnostic
 2. sample inspection 可以只为选定像素或小区域创建有界 record/readback；
 3. reconstruction 只有在真实 consumer 已固定后，才按其 lookup 与质量需求物化最小 semantic、continuous-field 或 footprint planes。
 
-当前 production 属于第一种；scene-linear scientific capture 导出最终 radiance 与 texel kind，不等于第二种。Test-only diagnostic planes 与有界单样本 record 只证明 ABI 和受测 CPU/GPU observable，不能替代 production inspection、资源策略或用户可取得的 artifact；当前证据见 [GPU Renderer](gpu-renderer.md#test-only-有界-sample-evidence)。
+当前 production 同时使用第一种与第二种的单像素特例：默认画面仍 invocation-local，按需 inspection 只分配固定单槽 record/readback，并把实际 published texel 与 fresh full-KS evidence 分开。它不是小区域 batch 或持久 artifact；test-only extent-scaled diagnostic planes 也不能替代 production 资源策略。当前证据见 [GPU Renderer](gpu-renderer.md#production-有界-sample-inspection)。
 
 任何 host-shared plane 都必须独立验证 Rust/WGSL size、alignment、stride 与 round-trip，并按实际请求的 [WebGPU limits](https://www.w3.org/TR/webgpu/#limits)和 extent 在分配前 admission；adapter 可能支持更高上限，不代表 device 已请求到它，也不授权在 allocation failure 后静默降精度。
 

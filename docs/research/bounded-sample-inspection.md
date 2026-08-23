@@ -1,8 +1,8 @@
 # 有界单样本 GPU 路径审计
 
-本文记录按需复算一个像素样本的 test-only GPU 证据、被拒绝的候选和恢复条件；它不定义 production interface。当前实现事实见 [GPU Renderer 实现与证据](../gpu-renderer.md)，未来交付以[路线图](../roadmap.md)为准，物理定义与误差预算分别以[数学物理合同](../physics.md)和[验证合同](../validation.md)为准。
+本文记录 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad` 上按需复算一个像素样本的 test-only GPU 基线、被拒绝的候选和恢复条件；它不定义当前 production interface。后续 production 采用决策见[按需单样本检查研究](on-demand-sample-inspection.md)，当前事实见 [GPU Renderer 实现与证据](../gpu-renderer.md)，未完成交付以[路线图](../roadmap.md)为准，物理定义与误差预算分别以[数学物理合同](../physics.md)和[验证合同](../validation.md)为准。
 
-**状态：固定尺寸 test-only record 已采用；production consumer interface 延后；`@workgroup_size(1)` 候选仍因 Metal 反例而拒绝。** 研究基线是 `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad`，当时使用 wgpu `30.0.0`；当前技术栈以 workspace [`Cargo.toml`](../../Cargo.toml) 与 `Cargo.lock` 为准。
+**状态：历史 test-only 基线；固定 record 与 `8×8 + lane 0` correctness specialization 已被 production 采用，224-byte 一次性资源模型已由携带实际 published texel 的 392-byte 单槽模型取代；`@workgroup_size(1)` 候选仍因 Metal 反例而拒绝。** 当时使用 wgpu `30.0.0`；当前技术栈以 workspace [`Cargo.toml`](../../Cargo.toml) 与 `Cargo.lock` 为准。
 
 ## 问题与结论
 
@@ -10,7 +10,7 @@
 
 可否证假设是：不改变 `trace_pixel_at`、RK4 step policy 或 event state machine，只增加一个固定 request、一个固定 record 与 plan-specific f32 scene-value sink，即可复算单条 ray 并取得 termination、exact branch、source、Frequency Ratio、travel time、scene-linear output 与 event/invariant diagnostics。三种现有 `TracePlan` 的真实 GPU test 均通过，因此该技术切片被采用；它没有证明 UI、generation、取消、排队或长期 artifact interface。
 
-初版曾把 production-style generation、request ID、Busy/cancel/supersede/poll 状态机放入 test helper。仓库没有对应 production consumer，这些字段只能回显 host context，不能增加 GPU 科学证据。按“第二个真实消费者前不引入 public seam”的仓库规则，当前实现删除这套兼容性垫片，只保留一个同步 interface：
+初版曾把 production-style generation、request ID、Busy/cancel/supersede/poll 状态机放入 test helper。该 revision 没有对应 production consumer，这些字段只能回显 host context，不能增加 GPU 科学证据。按当时的“没有真实消费者就不引入 public seam”规则，基线实现删除这套兼容性垫片，只保留一个同步 interface：
 
 ```text
 validated Observation + ImageSample
@@ -19,7 +19,7 @@ validated Observation + ImageSample
   -> typed test evidence
 ```
 
-module 内部隐藏 pipeline、bind group、request/result/readback buffer 与 decode；测试只学习一次调用和一个结果类型。若未来出现 interactive 与 validation 两个真实 consumer，再根据共同需求设计 generation、取消和错误语义，而不是从 test helper 冻结 interface。
+module 内部隐藏 pipeline、bind group、request/result/readback buffer 与 decode；测试只学习一次调用和一个结果类型。后续 desktop interactive consumer 出现后，production seam 从 publication ownership 重新设计，而没有冻结这套 test helper；详见[后续决策](on-demand-sample-inspection.md)。
 
 ## Host-shareable layout
 
@@ -108,8 +108,8 @@ Inspection 是一次性 test pipeline，bind group 不与其他 pipeline 共享�
 2. 大于 `0xffff` 的 branch count 与负 winding 完整 round-trip；numerical-failure 非零 placeholder 被拒绝，`Uncertain` 不暴露 provisional branch；
 3. canonical bolometric Surface 对独立 reference 比较 exact branch、anchor、$g$、travel time、f32 radiance、event residual 与 drift；
 4. analytic Escape 保持 non-spectral kind；blackbody plan 返回 f32 scene-linear bands 并满足既有 spectral budget；
-5. production renderer resources 与 crate public interface 不含 inspection。
+5. 该基线 revision 的 production renderer resources 与 crate public interface 不含 inspection。
 
-尚未闭合 source edge、Surface/Escape boundary、不同 winding/higher-order branch、critical curve 两侧、正负 spin 连续字段 corpus，以及 resize/suspend/device-error 的 production lifecycle。CPU/GPU agreement 仍不是物理证明；所有正式接纳域继续受[验证合同](../validation.md)约束。
+该基线尚未闭合 source edge、Surface/Escape boundary、不同 winding/higher-order branch、critical curve 两侧、正负 spin 连续字段 corpus，以及 resize/suspend/device-error 的 production lifecycle。当前 production 已闭合单槽 request/cancel/poll lifecycle，但上述连续字段 corpus 仍开放。CPU/GPU agreement 仍不是物理证明；所有正式接纳域继续受[验证合同](../validation.md)约束。
 
-只有至少两个真实 consumer 共同需要同一 interface，才重新设计 production generation、取消、排队、error 与 artifact identity；只有独立 quality policy 实际存在，才扩展 quality interface。恢复 `@workgroup_size(1)` 必须在 Metal/Vulkan 的完整 record 上消除上述字段反例，不能只比较 terminal 或 radiance。若连续 observable 超预算，应收窄支持域、refine/fallback 或返回 typed uncertainty，不放宽阈值。
+Production generation、取消、排队与 error seam 已由 desktop consumer 触发并在[后续决策](on-demand-sample-inspection.md)中采用；artifact identity 与 quality 参数仍等待真实持久化消费者/第二执行政策。恢复 `@workgroup_size(1)` 必须在 Metal/Vulkan 的完整 record 上消除上述字段反例，不能只比较 terminal 或 radiance。若连续 observable 超预算，应收窄支持域、refine/fallback 或返回 typed uncertainty，不放宽阈值。

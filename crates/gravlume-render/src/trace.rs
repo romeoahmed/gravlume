@@ -2,15 +2,22 @@ use gravlume_domain::{EquatorialEmissionModel, Observation, SceneRadiance};
 use wgpu::util::DeviceExt as _;
 
 mod input;
-#[cfg(test)]
 mod inspection;
 mod shader;
 mod shadow_coverage;
 
 pub use input::{GpuTraceInputError, TraceUniforms};
 
-#[cfg(test)]
-pub use inspection::{SampleInspection, SampleInspectionSource, SamplePolarSide, SampleSceneValue};
+// The parent `trace` module is private, so this re-export is only visible to crate-internal
+// renderer modules and does not enter the library's public API.
+pub use inspection::SampleInspector;
+pub use inspection::{
+    SampleArithmeticDomain, SampleBranchKey, SampleInspection, SampleInspectionError,
+    SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
+    SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
+    SampleInspectionRequestId, SampleInspectionSource, SampleObservationId, SamplePolarSide,
+    SampleSceneValue, TraceTermination, UnknownTraceTermination,
+};
 
 use input::TraceDispatch;
 
@@ -937,47 +944,4 @@ pub fn trace_record_plane_size(extent: RenderExtent) -> u64 {
 
 pub const fn size_of<T>() -> u64 {
     std::mem::size_of::<T>() as u64
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u32)]
-pub enum TraceTermination {
-    HorizonCrossing = 1,
-    Escape = 2,
-    SingularityGuard = 3,
-    StepExhaustion = 4,
-    NumericalFailure = 5,
-    Uncertain = 6,
-    EquatorialSurface = 7,
-}
-
-#[cfg(test)]
-impl From<TraceTermination> for u32 {
-    fn from(value: TraceTermination) -> Self {
-        value as Self
-    }
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("unknown GPU trace termination discriminant {0}")]
-pub struct UnknownTraceTermination(pub u32);
-
-#[cfg(test)]
-impl TryFrom<u32> for TraceTermination {
-    type Error = UnknownTraceTermination;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            1 => Ok(Self::HorizonCrossing),
-            2 => Ok(Self::Escape),
-            3 => Ok(Self::SingularityGuard),
-            4 => Ok(Self::StepExhaustion),
-            5 => Ok(Self::NumericalFailure),
-            6 => Ok(Self::Uncertain),
-            7 => Ok(Self::EquatorialSurface),
-            unknown => Err(UnknownTraceTermination(unknown)),
-        }
-    }
 }

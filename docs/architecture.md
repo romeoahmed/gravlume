@@ -64,23 +64,32 @@ Reference 保留两个有意不同的接口：
 
 ## Renderer interface
 
-桌面层只需要：创建 renderer、提交最新 extent、推进隐藏 trace、非阻塞 poll、present、suspend/resume、更新 display state 与读取只读 diagnostics。调用者不观察内部 batch、query 或 pipeline 状态。
+桌面层只需要：创建 renderer、提交最新 extent、推进隐藏 trace、非阻塞 poll、present、按需请求/取消一个 sample inspection、suspend/resume、更新 display state 与读取只读 diagnostics。调用者不观察内部 batch、query 或 pipeline 状态。
 
 接口语义：
 
 - `resize` 是事务式请求；失败时保留上一组可用资源；
 - `advance_trace` 自行判断是否可推进，不要求先查询内部状态；
-- `poll` 汇总 publication、presentation completion 与 device events；
+- `poll` 汇总 publication、presentation completion、sample-inspection completion 与 device events；
 - `present` 只报告已提交或可恢复的 surface skip；
 - `suspend/resume` 幂等，并保留上一张完整 scene；
 - `update_output` 只换 display contract，不使 geometry generation 失效。
+- `request_sample_inspection` 只接纳当前 extent 已完整发布时的 validated `ImageSample`，并在
+  renderer 内绑定 process-local observation identity、published generation/extent 与固定
+  `GpuKerrSchildRk4V1` profile；固定槽位最多容纳一个 pending request。`cancel_sample_inspection`
+  只标记丢弃，已提交 GPU work、mapping callback 与 `unmap` 仍必须 drain 后才能复用槽位；resize 与
+  suspend 同样取消 active request。完成、取消、换代和失败都经下一次 `poll` 返回一次。
+- inspection completion 同时携带从目标 generation 复制的实际 `Rgba16Float` `ScientificTexel`，以及
+  fresh full Kerr–Schild/WGSL-binary32 retrace 的 typed record。两者来自不同 producer 路径：后者可能
+  绕过画面 accelerator/refinement 且尚未 binary16 rounding，因此接口把 `published_texel` 与
+  `evaluated_scene_value` 分开，不声明 bit-equal。
 - `capture_scene_linear` 是显式阻塞的 export 操作，只读取已原子发布的 surface generation；它返回
   `ScientificTexel` slice 与 bolometric/final-spectral/LUT 模型误差 metadata，不经过 display 或
   UI。每个 texel 把 `Rgba16Float` binary16 words 与 alpha-tag classification 绑定在同一接口；只有
   `SurfaceRadiance` 可读取 physical RGB。Metadata 直接复用 validated `EquatorialSurface`，vacuum
   由 `SurfaceTransport::Vacuum` 显式表达。该接口导出最终 radiance 与 texel kind，不导出每像素
-  source anchor、branch、frequency ratio、travel time 或 event diagnostics；test-only record capture
-  也不构成 production inspection API。
+  source anchor、branch、frequency ratio、travel time 或 event diagnostics；这些结构化证据由上述
+  单样本 production inspection 提供，但它不是持久 artifact container 或整帧 record plane。
 
 ## Renderer modules
 
@@ -90,7 +99,7 @@ Reference 保留两个有意不同的接口：
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
 | `trace.rs`、`trace/input.rs`、`trace/shader.rs` | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
 | `trace/shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                   |
-| `trace/inspection.rs` | test-only bounded sample request、readback ABI 与 typed decoding                         |
+| `trace/inspection.rs` | production 单槽 sample request、generation/cancel/map 状态机、固定 readback ABI 与 typed decoding |
 | `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
 | `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind、解释 metadata 与 numerical budgets |
 | `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
@@ -116,7 +125,7 @@ WGSL 位于 `src/shaders/`：
 | `blackbody_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport        |
 | `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
 | `surface_footprint_capture.wgsl` | test-only branch-checked source-chart finite difference         |
-| `sample_inspection.wgsl`、`*_sample_inspection.wgsl` | test-only 单样本 record 与 plan-specific scene-value adapter |
+| `sample_inspection.wgsl`、`*_sample_inspection.wgsl` | production 按需单样本 record 与 plan-specific scene-value adapter |
 | `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
 | `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
 | `*_capture.wgsl`             | test-only scientific readback entry points                |
@@ -149,6 +158,11 @@ private TracePlan
 - surface RGB 只有 alpha tag `2.0` 才是 metadata 所述 physical radiance；escape 的 `1.0` 是解析方向
   preview、horizon 是零、负 alpha 是 failure。Display 忽略 scene alpha，scientific capture 必须分类。
 
+可选 inspection 是 publication 的旁路消费者：同一 command encoder 先清零并写入一个 96-byte
+full-KS record，再把它复制到 readback `[0, 96)`，同时把 request 所绑定 published texture 的一个
+`Rgba16Float` texel 复制到 `[256, 264)`。`map_buffer_on_submit` 只映射这个固定范围；它不修改
+candidate、published texture 或默认 frame resource plan。
+
 上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present，因此隐藏批次不会以扫描或低分辨率过渡暴露给用户。
 
 ## Event loop 与 surface
@@ -157,6 +171,8 @@ private TracePlan
 
 - `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
 - window event 先交给 egui，再处理应用语义；
+- 未被 egui 消费的左键释放把 finite、非负、viewport 内的 physical cursor 映射为中心
+  `ImageSample`，并通过 production inspection seam 展示同代 texel 与结构化 retrace；
 - 只有 `RedrawRequested` 执行 presentation；
 - `about_to_wait` 做非阻塞 GPU/native-display poll；`DesktopSchedule` 统一拥有 live resize、repaint、
   GPU poll 与 native monitor deadline，并返回唯一下一次 wake。
@@ -191,6 +207,8 @@ GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。
 | `ValidationReport`                    | 修正领域输入                                    |
 | `GpuTraceInputError`                  | 修正不可表示或不满足 GPU profile 的 Observation |
 | `ResizeError`                         | 处理事务式 rebuild 拒绝或资源失败               |
+| `SampleInspectionRequestError`        | 展示未发布、换代、越界或固定槽 Busy             |
+| `SampleInspectionEvent`               | 展示完成/取消/换代；失败保留 typed readback source |
 | `PresentSkip`                         | 等待可恢复 surface 状态                         |
 | `DeviceEvent`                         | 展示异步 validation/OOM/lost/internal 诊断      |
 | `RendererInitError` / `RendererError` | 终止当前无法恢复的 renderer 操作                |
@@ -206,6 +224,8 @@ Production 不常驻每像素科学 records：
 - published scene：`8 B/pixel`；
 - escape map 与 shadow scratch：按 extent 精确计算；
 - blackbody plan 的固定 spectral LUT；
+- sample inspection 固定 request `32 B`、record `96 B`、readback `264 B`，合计最多 `392 B`
+  logical buffer；readback 中 `[96, 256)` 只满足 texture row alignment，不是额外 record；
 - 四个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
 
 显式 scientific export 临时分配 padded readback buffer，完成 map 后即释放；它不属于 steady frame

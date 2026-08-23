@@ -30,7 +30,13 @@ pub use scientific_capture::{
     ScientificNumericalMetadata, ScientificPixelKind, ScientificTexel,
 };
 pub use timing::TimingError;
-pub use trace::GpuTraceInputError;
+pub use trace::{
+    GpuTraceInputError, SampleArithmeticDomain, SampleBranchKey, SampleInspection,
+    SampleInspectionError, SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
+    SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
+    SampleInspectionRequestId, SampleInspectionSource, SampleObservationId, SamplePolarSide,
+    SampleSceneValue, TraceTermination, UnknownTraceTermination,
+};
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
 compile_error!("gravlume-render supports only native macOS, Windows, and Linux targets");
