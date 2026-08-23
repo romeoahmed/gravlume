@@ -89,9 +89,10 @@ Reference 保留两个有意不同的接口：
 | `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
 | `trace.rs`、`trace/input.rs`、`trace/shader.rs` | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
+| `trace/shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                   |
+| `trace/inspection.rs` | test-only bounded sample request、readback ABI 与 typed decoding                         |
 | `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
-| `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind 与解释 metadata               |
-| `shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                            |
+| `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind、解释 metadata 与 numerical budgets |
 | `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
 | `capabilities.rs`    | adapter baseline 与纯 surface-output resolver                                             |
 | `timing.rs`          | 有界 timestamp query、readback 与 submission lifecycle                                    |

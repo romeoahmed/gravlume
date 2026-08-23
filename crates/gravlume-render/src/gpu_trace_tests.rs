@@ -19,9 +19,10 @@ use crate::{
         capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
         inspect_sample,
     },
+    scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
-        INVARIANT_DRIFT_LIMIT, SampleInspectionSource, SamplePolarSide, SampleSceneValue,
-        TraceTermination, TraceUniforms, UnknownTraceTermination,
+        SampleInspectionSource, SamplePolarSide, SampleSceneValue, TraceTermination, TraceUniforms,
+        UnknownTraceTermination,
     },
 };
 
@@ -224,7 +225,7 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         inspection
             .maximum_invariant_drift
             .into_iter()
-            .all(|drift| drift <= INVARIANT_DRIFT_LIMIT)
+            .all(|drift| drift <= INVARIANT_RELATIVE_DRIFT_LIMIT)
     );
 }
 
@@ -506,7 +507,7 @@ fn every_recorded_invariant_can_make_a_terminal_uncertain() {
             Ok(TraceTermination::Uncertain),
             "invariant component {component} did not gate the terminal"
         );
-        assert!(record.invariant_drift[component] > INVARIANT_DRIFT_LIMIT);
+        assert!(record.invariant_drift[component] > INVARIANT_RELATIVE_DRIFT_LIMIT);
     }
 }
 
@@ -738,7 +739,7 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             .zip(gpu.invariant_drift)
         {
             assert!(
-                (0.0..=INVARIANT_DRIFT_LIMIT).contains(&drift),
+                (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift),
                 "{image_sample:?}: {invariant} drift {drift:e}"
             );
         }

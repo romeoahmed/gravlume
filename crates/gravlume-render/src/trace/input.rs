@@ -1,23 +1,23 @@
 //! Validated host-to-GPU trace ABI packing.
 
-#[cfg(test)]
-use gravlume_domain::SceneRadiance;
 use gravlume_domain::{
     EquatorialEmissionModel, EquatorialSurface, Extremality, KerrNewmanSpacetime, KerrSchildChart,
-    Observation, ScalarSlabEmissionModel, SurfaceTransport, ValidationReport,
+    Observation, ScalarSlabEmissionModel, SceneRadiance, SurfaceTransport, ValidationReport,
 };
 use num_traits::ToPrimitive as _;
 
-use crate::spectral_lut::{maximum_temperature_kelvin, minimum_temperature_kelvin};
+use crate::{
+    scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
+    spectral_lut::{maximum_temperature_kelvin, minimum_temperature_kelvin},
+};
 
-pub const INVARIANT_DRIFT_LIMIT: f32 = 0.05;
 const NORMALIZED_FREQUENCY_TOLERANCE: f64 = 32.0 * f64::EPSILON;
 const OBSERVATION_BASELINE_V1_ESCAPE_RADIUS_OVER_M: f32 = 200.0;
 const GPU_EVENT_TIE_TOLERANCE_OVER_M: f32 = f32::from_bits(0x3700_0000);
 const GPU_EVENT_ARMING_BAND_OVER_M: f32 = f32::from_bits(0x3980_0000);
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[repr(C, align(16))]
 pub struct TraceUniforms {
     spacetime: [f32; 4],
     observer: [f32; 4],
@@ -32,21 +32,32 @@ pub struct TraceUniforms {
     step_policy: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<TraceUniforms>() == 176);
+const _: () = {
+    assert!(std::mem::size_of::<TraceUniforms>() == 176);
+    assert!(std::mem::align_of::<TraceUniforms>() == 16);
+};
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C)]
+#[repr(C, align(16))]
 pub(super) struct TraceDispatch {
     pub(super) tile_origin: [u32; 2],
     pub(super) workgroup_count: [u32; 2],
 }
 
+const _: () = {
+    assert!(std::mem::size_of::<TraceDispatch>() == 16);
+    assert!(std::mem::align_of::<TraceDispatch>() == 16);
+    assert!(std::mem::offset_of!(TraceDispatch, tile_origin) == 0);
+    assert!(std::mem::offset_of!(TraceDispatch, workgroup_count) == 8);
+};
+
 impl TraceUniforms {
-    pub(super) fn from_observation_with_surface(
-        observation: &Observation,
-        surface: Option<EquatorialSurface>,
-    ) -> Result<Self, GpuTraceInputError> {
+    pub fn from_observation(observation: &Observation) -> Result<Self, GpuTraceInputError> {
         let scene = observation.scene();
+        let surface = match scene.radiance() {
+            SceneRadiance::AnalyticSky => None,
+            SceneRadiance::EquatorialSurface(surface) => Some(surface),
+        };
         let physical_spacetime = *scene.spacetime();
         let mass = physical_spacetime.mass_m();
         let view = *observation.view();
@@ -126,17 +137,8 @@ impl TraceUniforms {
             )?,
             surface_emitter,
             surface_transport,
-            step_policy: [0.1, 0.005, 8.0, INVARIANT_DRIFT_LIMIT],
+            step_policy: [0.1, 0.005, 8.0, INVARIANT_RELATIVE_DRIFT_LIMIT],
         })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_observation(observation: &Observation) -> Result<Self, GpuTraceInputError> {
-        let surface = match observation.scene().radiance() {
-            SceneRadiance::AnalyticSky => None,
-            SceneRadiance::EquatorialSurface(surface) => Some(surface),
-        };
-        Self::from_observation_with_surface(observation, surface)
     }
 
     #[cfg(test)]
