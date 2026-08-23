@@ -97,7 +97,7 @@ fn show_sample_inspection(ui: &mut egui::Ui, status: &InspectionStatus) {
         InspectionStatus::ViewportChanging => {
             ui.weak("Inspection waits until the resized viewport has a current complete frame.");
         }
-        InspectionStatus::Pending(request_id) => {
+        InspectionStatus::Pending { request_id, .. } => {
             ui.label(format!(
                 "Request {} is tracing and reading back.",
                 request_id.get()

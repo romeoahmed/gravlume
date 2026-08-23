@@ -8,9 +8,62 @@ pub enum InspectionStatus {
     #[default]
     Idle,
     ViewportChanging,
-    Pending(SampleInspectionRequestId),
+    Pending {
+        request_id: SampleInspectionRequestId,
+        generation: u64,
+    },
     Rejected(SampleInspectionRequestError),
     Finished(SampleInspectionEvent),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PublicationAffinity {
+    None,
+    NextPublication,
+    Generation(u64),
+}
+
+impl PublicationAffinity {
+    const fn invalidated_by(self, generation: u64) -> bool {
+        match self {
+            Self::None => false,
+            Self::NextPublication => true,
+            Self::Generation(bound) => bound != generation,
+        }
+    }
+}
+
+impl InspectionStatus {
+    pub fn on_publication(&mut self, generation: u64) {
+        let affinity = match self {
+            Self::Idle => PublicationAffinity::None,
+            Self::ViewportChanging | Self::Rejected(_) => PublicationAffinity::NextPublication,
+            Self::Pending { generation, .. } => PublicationAffinity::Generation(*generation),
+            Self::Finished(event) => inspection_generation(event).map_or(
+                PublicationAffinity::NextPublication,
+                PublicationAffinity::Generation,
+            ),
+        };
+        if affinity.invalidated_by(generation) {
+            *self = Self::Idle;
+        }
+    }
+
+    pub fn on_unchanged_viewport(&mut self) {
+        if matches!(self, Self::ViewportChanging) {
+            *self = Self::Idle;
+        }
+    }
+}
+
+const fn inspection_generation(event: &SampleInspectionEvent) -> Option<u64> {
+    match event {
+        SampleInspectionEvent::Completed(inspection) => Some(inspection.identity().generation()),
+        SampleInspectionEvent::Cancelled(identity)
+        | SampleInspectionEvent::Superseded(identity)
+        | SampleInspectionEvent::Failed { identity, .. } => Some(identity.generation()),
+        _ => None,
+    }
 }
 
 pub fn cursor_pixel(
@@ -47,7 +100,22 @@ const fn floor_valid_coordinate(coordinate: f64) -> u32 {
 mod tests {
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use super::cursor_pixel;
+    use super::{InspectionStatus, PublicationAffinity, cursor_pixel};
+
+    #[test]
+    fn publication_reconciliation_expires_waits_and_old_generations() {
+        let mut publication_wait = InspectionStatus::ViewportChanging;
+        publication_wait.on_publication(9);
+        assert!(matches!(publication_wait, InspectionStatus::Idle));
+
+        let mut unchanged_wait = InspectionStatus::ViewportChanging;
+        unchanged_wait.on_unchanged_viewport();
+        assert!(matches!(unchanged_wait, InspectionStatus::Idle));
+
+        assert!(PublicationAffinity::NextPublication.invalidated_by(9));
+        assert!(!PublicationAffinity::Generation(9).invalidated_by(9));
+        assert!(PublicationAffinity::Generation(8).invalidated_by(9));
+    }
 
     #[test]
     fn finite_window_positions_map_to_the_containing_physical_pixel() {

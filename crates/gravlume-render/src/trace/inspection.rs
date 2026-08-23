@@ -713,7 +713,6 @@ impl SampleInspector {
                 return None;
             }
             Err(TryRecvError::Disconnected) => {
-                self.readback.unmap();
                 return Some(Self::disposition_or_failure(
                     &pending,
                     accepted_generation,
@@ -729,16 +728,18 @@ impl SampleInspector {
         } else {
             None
         };
+        if let Err(error) = map_result {
+            // The callback grants CPU access only with `Ok`; a failed mapping has no mapped range
+            // to release. Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async
+            return Some(Self::disposition_or_failure(
+                &pending,
+                accepted_generation,
+                error.into(),
+            ));
+        }
         if let Some(event) = disposition {
             self.readback.unmap();
             return Some(event);
-        }
-        if let Err(error) = map_result {
-            self.readback.unmap();
-            return Some(SampleInspectionEvent::Failed {
-                identity: pending.identity,
-                error: error.into(),
-            });
         }
 
         let result = self.read_inspection(pending.identity);
@@ -1087,15 +1088,19 @@ fn decode_scene_value(
 
 #[cfg(test)]
 mod tests {
+    use std::{num::NonZeroU64, sync::mpsc};
+
     use proptest::prelude::*;
 
     use super::{
-        SampleArithmeticDomain, SampleBranchKey, SampleInspectionError, SampleInspectionEvent,
-        SampleInspectionLimits, SampleInspectionProducer, SampleInspectionProfile,
-        SampleInspectionRequestError, SampleInspector, SampleObservationId, SamplePolarSide,
+        PendingInspection, SampleArithmeticDomain, SampleBranchKey, SampleInspectionError,
+        SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
+        SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
+        SampleInspectionRequestId, SampleInspector, SampleObservationId, SamplePolarSide,
         decode_branch_key,
     };
     use crate::{
+        error::GpuErrorScopes,
         extent::RenderExtent,
         test_device::native_gpu,
         trace::{TracePipeline, TraceTermination},
@@ -1128,6 +1133,61 @@ mod tests {
         assert_eq!(limits.readback_buffer_bytes(), 264);
         assert_eq!(limits.maximum_logical_buffer_bytes(), 392);
         assert_eq!(limits.readback_range_bytes(), 264);
+    }
+
+    #[test]
+    fn map_failure_does_not_emit_a_secondary_unmap_validation_error() {
+        const SURFACE_OBSERVABLE: &str =
+            include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
+        let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+            .expect("repository surface fixture parses")
+            .into_surface_observation()
+            .expect("fixture is a surface observation");
+        let observation = fixture.observation();
+        let extent = RenderExtent::new(
+            observation.view().width().get(),
+            observation.view().height().get(),
+        )
+        .expect("fixture extent is nonzero");
+        let gpu = native_gpu();
+        let trace = TracePipeline::new(&gpu.device, observation)
+            .expect("fixture observation enters the GPU profile");
+        let observation_id = SampleObservationId::for_test(97);
+        let mut inspector = SampleInspector::new(&gpu.device, &trace, observation_id);
+        let identity = SampleInspectionIdentity::new(
+            SampleInspectionRequestId(NonZeroU64::MIN),
+            observation_id,
+            23,
+            extent,
+            fixture.sample(),
+        );
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send(Err(wgpu::BufferAsyncError))
+            .expect("synthetic map completion is delivered");
+        inspector.pending = Some(PendingInspection {
+            receiver,
+            identity,
+            cancelled: false,
+        });
+        let scopes = GpuErrorScopes::push(&gpu.device);
+
+        let event = inspector
+            .poll(Some(23))
+            .expect("map failure produces one terminal event");
+
+        assert!(matches!(
+            event,
+            SampleInspectionEvent::Failed {
+                identity: failed_identity,
+                error: SampleInspectionError::Map(_),
+            } if failed_identity == identity
+        ));
+        let secondary_error = pollster::block_on(scopes.finish());
+        assert!(
+            secondary_error.is_ok(),
+            "the typed map failure must be the only reported error: {secondary_error:?}"
+        );
     }
 
     #[test]
