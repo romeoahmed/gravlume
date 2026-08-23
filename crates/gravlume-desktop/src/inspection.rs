@@ -49,10 +49,19 @@ impl InspectionStatus {
         }
     }
 
-    pub fn on_unchanged_viewport(&mut self) {
-        if matches!(self, Self::ViewportChanging) {
+    /// Ends a viewport wait only when the renderer still targets the current complete publication.
+    /// Returns whether visible state changed so the caller can schedule a redraw.
+    pub fn on_viewport_settled(
+        &mut self,
+        current_generation: u64,
+        published_generation: Option<u64>,
+    ) -> bool {
+        let changed = matches!(self, Self::ViewportChanging)
+            && published_generation == Some(current_generation);
+        if changed {
             *self = Self::Idle;
         }
+        changed
     }
 }
 
@@ -108,9 +117,16 @@ mod tests {
         publication_wait.on_publication(9);
         assert!(matches!(publication_wait, InspectionStatus::Idle));
 
-        let mut unchanged_wait = InspectionStatus::ViewportChanging;
-        unchanged_wait.on_unchanged_viewport();
-        assert!(matches!(unchanged_wait, InspectionStatus::Idle));
+        let mut retained_publication_wait = InspectionStatus::ViewportChanging;
+        assert!(retained_publication_wait.on_viewport_settled(9, Some(9)));
+        assert!(matches!(retained_publication_wait, InspectionStatus::Idle));
+
+        let mut unpublished_wait = InspectionStatus::ViewportChanging;
+        assert!(!unpublished_wait.on_viewport_settled(9, Some(8)));
+        assert!(matches!(
+            unpublished_wait,
+            InspectionStatus::ViewportChanging
+        ));
 
         assert!(PublicationAffinity::NextPublication.invalidated_by(9));
         assert!(!PublicationAffinity::Generation(9).invalidated_by(9));
