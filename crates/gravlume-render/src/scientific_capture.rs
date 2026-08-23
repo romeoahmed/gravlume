@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn alpha_tag_protocol_classifies_every_published_texel_kind() {
+    fn alpha_tag_protocol_classifies_defined_tags_and_preserves_unknown_words() {
         let cases = [
             (0x4000, ScientificPixelKind::SurfaceRadiance),
             (0x3c00, ScientificPixelKind::AnalyticEscapePreview),
@@ -543,14 +543,19 @@ mod tests {
                     termination_code: 6,
                 },
             ),
-            (
-                0x3555,
-                ScientificPixelKind::Unclassified { alpha_bits: 0x3555 },
-            ),
         ];
 
         for (alpha_bits, expected) in cases {
             assert_eq!(classify_alpha_bits(alpha_bits), expected);
+        }
+        for alpha_bits in u16::MIN..=u16::MAX {
+            if cases.iter().any(|(defined, _)| *defined == alpha_bits) {
+                continue;
+            }
+            assert_eq!(
+                classify_alpha_bits(alpha_bits),
+                ScientificPixelKind::Unclassified { alpha_bits }
+            );
         }
     }
 

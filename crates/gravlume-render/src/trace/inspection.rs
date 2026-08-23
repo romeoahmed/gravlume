@@ -7,7 +7,6 @@ use crate::{
     extent::RenderExtent, scientific_capture::ScientificChannelModel, test_device::TestGpu,
 };
 
-const INSPECTION_REQUEST_BYTES: u64 = size_of::<GpuInspectionRequest>();
 const INSPECTION_RECORD_BYTES: u64 = size_of::<GpuInspectionRecord>();
 const KNOWN_NUMERICAL_FLAGS: u32 = 1 | 2 | 4;
 const KNOWN_EVENT_CANDIDATES: u32 = 1 | 2 | 4 | 8;
@@ -109,8 +108,12 @@ impl GpuInspectionRequest {
     }
 }
 
-const _: () = assert!(std::mem::size_of::<GpuInspectionRequest>() == 32);
-const _: () = assert!(std::mem::align_of::<GpuInspectionRequest>() == 16);
+const _: () = {
+    assert!(std::mem::size_of::<GpuInspectionRequest>() == 32);
+    assert!(std::mem::align_of::<GpuInspectionRequest>() == 16);
+    assert!(std::mem::offset_of!(GpuInspectionRequest, pixel_extent) == 0);
+    assert!(std::mem::offset_of!(GpuInspectionRequest, subpixel) == 16);
+};
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C, align(16))]
@@ -127,8 +130,16 @@ struct GpuInspectionRecord {
 
 // Six vec4 lanes give the storage record an exact, padding-free 16-byte layout.
 // Source: https://www.w3.org/TR/WGSL/#alignment-and-size
-const _: () = assert!(std::mem::size_of::<GpuInspectionRecord>() == 96);
-const _: () = assert!(std::mem::align_of::<GpuInspectionRecord>() == 16);
+const _: () = {
+    assert!(std::mem::size_of::<GpuInspectionRecord>() == 96);
+    assert!(std::mem::align_of::<GpuInspectionRecord>() == 16);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, metadata) == 0);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, branch_key) == 16);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, source_time) == 32);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, scene_value) == 48);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, event_diagnostics) == 64);
+    assert!(std::mem::offset_of!(GpuInspectionRecord, maximum_invariant_drift) == 80);
+};
 
 impl TracePipeline {
     pub(crate) fn inspect_sample(
@@ -432,63 +443,104 @@ fn decode_scene_value(
 
 #[cfg(test)]
 mod tests {
-    use std::mem::{align_of, offset_of};
+    use proptest::prelude::*;
 
-    use super::{
-        GpuInspectionRecord, GpuInspectionRequest, INSPECTION_RECORD_BYTES,
-        INSPECTION_REQUEST_BYTES, SampleInspectionError, SamplePolarSide, decode_branch_key,
-    };
+    use super::{SampleBranchKey, SampleInspectionError, SamplePolarSide, decode_branch_key};
     use crate::trace::TraceTermination;
 
-    #[test]
-    fn host_inspection_abi_is_a_sequence_of_aligned_vec4_lanes() {
-        assert_eq!(INSPECTION_REQUEST_BYTES, 32);
-        assert_eq!(INSPECTION_RECORD_BYTES, 96);
-        assert_eq!(INSPECTION_REQUEST_BYTES + 2 * INSPECTION_RECORD_BYTES, 224);
-        assert_eq!(align_of::<GpuInspectionRequest>(), 16);
-        assert_eq!(align_of::<GpuInspectionRecord>(), 16);
-        assert_eq!(offset_of!(GpuInspectionRequest, pixel_extent), 0);
-        assert_eq!(offset_of!(GpuInspectionRequest, subpixel), 16);
-        assert_eq!(offset_of!(GpuInspectionRecord, metadata), 0);
-        assert_eq!(offset_of!(GpuInspectionRecord, branch_key), 16);
-        assert_eq!(offset_of!(GpuInspectionRecord, source_time), 32);
-        assert_eq!(offset_of!(GpuInspectionRecord, scene_value), 48);
-        assert_eq!(offset_of!(GpuInspectionRecord, event_diagnostics), 64);
-        assert_eq!(offset_of!(GpuInspectionRecord, maximum_invariant_drift), 80);
+    fn branch_counter() -> impl Strategy<Value = u32> {
+        prop_oneof![Just(0), Just(u32::MAX), any::<u32>()]
+    }
+
+    fn branch_winding() -> impl Strategy<Value = i32> {
+        prop_oneof![Just(i32::MIN), Just(0), Just(i32::MAX), any::<i32>()]
     }
 
     #[test]
-    fn branch_decoder_preserves_exact_values_and_rejects_failure_placeholders() {
-        let winding = -123_456_i32;
-        let words = [
-            0x1_0000,
-            u32::MAX,
-            u32::from_ne_bytes(winding.to_ne_bytes()),
-            2,
-        ];
-        let branch = decode_branch_key(TraceTermination::StepExhaustion, words)
-            .expect("known branch decodes")
-            .expect("step exhaustion retains the committed branch");
-        assert_eq!(branch.radial_turnings, 0x1_0000);
-        assert_eq!(branch.equatorial_crossings, u32::MAX);
-        assert_eq!(branch.azimuth_winding, winding);
-        assert_eq!(branch.initial_polar_side, SamplePolarSide::Positive);
-
+    fn numerical_failure_uses_an_explicit_zero_branch_sentinel() {
         assert_eq!(
             decode_branch_key(TraceTermination::NumericalFailure, [0; 4])
                 .expect("zero failure sentinel decodes"),
             None
         );
-        assert!(matches!(
-            decode_branch_key(TraceTermination::NumericalFailure, words),
-            Err(SampleInspectionError::InvalidRecord {
-                field: "numerical-failure branch"
-            })
-        ));
-        assert_eq!(
-            decode_branch_key(TraceTermination::Uncertain, words)
-                .expect("provisional uncertain branch is recognized"),
-            None
-        );
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn branch_decoder_preserves_arbitrary_committed_values(
+            radial_turnings in branch_counter(),
+            equatorial_crossings in branch_counter(),
+            azimuth_winding in branch_winding(),
+        ) {
+            let polar_sides = [
+                (0, SamplePolarSide::Negative),
+                (1, SamplePolarSide::Equatorial),
+                (2, SamplePolarSide::Positive),
+            ];
+            let committed_terminations = [
+                TraceTermination::HorizonCrossing,
+                TraceTermination::Escape,
+                TraceTermination::SingularityGuard,
+                TraceTermination::StepExhaustion,
+                TraceTermination::EquatorialSurface,
+            ];
+
+            for (polar_side_word, initial_polar_side) in polar_sides {
+                let words = [
+                    radial_turnings,
+                    equatorial_crossings,
+                    u32::from_ne_bytes(azimuth_winding.to_ne_bytes()),
+                    polar_side_word,
+                ];
+                for termination in committed_terminations {
+                    let branch = decode_branch_key(termination, words)
+                        .expect("known branch decodes")
+                        .expect("committed termination retains its branch");
+                    prop_assert_eq!(branch, SampleBranchKey {
+                        initial_polar_side,
+                        radial_turnings,
+                        equatorial_crossings,
+                        azimuth_winding,
+                    });
+                }
+                prop_assert_eq!(
+                    decode_branch_key(TraceTermination::Uncertain, words)
+                        .expect("provisional uncertain branch is recognized"),
+                    None
+                );
+            }
+        }
+
+        #[test]
+        fn branch_decoder_rejects_invalid_protocol_words(
+            payload in (any::<[u32; 4]>(), 0_usize..4),
+            radial_turnings: u32,
+            equatorial_crossings: u32,
+            azimuth_winding: i32,
+            unknown_side in 3_u32..=u32::MAX,
+        ) {
+            let (mut words, nonzero_index) = payload;
+            words[nonzero_index] |= 1;
+
+            prop_assert!(matches!(
+                decode_branch_key(TraceTermination::NumericalFailure, words),
+                Err(SampleInspectionError::InvalidRecord {
+                    field: "numerical-failure branch"
+                })
+            ), "nonzero branch words {words:?} must not decode as a failure sentinel");
+            let words = [
+                radial_turnings,
+                equatorial_crossings,
+                u32::from_ne_bytes(azimuth_winding.to_ne_bytes()),
+                unknown_side,
+            ];
+
+            prop_assert!(matches!(
+                decode_branch_key(TraceTermination::StepExhaustion, words),
+                Err(SampleInspectionError::UnknownPolarSide(value)) if value == unknown_side
+            ));
+        }
     }
 }
