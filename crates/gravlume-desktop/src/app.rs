@@ -93,7 +93,6 @@ struct DesktopApp {
     last_device_event: Option<DeviceEvent>,
     last_resize_event: Option<DeviceEvent>,
     fatal_error: Option<RunError>,
-    published_generation: Option<u64>,
     completed_present_generation: Option<u64>,
     cursor_position: Option<PhysicalPosition<f64>>,
     sample_inspection: InspectionStatus,
@@ -116,7 +115,6 @@ impl DesktopApp {
             last_device_event: None,
             last_resize_event: None,
             fatal_error: None,
-            published_generation: None,
             completed_present_generation: None,
             cursor_position: None,
             sample_inspection: InspectionStatus::default(),
@@ -290,13 +288,28 @@ impl DesktopApp {
     }
 
     fn request_resize(&mut self, event_loop: &ActiveEventLoop, size: PhysicalSize<u32>) {
+        if !matches!(self.sample_inspection, InspectionStatus::ViewportChanging) {
+            self.sample_inspection = InspectionStatus::ViewportChanging;
+            self.request_redraw();
+        }
         if let ResizeAction::ApplyNow(size) = self.schedule.request_resize(Instant::now(), size) {
             self.resize_renderer(event_loop, size.width, size.height);
         }
     }
 
     fn request_cursor_inspection(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
+        if matches!(self.sample_inspection, InspectionStatus::Pending(_)) {
+            return;
+        }
         if self.schedule.resize_pending() {
+            self.sample_inspection = InspectionStatus::ViewportChanging;
+            self.request_redraw();
+            return;
+        }
+        let Some(renderer) = self.renderer.as_ref() else {
+            return;
+        };
+        if !renderer.has_current_publication() {
             self.sample_inspection = InspectionStatus::ViewportChanging;
             self.request_redraw();
             return;
@@ -321,19 +334,18 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
-        let generation = renderer.generation();
         self.sample_inspection = match renderer.request_sample_inspection(sample) {
-            Ok(request_id) => InspectionStatus::Pending {
-                request_id,
-                generation,
-            },
+            Ok(ticket) => InspectionStatus::Pending(ticket),
             Err(error) => InspectionStatus::Rejected(error),
         };
         self.request_redraw();
     }
 
-    fn apply_pending_resize(&mut self, event_loop: &ActiveEventLoop, gpu_idle: bool) {
-        if let Some(size) = self.schedule.take_ready_resize(Instant::now(), gpu_idle) {
+    fn apply_pending_resize(&mut self, event_loop: &ActiveEventLoop, resize_ready: bool) {
+        if let Some(size) = self
+            .schedule
+            .take_ready_resize(Instant::now(), resize_ready)
+        {
             self.resize_renderer(event_loop, size.width, size.height);
         }
     }
@@ -343,12 +355,12 @@ impl DesktopApp {
             return;
         };
         let result = renderer.resize(width, height);
-        let current_generation = renderer.generation();
+        let has_current_publication = renderer.has_current_publication();
         match result {
             Ok(()) => {
                 if width != 0 && height != 0 {
                     self.sample_inspection
-                        .on_viewport_settled(current_generation, self.published_generation);
+                        .on_viewport_settled(has_current_publication);
                     self.last_resize_event = None;
                     self.request_redraw();
                 }
@@ -368,7 +380,7 @@ impl DesktopApp {
                     // therefore settle a viewport wait without producing a publication event.
                     let inspection_changed = self
                         .sample_inspection
-                        .on_viewport_settled(current_generation, self.published_generation);
+                        .on_viewport_settled(has_current_publication);
                     if report_changed || inspection_changed {
                         self.request_redraw();
                     }
@@ -537,8 +549,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 self.process_device_events(event_loop, update.take_events());
                 if let Some(generation) = published_generation {
                     // Reconcile the previous UI state before installing a terminal event from this
-                    // poll; the renderer may intentionally report an old request as superseded.
-                    self.published_generation = Some(generation);
+                    // poll; the renderer may report a cancelled request from the prior generation.
                     self.sample_inspection.on_publication(generation);
                     self.request_redraw();
                 }
@@ -546,8 +557,12 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                     self.completed_present_generation = Some(generation);
                 }
                 if let Some(event) = sample_inspection {
-                    self.sample_inspection = InspectionStatus::Finished(event);
-                    self.request_redraw();
+                    let current_generation = self.renderer.as_ref().map(Renderer::generation);
+                    if current_generation.is_some_and(|generation| {
+                        self.sample_inspection.on_completion(event, generation)
+                    }) {
+                        self.request_redraw();
+                    }
                 }
                 let current_generation = self.renderer.as_ref().map(Renderer::generation);
                 if self.smoke_once
@@ -581,11 +596,8 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         }
 
         let now = Instant::now();
-        let gpu_idle = self
-            .renderer
-            .as_ref()
-            .is_none_or(|renderer| !renderer.has_pending_work());
-        self.apply_pending_resize(event_loop, gpu_idle);
+        let resize_ready = self.renderer.as_ref().is_none_or(Renderer::resize_ready);
+        self.apply_pending_resize(event_loop, resize_ready);
         if !self.schedule.resize_pending()
             && let Some(Err(error)) = self.renderer.as_mut().map(Renderer::advance_trace)
         {
@@ -604,7 +616,10 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
             .window
             .as_ref()
             .and_then(|window| window.display_monitor.next_dispatch_deadline());
-        match self.schedule.next_wake(native_dispatch_deadline, gpu_idle) {
+        match self
+            .schedule
+            .next_wake(native_dispatch_deadline, resize_ready)
+        {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }

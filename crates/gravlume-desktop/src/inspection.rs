@@ -1,5 +1,5 @@
 use gravlume_render::{
-    SampleInspectionEvent, SampleInspectionRequestError, SampleInspectionRequestId,
+    SampleInspectionCompletion, SampleInspectionRequestError, SampleInspectionTicket,
 };
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 
@@ -8,56 +8,41 @@ pub enum InspectionStatus {
     #[default]
     Idle,
     ViewportChanging,
-    Pending {
-        request_id: SampleInspectionRequestId,
-        generation: u64,
-    },
+    Pending(SampleInspectionTicket),
     Rejected(SampleInspectionRequestError),
-    Finished(SampleInspectionEvent),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PublicationAffinity {
-    None,
-    NextPublication,
-    Generation(u64),
-}
-
-impl PublicationAffinity {
-    const fn invalidated_by(self, generation: u64) -> bool {
-        match self {
-            Self::None => false,
-            Self::NextPublication => true,
-            Self::Generation(bound) => bound != generation,
-        }
-    }
+    Finished(SampleInspectionCompletion),
 }
 
 impl InspectionStatus {
-    pub fn on_publication(&mut self, generation: u64) {
-        let affinity = match self {
-            Self::Idle => PublicationAffinity::None,
-            Self::ViewportChanging | Self::Rejected(_) => PublicationAffinity::NextPublication,
-            Self::Pending { generation, .. } => PublicationAffinity::Generation(*generation),
-            Self::Finished(event) => inspection_generation(event).map_or(
-                PublicationAffinity::NextPublication,
-                PublicationAffinity::Generation,
-            ),
+    pub(crate) fn on_publication(&mut self, generation: u64) {
+        let invalidated = match self {
+            Self::Idle => false,
+            Self::ViewportChanging | Self::Rejected(_) => true,
+            Self::Pending(ticket) => ticket.generation() != generation,
+            Self::Finished(completion) => completion.ticket().generation() != generation,
         };
-        if affinity.invalidated_by(generation) {
+        if invalidated {
             *self = Self::Idle;
         }
     }
 
+    /// Installs a terminal completion only while it still belongs to the active viewport.
+    pub(crate) fn on_completion(
+        &mut self,
+        completion: SampleInspectionCompletion,
+        current_generation: u64,
+    ) -> bool {
+        if !completion_is_current(self, completion.ticket().generation(), current_generation) {
+            return false;
+        }
+        *self = Self::Finished(completion);
+        true
+    }
+
     /// Ends a viewport wait only when the renderer still targets the current complete publication.
     /// Returns whether visible state changed so the caller can schedule a redraw.
-    pub fn on_viewport_settled(
-        &mut self,
-        current_generation: u64,
-        published_generation: Option<u64>,
-    ) -> bool {
-        let changed = matches!(self, Self::ViewportChanging)
-            && published_generation == Some(current_generation);
+    pub(crate) fn on_viewport_settled(&mut self, has_current_publication: bool) -> bool {
+        let changed = matches!(self, Self::ViewportChanging) && has_current_publication;
         if changed {
             *self = Self::Idle;
         }
@@ -65,14 +50,17 @@ impl InspectionStatus {
     }
 }
 
-const fn inspection_generation(event: &SampleInspectionEvent) -> Option<u64> {
-    match event {
-        SampleInspectionEvent::Completed(inspection) => Some(inspection.identity().generation()),
-        SampleInspectionEvent::Cancelled(identity)
-        | SampleInspectionEvent::Superseded(identity)
-        | SampleInspectionEvent::Failed { identity, .. } => Some(identity.generation()),
-        _ => None,
-    }
+const fn completion_is_current(
+    status: &InspectionStatus,
+    ticket_generation: u64,
+    current_generation: u64,
+) -> bool {
+    matches!(
+        status,
+        InspectionStatus::Pending(ticket)
+            if ticket.generation() == ticket_generation
+                && ticket_generation == current_generation
+    )
 }
 
 pub fn cursor_pixel(
@@ -109,7 +97,7 @@ const fn floor_valid_coordinate(coordinate: f64) -> u32 {
 mod tests {
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use super::{InspectionStatus, PublicationAffinity, cursor_pixel};
+    use super::{InspectionStatus, completion_is_current, cursor_pixel};
 
     #[test]
     fn publication_reconciliation_expires_waits_and_old_generations() {
@@ -118,19 +106,26 @@ mod tests {
         assert!(matches!(publication_wait, InspectionStatus::Idle));
 
         let mut retained_publication_wait = InspectionStatus::ViewportChanging;
-        assert!(retained_publication_wait.on_viewport_settled(9, Some(9)));
+        assert!(retained_publication_wait.on_viewport_settled(true));
         assert!(matches!(retained_publication_wait, InspectionStatus::Idle));
 
         let mut unpublished_wait = InspectionStatus::ViewportChanging;
-        assert!(!unpublished_wait.on_viewport_settled(9, Some(8)));
+        assert!(!unpublished_wait.on_viewport_settled(false));
         assert!(matches!(
             unpublished_wait,
             InspectionStatus::ViewportChanging
         ));
+    }
 
-        assert!(PublicationAffinity::NextPublication.invalidated_by(9));
-        assert!(!PublicationAffinity::Generation(9).invalidated_by(9));
-        assert!(PublicationAffinity::Generation(8).invalidated_by(9));
+    #[test]
+    fn non_pending_states_reject_same_or_old_generation_completions() {
+        assert!(!completion_is_current(
+            &InspectionStatus::ViewportChanging,
+            9,
+            9
+        ));
+        assert!(!completion_is_current(&InspectionStatus::Idle, 8, 9));
+        assert!(!completion_is_current(&InspectionStatus::Idle, 9, 9));
     }
 
     #[test]

@@ -21,9 +21,8 @@ use crate::{
     scientific_capture::{ScientificCapture, ScientificCaptureError, capture_texture},
     timing::GpuTimings,
     trace::{
-        SampleInspectionEvent, SampleInspectionLimits, SampleInspectionRequestError,
-        SampleInspectionRequestId, SampleInspector, SampleObservationId, TracePipeline,
-        TraceTimestampWrites,
+        SampleInspectionCompletion, SampleInspectionRequestError, SampleInspectionTicket,
+        SampleInspector, TracePipeline, TraceTimestampWrites,
     },
 };
 
@@ -48,7 +47,7 @@ pub enum PresentResult {
 pub struct RendererUpdate {
     published_generation: Option<u64>,
     completed_present_generation: Option<u64>,
-    sample_inspection: Option<SampleInspectionEvent>,
+    sample_inspection: Option<SampleInspectionCompletion>,
     events: Vec<DeviceEvent>,
 }
 
@@ -63,7 +62,7 @@ impl RendererUpdate {
         self.completed_present_generation
     }
 
-    pub const fn take_sample_inspection(&mut self) -> Option<SampleInspectionEvent> {
+    pub const fn take_sample_inspection(&mut self) -> Option<SampleInspectionCompletion> {
         self.sample_inspection.take()
     }
 
@@ -262,9 +261,7 @@ impl Renderer {
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = TracePipeline::new(&device, observation)?;
-        let observation_id = SampleObservationId::allocate()
-            .ok_or(RendererInitError::SampleObservationIdentityExhausted)?;
-        let sample_inspector = SampleInspector::new(&device, &trace, observation_id);
+        let sample_inspector = SampleInspector::new(&device, &trace);
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -491,7 +488,7 @@ impl Renderer {
     pub fn request_sample_inspection(
         &mut self,
         sample: ImageSample,
-    ) -> Result<SampleInspectionRequestId, SampleInspectionRequestError> {
+    ) -> Result<SampleInspectionTicket, SampleInspectionRequestError> {
         let published =
             inspection_generation(self.published_scene.generation(), self.extent.generation())?;
         let extent = self.published_scene.extent();
@@ -503,19 +500,6 @@ impl Renderer {
             published,
             sample,
         )
-    }
-
-    /// Logically cancels an in-flight inspection without pretending to cancel submitted GPU work.
-    ///
-    /// The fixed slot remains occupied until its callback drains, at which point `poll` reports a
-    /// cancelled event. Passing a stale or unknown request identity has no effect.
-    pub fn cancel_sample_inspection(&mut self, request_id: SampleInspectionRequestId) -> bool {
-        self.sample_inspector.cancel(request_id)
-    }
-
-    #[must_use]
-    pub const fn sample_inspection_limits() -> SampleInspectionLimits {
-        SampleInspectionLimits::production()
     }
 
     /// Submits one hidden full-resolution trace batch without acquiring or presenting a surface.
@@ -614,8 +598,23 @@ impl Renderer {
             || self.pending_present_generation.is_some()
     }
 
+    /// Returns whether size-dependent resources can be replaced without waiting for GPU owners.
+    ///
+    /// Sample inspection is intentionally excluded: it only reads immutable trace resources and
+    /// the retained published scene, while `resize` logically cancels its fixed slot as it drains.
+    #[must_use]
+    pub const fn resize_ready(&self) -> bool {
+        !self.timings.has_pending_readback() && self.pending_present_generation.is_none()
+    }
+
     pub const fn generation(&self) -> u64 {
         self.extent.generation()
+    }
+
+    /// Returns whether the renderer has a complete publication for its current generation.
+    #[must_use]
+    pub fn has_current_publication(&self) -> bool {
+        self.published_scene.generation() == Some(self.extent.generation())
     }
 
     pub fn suspend(&mut self) {
@@ -821,11 +820,8 @@ const fn inspection_generation(
     current: u64,
 ) -> Result<u64, SampleInspectionRequestError> {
     match published {
-        None => Err(SampleInspectionRequestError::NoPublishedScene),
-        Some(published) if published != current => {
-            Err(SampleInspectionRequestError::PublishedGenerationStale { published, current })
-        }
-        Some(published) => Ok(published),
+        Some(published) if published == current => Ok(published),
+        None | Some(_) => Err(SampleInspectionRequestError::NoCurrentPublication),
     }
 }
 
@@ -908,14 +904,11 @@ mod tests {
     fn inspection_requires_a_complete_current_generation() {
         assert_eq!(
             inspection_generation(None, 4),
-            Err(SampleInspectionRequestError::NoPublishedScene)
+            Err(SampleInspectionRequestError::NoCurrentPublication)
         );
         assert_eq!(
             inspection_generation(Some(3), 4),
-            Err(SampleInspectionRequestError::PublishedGenerationStale {
-                published: 3,
-                current: 4,
-            })
+            Err(SampleInspectionRequestError::NoCurrentPublication)
         );
         assert_eq!(inspection_generation(Some(4), 4), Ok(4));
     }

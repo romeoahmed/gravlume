@@ -8,15 +8,13 @@ mod shadow_coverage;
 
 pub use input::{GpuTraceInputError, TraceUniforms};
 
-// The parent `trace` module is private, so this re-export is only visible to crate-internal
-// renderer modules and does not enter the library's public API.
 pub use inspection::SampleInspector;
+#[cfg(test)]
+pub use inspection::TraceTermination;
 pub use inspection::{
-    SampleArithmeticDomain, SampleBranchKey, SampleInspection, SampleInspectionError,
-    SampleInspectionEvent, SampleInspectionIdentity, SampleInspectionLimits,
-    SampleInspectionProducer, SampleInspectionProfile, SampleInspectionRequestError,
-    SampleInspectionRequestId, SampleInspectionSource, SampleObservationId, SamplePolarSide,
-    SampleSceneValue, TraceTermination, UnknownTraceTermination,
+    SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionDisposition,
+    SampleInspectionError, SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide,
+    SampleRetrace, SampleSurfaceEvaluation, SampleTraceDiagnostics, SampleTraceOutcome,
 };
 
 use input::TraceDispatch;

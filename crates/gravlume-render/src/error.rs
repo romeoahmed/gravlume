@@ -19,8 +19,6 @@ pub enum RendererInitError {
     RequestDevice(#[from] wgpu::RequestDeviceError),
     #[error("validated observation cannot enter the GPU renderer: {0}")]
     TraceInput(#[from] GpuTraceInputError),
-    #[error("process-local sample observation identity space is exhausted")]
-    SampleObservationIdentityExhausted,
     #[error("failed to create {stage}: {source}")]
     GpuResource {
         stage: &'static str,
