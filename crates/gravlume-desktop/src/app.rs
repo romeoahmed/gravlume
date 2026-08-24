@@ -263,6 +263,7 @@ impl DesktopApp {
                 PresentSkip::Validation
                 | PresentSkip::Occluded
                 | PresentSkip::ZeroExtent
+                | PresentSkip::ViewportMismatch
                 | PresentSkip::Suspended,
             )) => {}
             Err(error) => self.fail(event_loop, error.into()),
@@ -297,7 +298,7 @@ impl DesktopApp {
         }
     }
 
-    fn request_cursor_inspection(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
+    fn request_cursor_inspection(&mut self, event_loop: &ActiveEventLoop) {
         if matches!(self.sample_inspection, InspectionStatus::Pending(_)) {
             return;
         }
@@ -309,15 +310,15 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_ref() else {
             return;
         };
-        if !renderer.has_current_publication() {
+        let Some([width, height]) = renderer.current_publication_extent() else {
             self.sample_inspection = InspectionStatus::ViewportChanging;
             self.request_redraw();
             return;
-        }
+        };
+        let extent = PhysicalSize::new(width, height);
         let Some(position) = self.cursor_position else {
             return;
         };
-        let extent = window.inner_size();
         let Some([pixel_x, pixel_y]) = cursor_pixel(position, extent) else {
             return;
         };
@@ -355,12 +356,12 @@ impl DesktopApp {
             return;
         };
         let result = renderer.resize(width, height);
-        let has_current_publication = renderer.has_current_publication();
+        let viewport_has_current_publication = renderer.current_publication_extent().is_some();
         match result {
             Ok(()) => {
                 if width != 0 && height != 0 {
                     self.sample_inspection
-                        .on_viewport_settled(has_current_publication);
+                        .on_viewport_settled(viewport_has_current_publication);
                     self.last_resize_event = None;
                     self.request_redraw();
                 }
@@ -376,12 +377,9 @@ impl DesktopApp {
                 if is_fatal {
                     self.fail(event_loop, error.into());
                 } else {
-                    // A nonfatal transactional rejection retains the installed generation. It can
-                    // therefore settle a viewport wait without producing a publication event.
-                    let inspection_changed = self
-                        .sample_inspection
-                        .on_viewport_settled(has_current_publication);
-                    if report_changed || inspection_changed {
+                    // The retained publication belongs to the previous physical viewport. Keep
+                    // inspection unavailable until a matching resize succeeds and publishes.
+                    if report_changed {
                         self.request_redraw();
                     }
                 }
@@ -523,7 +521,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 button: MouseButton::Left,
                 ..
             } if !response.consumed => {
-                self.request_cursor_inspection(event_loop, &window);
+                self.request_cursor_inspection(event_loop);
             }
             WindowEvent::Occluded(false) => window.request_redraw(),
             WindowEvent::RedrawRequested if self.schedule.redraw_allowed() => {
@@ -550,7 +548,12 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 if let Some(generation) = published_generation {
                     // Reconcile the previous UI state before installing a terminal event from this
                     // poll; the renderer may report a cancelled request from the prior generation.
-                    self.sample_inspection.on_publication(generation);
+                    let viewport_has_current_publication = self
+                        .renderer
+                        .as_ref()
+                        .is_some_and(|renderer| renderer.current_publication_extent().is_some());
+                    self.sample_inspection
+                        .on_publication(generation, viewport_has_current_publication);
                     self.request_redraw();
                 }
                 if let Some(generation) = completed_present_generation {

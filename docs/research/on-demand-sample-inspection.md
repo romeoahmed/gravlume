@@ -76,8 +76,9 @@ range，并在 drop view 后 `unmap`；mapping failure 直接形成 typed failur
 view 在 `unmap` 前释放，并禁止 CPU/GPU 同时拥有 buffer。
 
 Renderer poll 先安装 matching new publication，再核对 inspection generation。Desktop 进入
-`ViewportChanging` 后，旧 completion 不得恢复旧结果；若 resize 是 no-op 或事务式拒绝且 retained
-publication 仍 current，viewport wait 必须显式结束。
+`ViewportChanging` 后，旧 completion 不得恢复旧结果；只有 no-op resize 的 physical viewport 仍与
+retained publication extent 相等时，viewport wait 才能显式结束。事务式拒绝保留的不同 extent
+不可用于新 viewport；current 语义以[架构合同](../architecture.md#event-loop-与-surface)为准。
 
 ## GPU protocol 与资源证据
 
