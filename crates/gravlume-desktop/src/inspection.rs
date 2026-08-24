@@ -14,7 +14,15 @@ pub enum InspectionStatus {
 }
 
 impl InspectionStatus {
-    pub(crate) fn on_publication(&mut self, generation: u64) {
+    pub(crate) fn on_publication(
+        &mut self,
+        generation: u64,
+        viewport_has_current_publication: bool,
+    ) {
+        if !viewport_has_current_publication {
+            *self = Self::ViewportChanging;
+            return;
+        }
         let invalidated = match self {
             Self::Idle => false,
             Self::ViewportChanging | Self::Rejected(_) => true,
@@ -41,8 +49,8 @@ impl InspectionStatus {
 
     /// Ends a viewport wait only when the renderer still targets the current complete publication.
     /// Returns whether visible state changed so the caller can schedule a redraw.
-    pub(crate) fn on_viewport_settled(&mut self, has_current_publication: bool) -> bool {
-        let changed = matches!(self, Self::ViewportChanging) && has_current_publication;
+    pub(crate) fn on_viewport_settled(&mut self, viewport_has_current_publication: bool) -> bool {
+        let changed = matches!(self, Self::ViewportChanging) && viewport_has_current_publication;
         if changed {
             *self = Self::Idle;
         }
@@ -101,19 +109,26 @@ mod tests {
     use super::{InspectionStatus, completion_is_current, cursor_pixel};
 
     #[test]
-    fn publication_or_retained_scene_settles_a_viewport_wait() {
+    fn current_publication_settles_a_viewport_wait() {
         let mut publication_wait = InspectionStatus::ViewportChanging;
-        publication_wait.on_publication(9);
+        publication_wait.on_publication(9, true);
         assert!(matches!(publication_wait, InspectionStatus::Idle));
 
-        let mut retained_publication_wait = InspectionStatus::ViewportChanging;
-        assert!(retained_publication_wait.on_viewport_settled(true));
-        assert!(matches!(retained_publication_wait, InspectionStatus::Idle));
+        let mut current_viewport_wait = InspectionStatus::ViewportChanging;
+        assert!(current_viewport_wait.on_viewport_settled(true));
+        assert!(matches!(current_viewport_wait, InspectionStatus::Idle));
 
         let mut unpublished_wait = InspectionStatus::ViewportChanging;
         assert!(!unpublished_wait.on_viewport_settled(false));
         assert!(matches!(
             unpublished_wait,
+            InspectionStatus::ViewportChanging
+        ));
+
+        let mut mismatched_publication = InspectionStatus::Idle;
+        mismatched_publication.on_publication(9, false);
+        assert!(matches!(
+            mismatched_publication,
             InspectionStatus::ViewportChanging
         ));
     }

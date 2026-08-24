@@ -29,6 +29,7 @@ use crate::{
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PresentSkip {
     ZeroExtent,
+    ViewportMismatch,
     Suspended,
     Timeout,
     Occluded,
@@ -386,6 +387,9 @@ impl Renderer {
         let Some(extent) = self.extent.extent() else {
             return Ok(PresentResult::Skipped(PresentSkip::ZeroExtent));
         };
+        if self.physical_viewport() != Some(extent) {
+            return Ok(PresentResult::Skipped(PresentSkip::ViewportMismatch));
+        }
         let (surface_texture, reconfigure_after_present) =
             match self.prepare_surface_frame(extent)? {
                 PreparedSurfaceFrame::Render {
@@ -489,9 +493,9 @@ impl Renderer {
         &mut self,
         sample: ImageSample,
     ) -> Result<SampleInspectionTicket, SampleInspectionRequestError> {
-        let published =
-            inspection_generation(self.published_scene.generation(), self.extent.generation())?;
-        let extent = self.published_scene.extent();
+        let (published, extent) = self
+            .current_publication()
+            .ok_or(SampleInspectionRequestError::NoCurrentPublication)?;
         self.inspection_slot.request(
             &self.device,
             &self.queue,
@@ -509,7 +513,7 @@ impl Renderer {
     /// Returns an error when size-dependent resources are unavailable.
     pub fn advance_trace(&mut self) -> Result<(), RendererError> {
         if self.surface_suspended
-            || self.extent.extent().is_none()
+            || self.current_extent().is_none()
             || !self.timings.capture_available()
         {
             return Ok(());
@@ -609,10 +613,31 @@ impl Renderer {
         self.extent.generation()
     }
 
-    /// Returns whether the renderer has a complete publication for its current generation.
+    /// Returns the physical client extent only when the installed extent and complete publication
+    /// both exactly match it.
     #[must_use]
-    pub fn has_current_publication(&self) -> bool {
-        self.published_scene.generation() == Some(self.extent.generation())
+    pub fn current_publication_extent(&self) -> Option<[u32; 2]> {
+        self.current_publication()
+            .map(|(_, extent)| [extent.width(), extent.height()])
+    }
+
+    fn current_publication(&self) -> Option<(u64, RenderExtent)> {
+        matching_publication(
+            self.published_scene
+                .generation()
+                .map(|generation| (generation, self.published_scene.extent())),
+            self.current_extent()
+                .map(|extent| (self.extent.generation(), extent)),
+        )
+    }
+
+    fn current_extent(&self) -> Option<RenderExtent> {
+        matching_extent(self.extent.extent(), self.physical_viewport())
+    }
+
+    fn physical_viewport(&self) -> Option<RenderExtent> {
+        let size = self.window.inner_size();
+        RenderExtent::new(size.width, size.height)
     }
 
     pub fn suspend(&mut self) {
@@ -813,14 +838,20 @@ impl Renderer {
     }
 }
 
-const fn inspection_generation(
-    published: Option<u64>,
-    current: u64,
-) -> Result<u64, SampleInspectionRequestError> {
-    match published {
-        Some(published) if published == current => Ok(published),
-        None | Some(_) => Err(SampleInspectionRequestError::NoCurrentPublication),
-    }
+fn matching_publication(
+    published: Option<(u64, RenderExtent)>,
+    current: Option<(u64, RenderExtent)>,
+) -> Option<(u64, RenderExtent)> {
+    let published = published?;
+    (published == current?).then_some(published)
+}
+
+fn matching_extent(
+    installed: Option<RenderExtent>,
+    physical_viewport: Option<RenderExtent>,
+) -> Option<RenderExtent> {
+    let installed = installed?;
+    (installed == physical_viewport?).then_some(installed)
 }
 
 fn surface_configuration_changed(current: SurfaceSelection, next: SurfaceSelection) -> bool {
@@ -895,19 +926,37 @@ fn free_egui_textures_after_submit(
 
 #[cfg(test)]
 mod tests {
-    use super::inspection_generation;
-    use crate::SampleInspectionRequestError;
+    use super::{matching_extent, matching_publication};
+    use crate::extent::RenderExtent;
 
     #[test]
-    fn inspection_requires_a_complete_current_generation() {
+    fn inspection_requires_an_active_matching_publication() {
+        let current_extent = RenderExtent::new(1_920, 1_080).expect("test extent is nonzero");
+        let retained_extent = RenderExtent::new(1_280, 720).expect("test extent is nonzero");
+
+        assert_eq!(matching_extent(None, Some(current_extent)), None);
+        assert_eq!(matching_extent(Some(current_extent), None), None);
         assert_eq!(
-            inspection_generation(None, 4),
-            Err(SampleInspectionRequestError::NoCurrentPublication)
+            matching_extent(Some(retained_extent), Some(current_extent)),
+            None
         );
         assert_eq!(
-            inspection_generation(Some(3), 4),
-            Err(SampleInspectionRequestError::NoCurrentPublication)
+            matching_extent(Some(current_extent), Some(current_extent)),
+            Some(current_extent)
         );
-        assert_eq!(inspection_generation(Some(4), 4), Ok(4));
+        assert_eq!(matching_publication(None, Some((4, current_extent))), None);
+        assert_eq!(
+            matching_publication(Some((3, current_extent)), Some((4, current_extent))),
+            None
+        );
+        assert_eq!(matching_publication(Some((4, current_extent)), None), None);
+        assert_eq!(
+            matching_publication(Some((4, retained_extent)), Some((4, current_extent))),
+            None
+        );
+        assert_eq!(
+            matching_publication(Some((4, current_extent)), Some((4, current_extent))),
+            Some((4, current_extent))
+        );
     }
 }

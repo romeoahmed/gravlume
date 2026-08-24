@@ -91,8 +91,9 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
   exhaustion 只有 branch prefix。三种 plan 的 GPU tests 与 production lifecycle tests 覆盖 ABI、非法
   branch protocol、单次消费、cancel-drain、generation mismatch 和两类像素证据分离。精确 protocol、
   资源和 `8×8 + lane 0` Metal 反例见[采用决策](research/on-demand-sample-inspection.md)与[历史基线](research/bounded-sample-inspection.md)。
-- `gravlume-desktop` 是首个 consumer：画面点击显示同代 texel、typed retrace 与 diagnostics；新
-  publication、resize 或 suspend 使旧结果失效，旧 completion 不能覆盖 `ViewportChanging`。
+- `gravlume-desktop` 是首个 consumer：physical client、active extent 与 publication extent 完全一致时，
+  画面点击显示同代 texel、typed retrace 与 diagnostics；新 publication、resize 或 suspend 使旧结果
+  失效，旧 completion 不能覆盖 `ViewportChanging`。
 
 ### Publication 与 display
 

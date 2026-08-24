@@ -74,9 +74,10 @@ Reference 保留两个有意不同的接口：
 - `present` 只报告已提交或可恢复的 surface skip；
 - `suspend/resume` 幂等，并保留上一张完整 scene；
 - `update_output` 只换 display contract，不使 geometry generation 失效。
-- `request_sample_inspection` 只接纳当前 extent 已完整发布时的 validated `ImageSample`。Renderer
-  捕获 published generation、extent 与 sample 并返回 ticket；caller 不提供 identity、solver 或 GPU
-  handle。固定槽位最多容纳一个 pending request。
+- `request_sample_inspection` 只接纳 active extent 与 published generation/extent 完全一致时的 validated
+  `ImageSample`；zero extent 或 retained publication 与 active extent 不一致时拒绝。Renderer 捕获
+  published generation、extent 与 sample 并返回 ticket；caller 不提供 identity、solver 或 GPU handle。
+  固定槽位最多容纳一个 pending request。
 - resize/suspend 只能逻辑取消已提交 inspection；槽位必须等 submission、mapping 和 mapped view 全部
   drain 后才能复用。每个 ticket 经 `poll` 恰好产生一次 completed、cancelled 或 typed failed completion。
 - completed inspection 把目标 generation 的实际 `Rgba16Float` texel 与 fresh full-KS/WGSL-binary32
@@ -172,9 +173,10 @@ candidate、published texture 或默认 frame resource plan；精确 ABI、copy 
 
 - `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
 - window event 先交给 egui，再处理应用语义；
-- 未被 egui 消费的左键释放把有效 physical cursor 映射为中心 `ImageSample`，并展示同代 published
-  texel 与 retrace；新 publication 使旧 generation 结果失效。若 resize 没有换代并保留当前完整
-  publication，viewport wait 也必须结束；
+- 未被 egui 消费的左键释放只在 physical client extent 与 current publication extent 相等时，把有效
+  physical cursor 映射为中心 `ImageSample`，并展示同代 published texel 与 retrace；新 publication
+  使旧 generation 结果失效。只有 no-op resize 仍匹配该 extent 时，retained publication 才能结束
+  viewport wait；
 - 只有 `RedrawRequested` 执行 presentation；
 - `about_to_wait` 做非阻塞 GPU/native-display poll；`DesktopSchedule` 统一拥有 live resize、repaint、
   GPU poll 与 native monitor deadline，并返回唯一下一次 wake。
@@ -182,6 +184,9 @@ candidate、published texture 或默认 frame resource plan；精确 ABI、copy 
 Surface 不变量：
 
 - zero extent 不 configure 或 acquire；
+- surface configuration 与 physical client extent 必须匹配；尺寸不一致时 presentation 行为由平台
+  决定，因此事务式 resize 拒绝后不 acquire/present、不继续 trace，也不允许用 retained publication
+  检查新 viewport；
 - acquired texture 在 present/drop 前不重配；
 - `Suboptimal` 完成本帧后重配，`Outdated` 强制重配，`Lost` 重建；`Timeout`/`Occluded` 跳过并等待恢复信号；
 - live resize 合并最新 physical extent，避免为每个原始事件同步等待 GPU idle；`resize_ready` 只等待
@@ -189,7 +194,7 @@ Surface 不变量：
   立即进入 `ViewportChanging`，随后逻辑取消 inspection；旧 ticket completion 不得覆盖该 UI 状态；
 - suspend 期间不分配 replacement；恢复 surface 后读取一次最新 inner size。
 
-这些语义来自 [`ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)与 [`Surface::configure`](https://docs.rs/wgpu/30.0.1/wgpu/struct.Surface.html#method.configure)。
+这些语义来自 [`ApplicationHandler`](https://docs.rs/winit/0.30.13/winit/application/trait.ApplicationHandler.html)、[`Window::inner_size`](https://docs.rs/winit/0.30.13/winit/window/struct.Window.html#method.inner_size) 与 [`SurfaceConfiguration`](https://docs.rs/wgpu/30.0.1/wgpu/type.SurfaceConfiguration.html#structfield.width)。
 
 ## HDR 与 native display seam
 
