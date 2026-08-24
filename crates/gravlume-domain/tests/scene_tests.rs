@@ -124,8 +124,6 @@ fn thin_depth_exponent() -> impl Strategy<Value = i32> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
-
     #[test]
     fn equatorial_emitter_accepts_exactly_its_intrinsic_domain(
         inner_radius_m in proptest::num::f64::ANY,

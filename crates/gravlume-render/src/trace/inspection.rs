@@ -14,6 +14,10 @@ const PUBLISHED_TEXEL_OFFSET: u64 = INSPECTION_RECORD_BYTES;
 const PUBLISHED_TEXEL_BYTES: u64 = 8;
 const INSPECTION_READBACK_BYTES: u64 = PUBLISHED_TEXEL_OFFSET + PUBLISHED_TEXEL_BYTES;
 const _: () = {
+    assert!(INSPECTION_REQUEST_BYTES == 32);
+    assert!(INSPECTION_RECORD_BYTES == 96);
+    assert!(INSPECTION_READBACK_BYTES == 104);
+    assert!(INSPECTION_REQUEST_BYTES + INSPECTION_RECORD_BYTES + INSPECTION_READBACK_BYTES == 232);
     assert!(PUBLISHED_TEXEL_BYTES == size_of::<[u16; 4]>());
     assert!(PUBLISHED_TEXEL_OFFSET.is_multiple_of(PUBLISHED_TEXEL_BYTES));
 };
@@ -63,7 +67,7 @@ impl TryFrom<u32> for TraceTermination {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// Immutable target captured when one inspection request is admitted.
 ///
 /// This live renderer ticket is not a persisted artifact identity. Persisted evidence needs its
@@ -976,7 +980,6 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        INSPECTION_READBACK_BYTES, INSPECTION_RECORD_BYTES, INSPECTION_REQUEST_BYTES,
         PendingInspection, SampleBranchKey, SampleInspectionDisposition, SampleInspectionError,
         SampleInspectionRequestError, SampleInspectionTicket, SampleInspector, SamplePolarSide,
         SampleRetrace, SampleTraceOutcome, decode_branch_key,
@@ -988,18 +991,30 @@ mod tests {
         trace::{TracePipeline, TraceTermination},
     };
 
+    const SURFACE_OBSERVABLE: &str =
+        include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
+
+    fn surface_fixture() -> gravlume_reference::SurfaceObservationFixture {
+        gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+            .expect("repository surface fixture parses")
+            .into_surface_observation()
+            .expect("fixture is a surface observation")
+    }
+
+    fn fixture_extent(fixture: &gravlume_reference::SurfaceObservationFixture) -> RenderExtent {
+        RenderExtent::new(
+            fixture.observation().view().width().get(),
+            fixture.observation().view().height().get(),
+        )
+        .expect("fixture extent is nonzero")
+    }
+
     fn branch_counter() -> impl Strategy<Value = u32> {
         prop_oneof![Just(0), Just(u32::MAX), any::<u32>()]
     }
 
     fn branch_winding() -> impl Strategy<Value = i32> {
         prop_oneof![Just(i32::MIN), Just(0), Just(i32::MAX), any::<i32>()]
-    }
-
-    fn assert_same_ticket(actual: SampleInspectionTicket, expected: SampleInspectionTicket) {
-        assert_eq!(actual.generation(), expected.generation());
-        assert_eq!(actual.extent(), expected.extent());
-        assert_eq!(actual.sample(), expected.sample());
     }
 
     #[test]
@@ -1012,30 +1027,10 @@ mod tests {
     }
 
     #[test]
-    fn fixed_buffers_match_the_documented_logical_budget() {
-        assert_eq!(INSPECTION_REQUEST_BYTES, 32);
-        assert_eq!(INSPECTION_RECORD_BYTES, 96);
-        assert_eq!(INSPECTION_READBACK_BYTES, 104);
-        assert_eq!(
-            INSPECTION_REQUEST_BYTES + INSPECTION_RECORD_BYTES + INSPECTION_READBACK_BYTES,
-            232
-        );
-    }
-
-    #[test]
     fn map_failure_does_not_emit_a_secondary_unmap_validation_error() {
-        const SURFACE_OBSERVABLE: &str =
-            include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
-        let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
-            .expect("repository surface fixture parses")
-            .into_surface_observation()
-            .expect("fixture is a surface observation");
+        let fixture = surface_fixture();
         let observation = fixture.observation();
-        let extent = RenderExtent::new(
-            observation.view().width().get(),
-            observation.view().height().get(),
-        )
-        .expect("fixture extent is nonzero");
+        let extent = fixture_extent(&fixture);
         let gpu = native_gpu();
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
@@ -1056,7 +1051,7 @@ mod tests {
             .poll(Some(23))
             .expect("map failure produces one terminal event");
 
-        assert_same_ticket(completion.ticket(), ticket);
+        assert_eq!(completion.ticket(), ticket);
         assert!(matches!(
             completion.disposition(),
             SampleInspectionDisposition::Failed(SampleInspectionError::Map(_))
@@ -1070,18 +1065,9 @@ mod tests {
 
     #[test]
     fn cancelled_request_drains_before_the_fixed_slot_is_reused() {
-        const SURFACE_OBSERVABLE: &str =
-            include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
-        let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
-            .expect("repository surface fixture parses")
-            .into_surface_observation()
-            .expect("fixture is a surface observation");
+        let fixture = surface_fixture();
         let observation = fixture.observation();
-        let extent = RenderExtent::new(
-            observation.view().width().get(),
-            observation.view().height().get(),
-        )
-        .expect("fixture extent is nonzero");
+        let extent = fixture_extent(&fixture);
         let gpu = native_gpu();
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
@@ -1120,7 +1106,7 @@ mod tests {
             })
             .expect("cancelled inspection submission drains");
         let completion = inspector.wait_for_completion(Some(7));
-        assert_same_ticket(completion.ticket(), request);
+        assert_eq!(completion.ticket(), request);
         assert!(matches!(
             completion.disposition(),
             SampleInspectionDisposition::Cancelled
@@ -1141,22 +1127,21 @@ mod tests {
 
     #[test]
     fn completion_binds_ticket_and_fixed_retrace_method() {
-        const SURFACE_OBSERVABLE: &str =
-            include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
-        let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
-            .expect("repository surface fixture parses")
-            .into_surface_observation()
-            .expect("fixture is a surface observation");
+        const PUBLISHED_TEXEL: [u16; 4] = [0x3c00, 0x4000, 0x4200, 0x3c00];
+
+        let fixture = surface_fixture();
         let observation = fixture.observation();
-        let extent = RenderExtent::new(
-            observation.view().width().get(),
-            observation.view().height().get(),
-        )
-        .expect("fixture extent is nonzero");
+        let extent = fixture_extent(&fixture);
         let gpu = native_gpu();
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
         let published = published_texture(&gpu.device, extent);
+        write_published_texel(
+            &gpu.queue,
+            &published,
+            fixture.sample().pixel(),
+            PUBLISHED_TEXEL,
+        );
         let mut inspector = SampleInspector::new(&gpu.device, &trace);
 
         let request = inspector
@@ -1177,7 +1162,7 @@ mod tests {
             })
             .expect("inspection submission completes");
         let completion = inspector.wait_for_completion(Some(11));
-        assert_same_ticket(completion.ticket(), request);
+        assert_eq!(completion.ticket(), request);
         let SampleInspectionDisposition::Completed(inspection) = completion.disposition() else {
             panic!(
                 "completed GPU work must decode as a completed inspection, got {:?}",
@@ -1197,26 +1182,20 @@ mod tests {
             SampleTraceOutcome::EquatorialSurface { .. }
         ));
         assert_eq!(
+            inspection.published_texel().rgba16_float_bits(),
+            PUBLISHED_TEXEL
+        );
+        assert_eq!(
             inspection.published_texel().kind(),
-            crate::ScientificPixelKind::Horizon,
-            "the zero-initialized published texel remains distinct from the fresh retrace"
+            crate::ScientificPixelKind::AnalyticEscapePreview
         );
     }
 
     #[test]
     fn publication_mismatch_discards_the_result_once_and_releases_the_slot() {
-        const SURFACE_OBSERVABLE: &str =
-            include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
-        let fixture = gravlume_reference::FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
-            .expect("repository surface fixture parses")
-            .into_surface_observation()
-            .expect("fixture is a surface observation");
+        let fixture = surface_fixture();
         let observation = fixture.observation();
-        let extent = RenderExtent::new(
-            observation.view().width().get(),
-            observation.view().height().get(),
-        )
-        .expect("fixture extent is nonzero");
+        let extent = fixture_extent(&fixture);
         let gpu = native_gpu();
         let trace = TracePipeline::new(&gpu.device, observation)
             .expect("fixture observation enters the GPU profile");
@@ -1242,7 +1221,7 @@ mod tests {
             .expect("inspection submission completes");
 
         let completion = inspector.wait_for_completion(Some(18));
-        assert_same_ticket(completion.ticket(), request);
+        assert_eq!(completion.ticket(), request);
         assert!(matches!(
             completion.disposition(),
             SampleInspectionDisposition::Cancelled
@@ -1263,14 +1242,48 @@ mod tests {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         })
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+    fn write_published_texel(
+        queue: &wgpu::Queue,
+        texture: &wgpu::Texture,
+        pixel: [u32; 2],
+        rgba16_float_bits: [u16; 4],
+    ) {
+        let mut bytes = [0_u8; wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize];
+        for (channel, bits) in rgba16_float_bits.into_iter().enumerate() {
+            let offset = channel * std::mem::size_of::<u16>();
+            bytes[offset..offset + std::mem::size_of::<u16>()].copy_from_slice(&bits.to_le_bytes());
+        }
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: pixel[0],
+                    y: pixel[1],
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
 
+    proptest! {
         #[test]
         fn branch_decoder_preserves_arbitrary_committed_values(
             radial_turnings in branch_counter(),
