@@ -141,7 +141,8 @@ published-texel separation、Busy、resize/suspend cancel-drain、generation mis
 failure、branch protocol 的属性测试和 completion 单次消费。Native smoke 覆盖 event-loop poll 与
 publication/presentation 路径。
 
-后续 test-only corpus 已建立 canonical positive-spin outer source edge 的一个固定 GPU/reference stencil，
+后续 test-only corpus 已建立 canonical positive-spin outer source edge 的一个固定
+fresh-binary32 GPU/reference stencil，
 但 production inspection interface 未扩成 batch，独立 high-precision witness 也尚未闭合。Inner source
 edge、surface/capture boundary、different
 winding/higher-order branch、critical curve 两侧、正负 spin、near-axis/near-extreme continuous fields，

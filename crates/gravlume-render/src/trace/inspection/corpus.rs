@@ -47,6 +47,12 @@ pub fn capture_sample_corpus(
         request_bytes <= limits.max_buffer_size && record_bytes <= limits.max_buffer_size,
         "sample corpus exceeds the device buffer-size limit"
     );
+    let invocations_per_workgroup = TRACE_WORKGROUP_AXIS * TRACE_WORKGROUP_AXIS;
+    let workgroups = sample_count.div_ceil(invocations_per_workgroup);
+    assert!(
+        workgroups <= limits.max_compute_workgroups_per_dimension,
+        "sample corpus exceeds the device dispatch limit"
+    );
 
     let requests = samples
         .iter()
@@ -80,12 +86,6 @@ pub fn capture_sample_corpus(
         &pipeline,
         &request_buffer,
         &record_buffer,
-    );
-    let invocations_per_workgroup = TRACE_WORKGROUP_AXIS * TRACE_WORKGROUP_AXIS;
-    let workgroups = sample_count.div_ceil(invocations_per_workgroup);
-    assert!(
-        workgroups <= limits.max_compute_workgroups_per_dimension,
-        "sample corpus exceeds the device dispatch limit"
     );
 
     let mut encoder = gpu

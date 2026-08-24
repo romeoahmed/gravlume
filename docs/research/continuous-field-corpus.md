@@ -8,7 +8,7 @@
 
 ## 1. 问题、假设与有限适用域
 
-可否证假设是：对同一 immutable `Observation` 的一个具名、有限 `ImageSample` 序列，test-only GPU path 能以与样本数成正比的 buffer 执行一次 ordered batch，复用 production full Kerr–Schild WGSL-binary32 retrace 的 terminal-specific record；每个样本的 discrete terminal/branch 先与独立 witness 精确一致，随后 continuous observable 分字段满足[既有 GPU gate](../validation.md#53-gpu-renderer-agreement)。该假设不需要 full-frame record plane、solver trait、render graph 或 production queue。
+可否证假设是：对同一 immutable `Observation` 的一个具名、有限 `ImageSample` 序列，test-only GPU path 能以与样本数成正比的 buffer 执行一次 ordered batch，复用 production full Kerr–Schild WGSL-binary32 retrace 的 terminal-specific record；每个样本的 discrete terminal/branch 先与独立 witness 精确一致，随后 fresh binary32 source、transfer、phase 与 diagnostics 分字段满足[适用的 GPU gate](../validation.md#53-gpu-renderer-agreement)。最终 `RGBA16F` texture gate 不属于该假设；它也不需要 full-frame record plane、solver trait、render graph 或 production queue。
 
 建议的首个 corpus 是 `canonical-kerr-source-edge-strip-v1`，但该名字在 artifact schema 被真实 consumer 采用前只是研究标签：
 
@@ -99,6 +99,8 @@ AoS 复用避免第二套 decoder/ABI，是这个小型 evidence corpus 的最�
 
 buffer 中的 `f32` bit layout 是 binary32，不代表 runtime arithmetic 是跨 backend bit-exact IEEE-754。WGSL 不指定 rounding mode，允许部分 subnormal flush-to-zero，并允许规范列出的 reassociation/fusion 与 finite-math assumptions（[WGSL differences from IEEE-754](https://www.w3.org/TR/WGSL/#floating-point-differences)、[rounding and accuracy](https://www.w3.org/TR/WGSL/#floating-point-accuracy)、[reassociation and fusion](https://www.w3.org/TR/WGSL/#floating-point-reassociation)）。因此：
 
+Fresh corpus record 与 production texture 是两条不同 producer 证据。WGSL 规定 `textureStore` 对写入值应用 inverse channel transfer function，而 `16float` 的写入转换是 `quantizeToF16(T)`（[texel formats](https://www.w3.org/TR/WGSL/#texel-formats)、[`textureStore`](https://www.w3.org/TR/WGSL/#textureStore-builtin)）；因此 binary32 record 不能证明最终 `RGBA16F` gate，后者必须由独立 texture-path evidence 验收。
+
 - exact bit equality 只用于 `u32` discriminant/flags/counts、reserved zero 与显式 bitcast protocol；
 - source、direction、$g$、time、radiance、residual 和 drift 都以 finite numeric value及各自 budget 比较，不比较 float bit pattern，也不跨 adapter 要求相同末位；
 - strict decoder 拒绝 non-finite、unknown tag/flag 和非法 terminal-field combination；首个 corpus 不把 subnormal-dependent case 纳入 accepted domain。
@@ -116,7 +118,7 @@ buffer 中的 `f32` bit layout 是 binary32，不代表 runtime arithmetic 是�
 首切片只有同时满足以下条件才关闭：
 
 - 每个 accepted case 的 discrete fields 与 independent artifact exact 一致；edge/competing-event margin 明确大于独立 truncation bound、CPU budget 与 GPU budget 的保守合成，classifier false acceptance 为零。
-- 每个 continuous observable 单独满足[验证合同](../validation.md#5-验收预算)；没有 RGB max 聚合、tone map、display encoding 或 `RGBA16F` publication 参与 fresh binary32 comparison。
+- 每个 fresh binary32 observable 单独满足[验证合同](../validation.md#5-验收预算)中适用的 source、transfer、phase 与 diagnostics gate；没有 RGB max 聚合、tone map、display encoding 或 `RGBA16F` publication 参与该 comparison，最终 texture gate 仍需独立证据。
 - artifact 保存 100-decimal-digit 重算/convergence、独立 chart/equation来源与 generator provenance；CPU/GPU agreement 不被描述为独立 witness。
 - GPU allocation 随 $N$ 线性增长、保留 request order，且没有 full-frame record/texture、production queue、solver trait、render graph 或新 public seam。
 
