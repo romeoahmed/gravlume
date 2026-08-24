@@ -16,9 +16,7 @@ use crate::{
         capture_sample_corpus, capture_surface_footprint_sample, capture_surface_transport_case,
         capture_trace, capture_trace_sample, inspect_sample,
     },
-    trace::{
-        SampleRetrace, SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms,
-    },
+    trace::{SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms},
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
@@ -126,7 +124,7 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
             Termination::EquatorialSurface => surface_count += 1,
             terminal => panic!("{image_sample:?}: unexpected reference terminal {terminal:?}"),
         }
-        assert_surface_edge_sample_matches(image_sample, &reference, gpu);
+        super::assert_retrace_matches_reference(image_sample, &reference, gpu);
     }
 
     assert!(escape_count > 0, "corpus does not bracket the source edge");
@@ -158,86 +156,6 @@ fn trace_converged_surface_edge(
         convergence.issues()
     );
     reference
-}
-
-fn assert_surface_edge_sample_matches(
-    image_sample: ImageSample,
-    reference: &ReferenceOutcome,
-    gpu: SampleRetrace,
-) {
-    let gpu_branch = match (reference.termination(), gpu.outcome()) {
-        (
-            Termination::Escape,
-            SampleTraceOutcome::Escape {
-                branch,
-                unit_direction,
-                ..
-            },
-        ) => {
-            let reference_direction = reference
-                .terminal()
-                .escape_direction()
-                .and_then(gravlume_reference::EscapeDirection::xyz)
-                .expect("reference escape direction resolves");
-            let angular_error =
-                super::angle_between(reference_direction, unit_direction.map(f64::from));
-            assert!(
-                angular_error <= 3.82e-4,
-                "{image_sample:?}: escape direction error {angular_error:e} rad"
-            );
-            branch
-        }
-        (
-            Termination::EquatorialSurface,
-            SampleTraceOutcome::EquatorialSurface {
-                branch,
-                radius_over_m,
-                azimuth_radians,
-                frequency_ratio,
-                evaluation,
-                ..
-            },
-        ) => {
-            let observable = reference
-                .terminal()
-                .surface_observable()
-                .expect("reference surface observable resolves");
-            let anchor = observable.source_anchor();
-            assert_abs_diff_eq!(
-                f64::from(radius_over_m),
-                anchor.radius_m(),
-                epsilon = 5.0e-3
-            );
-            let azimuth_error = (f64::from(azimuth_radians) - anchor.azimuth_rad())
-                .sin()
-                .atan2((f64::from(azimuth_radians) - anchor.azimuth_rad()).cos());
-            assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.82e-4);
-            let expected_ratio = observable.frequency_ratio().value();
-            assert_abs_diff_eq!(
-                f64::from(frequency_ratio),
-                expected_ratio,
-                epsilon = 2.0e-3 * expected_ratio
-            );
-            let SampleSurfaceEvaluation::Radiance(actual) = evaluation else {
-                panic!("{image_sample:?}: surface radiance must be finite");
-            };
-            let expected_intensity = observable.observed_bolometric_intensity();
-            for channel in actual {
-                assert_abs_diff_eq!(
-                    f64::from(channel),
-                    expected_intensity,
-                    epsilon = 2.0e-3 * expected_intensity
-                );
-            }
-            branch
-        }
-        (expected, actual) => {
-            panic!("{image_sample:?}: CPU {expected:?} disagrees with GPU {actual:?}")
-        }
-    };
-    super::assert_branch_matches(image_sample, gpu_branch, reference.branch_key());
-
-    super::assert_diagnostics_match(image_sample, gpu.diagnostics(), reference);
 }
 
 #[test]
@@ -546,7 +464,11 @@ fn high_absorption_keeps_a_representable_outgoing_surface_intensity() {
         pixel[..2].try_into().expect("red channel has two bytes"),
     ));
     let expected = emitted_intensity * (-79.0_f64).exp() * 1.1_f64.powi(4);
-    assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 2.0e-3 * expected);
+    assert_abs_diff_eq!(
+        f64::from(actual),
+        expected,
+        epsilon = super::GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET * expected
+    );
 }
 
 #[test]

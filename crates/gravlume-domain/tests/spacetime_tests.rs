@@ -156,7 +156,7 @@ fn metric_inverse_residual_is_term_normalized_under_strong_cancellation() {
         .metric_inverse_residual(event)
         .expect("metric is finite");
 
-    assert!(residual < 2.0e-12, "normalized residual was {residual:e}");
+    assert_abs_diff_eq!(residual, 0.0, epsilon = 2.0e-12);
 }
 
 #[test]
