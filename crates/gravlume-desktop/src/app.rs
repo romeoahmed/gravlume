@@ -27,7 +27,7 @@ use crate::{
     lifecycle::Lifecycle,
     preview::DEFAULT_PREVIEW,
     schedule::{DesktopSchedule, ResizeAction},
-    ui::{install_fonts, show_overlay},
+    ui::{install_cjk_fallback_font, show_overlay},
 };
 
 const WINDOW_TITLE: &str = "Gravlume";
@@ -103,7 +103,7 @@ struct DesktopApp {
 impl DesktopApp {
     fn new(event_proxy: EventLoopProxy<AppEvent>) -> Self {
         let egui_context = egui::Context::default();
-        install_fonts(&egui_context);
+        install_cjk_fallback_font(&egui_context);
         Self {
             lifecycle: Lifecycle::default(),
             window: None,
