@@ -18,6 +18,10 @@ Primary mathematical sources:
 * Verified root finding and polynomial-root conditioning:
   https://mpmath.org/doc/current/calculus/optimization.html
   https://mpmath.org/doc/current/calculus/polynomials.html
+* Precision contexts and finite-value classification:
+  https://mpmath.org/doc/1.3.0/general.html
+* Python NaN comparison semantics:
+  https://docs.python.org/3/reference/expressions.html#value-comparisons
 """
 
 from __future__ import annotations
@@ -31,6 +35,10 @@ import mpmath as mp
 LOW_PRECISION_DIGITS = 120
 HIGH_PRECISION_DIGITS = 180
 REQUIRED_STABLE_DIGITS = 80
+MINIMUM_WITNESS_DIGITS = 70
+RESIDUAL_GUARD_DIGITS = 15
+SURFACE_INNER_RADIUS_M = 6
+SURFACE_OUTER_RADIUS_M = 20
 
 
 class UnsupportedWitness(ValueError):
@@ -39,7 +47,7 @@ class UnsupportedWitness(ValueError):
 
 @dataclass(frozen=True)
 class SurfaceWitness:
-    """Independent observables and numerical margins for one surface terminal."""
+    """Certified independent observables and margins for one surface terminal."""
 
     precision_digits: int
     terminal: str
@@ -62,6 +70,9 @@ class SurfaceWitness:
     initial_null_residual: mp.mpf
     mino_constraint_residual: mp.mpf
     chart_primitive_residual: mp.mpf
+
+    def __post_init__(self) -> None:
+        _validate_surface_witness(self)
 
 
 @dataclass(frozen=True)
@@ -90,6 +101,74 @@ class _SeparatedState:
     radial_velocity: mp.mpf
     polar_velocity: mp.mpf
     constraint_residual: mp.mpf
+
+
+def _validate_precision_digits(precision_digits: object) -> None:
+    if not isinstance(precision_digits, int) or isinstance(precision_digits, bool):
+        raise UnsupportedWitness("witness precision must be an integer")
+    if precision_digits < MINIMUM_WITNESS_DIGITS:
+        raise UnsupportedWitness(
+            f"witness precision must be at least {MINIMUM_WITNESS_DIGITS} digits"
+        )
+
+
+def _validate_surface_witness(witness: SurfaceWitness) -> None:
+    _validate_precision_digits(witness.precision_digits)
+    continuous_fields = (
+        witness.source_radius_m,
+        witness.source_azimuth_rad,
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+        witness.impact_parameter,
+        witness.carter_parameter,
+        witness.radial_turning_derivative,
+        witness.polar_turning_derivative,
+        witness.initial_null_residual,
+        witness.mino_constraint_residual,
+        witness.chart_primitive_residual,
+    )
+    if not all(
+        isinstance(value, mp.mpf) and mp.isfinite(value)
+        for value in continuous_fields
+    ):
+        raise UnsupportedWitness("witness contains a non-real or non-finite value")
+    if not (
+        SURFACE_INNER_RADIUS_M
+        <= witness.source_radius_m
+        <= SURFACE_OUTER_RADIUS_M
+    ):
+        raise UnsupportedWitness("crossing lies outside the canonical surface")
+    positive_fields = (
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+    )
+    if any(value <= 0 for value in positive_fields):
+        raise UnsupportedWitness("witness contains a non-positive physical value")
+    if witness.radial_turning_derivative <= 0 or witness.polar_turning_derivative <= 0:
+        raise UnsupportedWitness("separated turning root is not simple")
+
+    residuals = (
+        witness.initial_null_residual,
+        witness.mino_constraint_residual,
+        witness.chart_primitive_residual,
+    )
+    with mp.workdps(witness.precision_digits):
+        residual_limit = mp.power(
+            10,
+            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+        )
+        if any(residual < 0 or residual >= residual_limit for residual in residuals):
+            certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
+            raise UnsupportedWitness(
+                "equation residual does not retain the required "
+                f"{certified_digits} decimal digits"
+            )
 
 
 def _vector_add(left: Sequence[mp.mpf], right: Sequence[mp.mpf]) -> tuple[mp.mpf, ...]:
@@ -415,7 +494,7 @@ def _compute_canonical_surface_witness(
     polar_mino_duration = polar_to_turn(lambda _: mp.mpf(1), mp.mpf(0))
     polar_mino_duration += polar_to_turn(lambda _: mp.mpf(1), initial_mu)
 
-    outer_radius = mp.mpf(20)
+    outer_radius = mp.mpf(SURFACE_OUTER_RADIUS_M)
     radial_constant = spin**2 - spin * impact
     radial_roots = _real_polynomial_roots(
         (
@@ -595,7 +674,7 @@ def _compute_canonical_surface_witness(
         * (1 - angular_velocity * impact)
     )
     frequency_ratio = initial_ray.observer_frequency / emitter_frequency
-    emitted_intensity = (source_radius / 6) ** -3
+    emitted_intensity = (source_radius / SURFACE_INNER_RADIUS_M) ** -3
     observed_intensity = emitted_intensity * frequency_ratio**4
 
     radial_conditioning = radial_turning_derivative
@@ -603,9 +682,6 @@ def _compute_canonical_surface_witness(
         2 * polar_coefficient * polar_turning
         - 4 * spin**2 * polar_turning**3
     )
-    if radial_conditioning <= 0 or polar_conditioning <= 0:
-        raise UnsupportedWitness("separated turning root is not simple")
-
     return SurfaceWitness(
         precision_digits=precision_digits,
         terminal="equatorial-surface",
@@ -646,8 +722,7 @@ def compute_canonical_surface_witness(
         raise UnsupportedWitness(
             "this first research slice certifies only canonical sample (640, 16)"
         )
-    if precision_digits < 70:
-        raise UnsupportedWitness("witness precision must be at least 70 decimal digits")
+    _validate_precision_digits(precision_digits)
     with mp.workdps(precision_digits):
         return _compute_canonical_surface_witness(
             pixel_x,
@@ -679,6 +754,8 @@ def build_precision_certificate() -> PrecisionCertificate:
         "energy",
         "impact_parameter",
         "carter_parameter",
+        "radial_turning_derivative",
+        "polar_turning_derivative",
     )
     discrete_fields = (
         "terminal",
@@ -692,11 +769,14 @@ def build_precision_certificate() -> PrecisionCertificate:
         if getattr(low, field) != getattr(high, field):
             raise AssertionError(f"precision doubling changed discrete field {field}")
     with mp.workdps(HIGH_PRECISION_DIGITS):
-        maximum_delta = max(
+        normalized_deltas = tuple(
             abs(getattr(low, field) - getattr(high, field))
             / max(mp.mpf(1), abs(getattr(high, field)))
             for field in fields
         )
+        if not all(mp.isfinite(delta) for delta in normalized_deltas):
+            raise AssertionError("precision doubling produced a non-finite delta")
+        maximum_delta = max(normalized_deltas)
         required = mp.power(10, -REQUIRED_STABLE_DIGITS)
         if maximum_delta >= required:
             raise AssertionError(
