@@ -1,3 +1,4 @@
+use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use gravlume_render::{
     DeviceEvent, RendererDiagnostics, SampleBranchKey, SampleInspection,
     SampleInspectionCompletion, SampleInspectionTicket, SampleRetrace, SampleSurfaceEvaluation,
@@ -6,23 +7,24 @@ use gravlume_render::{
 
 use crate::{inspection::InspectionStatus, preview::Preview};
 
-const FONT_NAME: &str = "Noto Sans SC";
-const FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.otf");
+const CJK_FALLBACK_NAME: &str = "Noto Sans SC";
+const CJK_FALLBACK_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansSC-Regular.otf");
 
-pub fn install_fonts(context: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-    fonts.font_data.insert(
-        FONT_NAME.to_owned(),
-        std::sync::Arc::new(egui::FontData::from_static(FONT_BYTES)),
-    );
-    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts
-            .families
-            .entry(family)
-            .or_default()
-            .push(FONT_NAME.to_owned());
-    }
-    context.set_fonts(fonts);
+pub fn install_cjk_fallback_font(context: &egui::Context) {
+    context.add_font(FontInsert::new(
+        CJK_FALLBACK_NAME,
+        egui::FontData::from_static(CJK_FALLBACK_BYTES),
+        vec![
+            InsertFontFamily {
+                family: egui::FontFamily::Proportional,
+                priority: FontPriority::Lowest,
+            },
+            InsertFontFamily {
+                family: egui::FontFamily::Monospace,
+                priority: FontPriority::Lowest,
+            },
+        ],
+    ));
 }
 
 pub fn show_overlay(
