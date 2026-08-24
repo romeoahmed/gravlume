@@ -1,6 +1,6 @@
 use std::num::NonZeroUsize;
 
-use approx::assert_abs_diff_eq;
+use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_reference::{
     AffineDirection, ComparisonError, EscapeDirection, FixtureDocument, FixtureError,
     GeodesicBatch, GeodesicFixture, GeodesicTrace, GeodesicTracer, ObservationFixture,
@@ -192,11 +192,15 @@ fn regular_schwarzschild_fixture_and_strict_refinement_meet_the_oracle() {
     assert_eq!(regular.termination(), Termination::Escape);
     assert!(regular.terminal().event().is_some_and(|event| {
         event.bracket_width_m() <= ReferencePolicy::regular_v1().event_affine_tolerance_m()
-            && event.normalized_residual() <= 5.0e-12
+            && abs_diff_eq!(event.normalized_residual(), 0.0, epsilon = 5.0e-12)
             && !event.is_ambiguous()
     }));
     assert!(fixture.expected().accepts(&regular));
-    assert!(regular.diagnostics().maximum_null_residual() < 5.0e-9);
+    assert_abs_diff_eq!(
+        regular.diagnostics().maximum_null_residual(),
+        0.0,
+        epsilon = 5.0e-9
+    );
     let strict = GeodesicTracer::from_fixture(&fixture, ReferencePolicy::strict_v1())
         .trace(fixture.trace_request());
     let comparison = ReferenceComparison::baseline_v1(&regular, &strict)

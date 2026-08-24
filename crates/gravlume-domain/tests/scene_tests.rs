@@ -1,6 +1,6 @@
 use std::{f64::consts::FRAC_PI_4, num::NonZeroU32};
 
-use approx::abs_diff_eq;
+use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_domain::{
     Angle, EquatorialCircularEmitter, EquatorialEmissionModel, EquatorialSurface,
     HomogeneousScalarSlab, KerrSchildChart, Observation, PerspectiveView, PhysicalScene,
@@ -79,7 +79,11 @@ fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
     ))
     .expect("a finite stationary observer remains representable near g_tt = 0");
 
-    assert!(scene.observer_frame().gram_residual() < 2.0e-12);
+    assert_abs_diff_eq!(
+        scene.observer_frame().gram_residual(),
+        0.0,
+        epsilon = 2.0e-12
+    );
 }
 
 fn image_sample() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
@@ -272,7 +276,11 @@ proptest! {
             .initial_ray(sample)
             .expect("sample remains valid for the observation view");
 
-        prop_assert!(ray.normalized_null_residual() < 2.0e-12);
+        prop_assert!(abs_diff_eq!(
+            ray.normalized_null_residual(),
+            0.0,
+            epsilon = 2.0e-12
+        ));
         prop_assert!(abs_diff_eq!(
             ray.observer_frequency(),
             1.0,

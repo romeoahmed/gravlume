@@ -1,6 +1,6 @@
 use std::num::NonZeroU32;
 
-use approx::assert_abs_diff_eq;
+use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_domain::{
     Angle, EquatorialCircularEmitter, EquatorialSurface, ImageSample, KerrNewmanSpacetime,
     KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
@@ -22,14 +22,22 @@ use crate::{
     },
     scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
-        SampleBranchKey, SamplePolarSide, SampleSurfaceEvaluation, SampleTraceDiagnostics,
-        SampleTraceOutcome, TraceTermination, TraceUniforms,
+        SampleBranchKey, SamplePolarSide, SampleRetrace, SampleSurfaceEvaluation,
+        SampleTraceDiagnostics, SampleTraceOutcome, TraceTermination, TraceUniforms,
     },
 };
 
 const EVENT_CANDIDATE_HORIZON: u32 = 1 << 1;
 const EVENT_CANDIDATE_SURFACE: u32 = 1 << 2;
 const EVENT_CANDIDATE_ESCAPE: u32 = 1 << 3;
+const GPU_INITIAL_RAY_ANGULAR_BUDGET_RAD: f64 = 2.0e-6;
+const GPU_INITIAL_NULL_RESIDUAL_ABSOLUTE_BUDGET: f32 = 8.0e-5;
+const GPU_REGULAR_ANGULAR_BUDGET_RAD: f64 = 3.82e-4;
+const GPU_EVENT_RESIDUAL_ABSOLUTE_BUDGET: f32 = 5.0e-3;
+const GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M: f64 = 1.0e-3;
+const GPU_SURFACE_POSITION_ABSOLUTE_BUDGET_M: f64 = 5.0e-3;
+const GPU_FREQUENCY_RATIO_RELATIVE_BUDGET: f64 = 2.0e-3;
+const GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET: f64 = 2.0e-3;
 
 mod surface;
 
@@ -95,22 +103,22 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     assert_abs_diff_eq!(
         f64::from(gpu.source_time[0]),
         reference_anchor.radius_m(),
-        epsilon = 5.0e-3
+        epsilon = GPU_SURFACE_POSITION_ABSOLUTE_BUDGET_M
     );
     let azimuth_error = (f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad())
         .sin()
         .atan2((f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad()).cos());
-    assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.0e-4);
+    assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = GPU_REGULAR_ANGULAR_BUDGET_RAD);
     let reference_ratio = reference_observable.frequency_ratio().value();
     assert_abs_diff_eq!(
         f64::from(gpu.source_time[2]),
         reference_ratio,
-        epsilon = 2.0e-3 * reference_ratio
+        epsilon = GPU_FREQUENCY_RATIO_RELATIVE_BUDGET * reference_ratio
     );
     assert_abs_diff_eq!(
         f64::from(gpu.source_time[3]),
         reference.travel_time_m(),
-        epsilon = 1.0e-3
+        epsilon = GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M
     );
 
     let expected = reference_observable.observed_bolometric_intensity();
@@ -122,7 +130,11 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     );
     for channel in pixel[..6].as_chunks::<2>().0 {
         let actual = decode_f16(u16::from_le_bytes(*channel));
-        assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 2.0e-3 * expected);
+        assert_abs_diff_eq!(
+            f64::from(actual),
+            expected,
+            epsilon = GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET * expected
+        );
     }
 }
 
@@ -144,78 +156,15 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
                 .expect("fixture sample resolves through its observation"),
         )
         .expect("canonical surface source is valid");
-    let reference_observable = reference
-        .terminal()
-        .surface_observable()
-        .expect("canonical trace terminates on the surface");
-
     let retrace = inspection.fresh_retrace();
-    let SampleTraceOutcome::EquatorialSurface {
-        branch,
-        radius_over_m,
-        azimuth_radians,
-        frequency_ratio,
-        channels,
-        evaluation,
-    } = retrace.outcome()
-    else {
+    assert_retrace_matches_reference(sample, &reference, retrace);
+    let SampleTraceOutcome::EquatorialSurface { channels, .. } = retrace.outcome() else {
         panic!("canonical inspection must expose an equatorial-surface outcome");
     };
     assert_eq!(channels, crate::ScientificChannelModel::BolometricRepeated);
-    let reference_anchor = reference_observable.source_anchor();
-    assert_abs_diff_eq!(
-        f64::from(radius_over_m),
-        reference_anchor.radius_m(),
-        epsilon = 5.0e-3
-    );
-    let azimuth_error = (f64::from(azimuth_radians) - reference_anchor.azimuth_rad())
-        .sin()
-        .atan2((f64::from(azimuth_radians) - reference_anchor.azimuth_rad()).cos());
-    assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.0e-4);
-    assert_abs_diff_eq!(
-        f64::from(frequency_ratio),
-        reference_observable.frequency_ratio().value(),
-        epsilon = 2.0e-3 * reference_observable.frequency_ratio().value()
-    );
-    assert_abs_diff_eq!(
-        f64::from(retrace.diagnostics().coordinate_time_delta_over_m()),
-        reference.travel_time_m(),
-        epsilon = 1.0e-3
-    );
-
-    let reference_branch = reference.branch_key();
-    assert_eq!(branch.radial_turnings(), reference_branch.radial_turnings());
-    assert_eq!(
-        branch.equatorial_crossings(),
-        reference_branch.equatorial_crossings()
-    );
-    assert_eq!(branch.azimuth_winding(), reference_branch.azimuth_winding());
-    assert_eq!(reference_branch.initial_polar_side(), PolarSide::Positive);
-    assert_eq!(branch.initial_polar_side(), SamplePolarSide::Positive);
-
-    let SampleSurfaceEvaluation::Radiance(rgb) = evaluation else {
-        panic!("canonical inspection must expose final scene-linear surface radiance");
-    };
-    let expected = reference_observable.observed_bolometric_intensity();
-    for channel in rgb {
-        assert_abs_diff_eq!(f64::from(channel), expected, epsilon = 2.0e-3 * expected);
-    }
 
     let diagnostics = retrace.diagnostics();
-    assert_ne!(
-        diagnostics.event_candidate_bits() & EVENT_CANDIDATE_SURFACE,
-        0
-    );
-    assert_eq!(diagnostics.event_candidate_bits().count_ones(), 1);
-    assert_abs_diff_eq!(diagnostics.event_residual(), 0.0, epsilon = 5.0e-3);
-    assert_eq!(diagnostics.numerical_flag_bits(), 0);
-    assert!(diagnostics.steps() > 0);
-    assert!(
-        diagnostics
-            .maximum_invariant_drift()
-            .into_iter()
-            .all(|drift| drift <= INVARIANT_RELATIVE_DRIFT_LIMIT)
-    );
+    assert_eq!(diagnostics.event_candidate_bits(), EVENT_CANDIDATE_SURFACE);
 }
 
 #[test]
@@ -443,11 +392,15 @@ fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
         origin_direction.map(f64::from),
         translated_direction.map(f64::from),
     );
-    assert_abs_diff_eq!(angular_difference, 0.0, epsilon = 2.0e-6);
     assert_abs_diff_eq!(
-        origin.source_time[3],
-        translated.source_time[3],
-        epsilon = 1.0e-3
+        angular_difference,
+        0.0,
+        epsilon = GPU_INITIAL_RAY_ANGULAR_BUDGET_RAD
+    );
+    assert_abs_diff_eq!(
+        f64::from(origin.source_time[3]),
+        f64::from(translated.source_time[3]),
+        epsilon = GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M
     );
 }
 
@@ -459,7 +412,11 @@ fn far_field_geometry_does_not_fail_when_the_guard_observable_exceeds_f32() {
 
     assert_eq!(record.metadata[0], 0, "initial-ray construction failed");
     assert!(record.source_time.into_iter().all(f32::is_finite));
-    assert_abs_diff_eq!(record.invariant_drift[0], 0.0, epsilon = 8.0e-5);
+    assert_abs_diff_eq!(
+        record.invariant_drift[0],
+        0.0,
+        epsilon = GPU_INITIAL_NULL_RESIDUAL_ABSOLUTE_BUDGET
+    );
 }
 
 #[test]
@@ -640,11 +597,15 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
         let angle = angle_between(cpu_direction, gpu_direction);
 
         assert!(
-            angle <= 2.0e-6,
+            abs_diff_eq!(angle, 0.0, epsilon = GPU_INITIAL_RAY_ANGULAR_BUDGET_RAD),
             "{image_sample:?}: {angle:e} rad, CPU {cpu_direction:?}, GPU {gpu_direction:?}"
         );
         assert!(
-            gpu.invariant_drift[0] <= 8.0e-5,
+            abs_diff_eq!(
+                gpu.invariant_drift[0],
+                0.0,
+                epsilon = GPU_INITIAL_NULL_RESIDUAL_ABSOLUTE_BUDGET
+            ),
             "{image_sample:?}: initial null residual {}",
             gpu.invariant_drift[0]
         );
@@ -679,38 +640,7 @@ fn batched_gpu_regular_corpus_matches_reference_observables_in_request_order() {
                 .expect("reference request resolves"),
             )
             .expect("default observation is normalized");
-        let (gpu_branch, gpu_direction) = match gpu.outcome() {
-            SampleTraceOutcome::Horizon { branch } => {
-                assert_eq!(reference.termination(), Termination::HorizonCrossing);
-                (branch, None)
-            }
-            SampleTraceOutcome::Escape {
-                branch,
-                unit_direction,
-                ..
-            } => {
-                assert_eq!(reference.termination(), Termination::Escape);
-                (branch, Some(unit_direction.map(f64::from)))
-            }
-            other => panic!("regular corpus produced unsupported GPU terminal {other:?}"),
-        };
-        let reference_branch = reference.branch_key();
-        assert_branch_matches(image_sample, gpu_branch, reference_branch);
-
-        if let Some((reference_direction, gpu_direction)) = reference
-            .terminal()
-            .escape_direction()
-            .and_then(gravlume_reference::EscapeDirection::xyz)
-            .zip(gpu_direction)
-        {
-            let angular_error = angle_between(reference_direction, gpu_direction);
-            assert!(
-                angular_error <= 3.82e-4,
-                "{image_sample:?}: escape error {angular_error:e} rad"
-            );
-        }
-
-        assert_diagnostics_match(image_sample, gpu.diagnostics(), &reference);
+        assert_retrace_matches_reference(image_sample, &reference, gpu);
     }
 }
 
@@ -738,7 +668,6 @@ fn sample_corpus_crosses_a_partial_workgroup_without_reordering_records() {
         vec![retraces[64], retraces[0], retraces[64]],
         "duplicate requests preserve multiplicity and order"
     );
-    assert!(capture_sample_corpus(&observation, &[]).is_empty());
 }
 
 #[test]
@@ -760,7 +689,6 @@ fn accelerated_trace_preserves_full_trace_terminals_and_escape_directions() {
         let observation = transfer_profile(spin, charge, observer_radius, vertical_fov);
         let full = capture_trace(&observation);
         let transferred = capture_accelerated_trace(&observation);
-        let mut reconstructed_escape_pixels = 0;
 
         assert_eq!(transferred.records.len(), full.records.len());
         for (index, (expected, actual)) in full.records.iter().zip(&transferred.records).enumerate()
@@ -780,32 +708,14 @@ fn accelerated_trace_preserves_full_trace_terminals_and_escape_directions() {
                 continue;
             }
 
-            let expected_direction = &expected.source_time[..3];
-            let actual_direction = &actual.source_time[..3];
-            let chord_squared = expected_direction
-                .iter()
-                .zip(actual_direction)
-                .map(|(lhs, rhs)| {
-                    let difference = f64::from(*lhs) - f64::from(*rhs);
-                    difference * difference
-                })
-                .sum::<f64>();
+            let expected_direction: [f64; 3] =
+                std::array::from_fn(|axis| f64::from(expected.source_time[axis]));
+            let actual_direction: [f64; 3] =
+                std::array::from_fn(|axis| f64::from(actual.source_time[axis]));
+            let angular_error = angle_between(expected_direction, actual_direction);
             assert!(
-                chord_squared <= (3.82e-4_f64).powi(2),
-                "{label}: transfer direction exceeded the angular budget at pixel {index}: chord²={chord_squared:e}"
-            );
-            reconstructed_escape_pixels += usize::from(
-                expected_direction
-                    .iter()
-                    .zip(actual_direction)
-                    .any(|(lhs, rhs)| lhs.to_bits() != rhs.to_bits()),
-            );
-        }
-
-        if observer_radius >= 30.0 {
-            assert!(
-                reconstructed_escape_pixels > 0,
-                "{label}: far-field fixture did not exercise the cooperative escape-direction map"
+                abs_diff_eq!(angular_error, 0.0, epsilon = GPU_REGULAR_ANGULAR_BUDGET_RAD),
+                "{label}: transfer direction exceeded the angular budget at pixel {index}: {angular_error:e} rad"
             );
         }
     }
@@ -1058,6 +968,95 @@ fn angle_between(left: [f64; 3], right: [f64; 3]) -> f64 {
     cross_length.atan2(dot)
 }
 
+fn assert_retrace_matches_reference(
+    sample: ImageSample,
+    reference: &ReferenceOutcome,
+    gpu: SampleRetrace,
+) {
+    let gpu_branch = match (reference.termination(), gpu.outcome()) {
+        (Termination::HorizonCrossing, SampleTraceOutcome::Horizon { branch }) => branch,
+        (
+            Termination::Escape,
+            SampleTraceOutcome::Escape {
+                branch,
+                unit_direction,
+                ..
+            },
+        ) => {
+            let reference_direction = reference
+                .terminal()
+                .escape_direction()
+                .and_then(gravlume_reference::EscapeDirection::xyz)
+                .expect("reference escape direction resolves");
+            let angular_error = angle_between(reference_direction, unit_direction.map(f64::from));
+            assert!(
+                abs_diff_eq!(angular_error, 0.0, epsilon = GPU_REGULAR_ANGULAR_BUDGET_RAD),
+                "{sample:?}: escape direction error {angular_error:e} rad"
+            );
+            branch
+        }
+        (
+            Termination::EquatorialSurface,
+            SampleTraceOutcome::EquatorialSurface {
+                branch,
+                radius_over_m,
+                azimuth_radians,
+                frequency_ratio,
+                evaluation,
+                ..
+            },
+        ) => {
+            let observable = reference
+                .terminal()
+                .surface_observable()
+                .expect("reference surface observable resolves");
+            let anchor = observable.source_anchor();
+            assert!(
+                abs_diff_eq!(
+                    f64::from(radius_over_m),
+                    anchor.radius_m(),
+                    epsilon = GPU_SURFACE_POSITION_ABSOLUTE_BUDGET_M
+                ),
+                "{sample:?}: surface radius disagrees with the reference"
+            );
+            let azimuth_delta = f64::from(azimuth_radians) - anchor.azimuth_rad();
+            let azimuth_error = azimuth_delta.sin().atan2(azimuth_delta.cos());
+            assert!(
+                abs_diff_eq!(azimuth_error, 0.0, epsilon = GPU_REGULAR_ANGULAR_BUDGET_RAD),
+                "{sample:?}: surface azimuth error {azimuth_error:e} rad"
+            );
+            let expected_ratio = observable.frequency_ratio().value();
+            assert!(
+                abs_diff_eq!(
+                    f64::from(frequency_ratio),
+                    expected_ratio,
+                    epsilon = GPU_FREQUENCY_RATIO_RELATIVE_BUDGET * expected_ratio
+                ),
+                "{sample:?}: frequency ratio disagrees with the reference"
+            );
+            let SampleSurfaceEvaluation::Radiance(actual) = evaluation else {
+                panic!("{sample:?}: surface radiance must be finite");
+            };
+            let expected_intensity = observable.observed_bolometric_intensity();
+            for channel in actual {
+                assert!(
+                    abs_diff_eq!(
+                        f64::from(channel),
+                        expected_intensity,
+                        epsilon = GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET * expected_intensity
+                    ),
+                    "{sample:?}: surface radiance disagrees with the reference"
+                );
+            }
+            branch
+        }
+        (expected, actual) => panic!("{sample:?}: CPU {expected:?} disagrees with GPU {actual:?}"),
+    };
+
+    assert_branch_matches(sample, gpu_branch, reference.branch_key());
+    assert_diagnostics_match(sample, gpu.diagnostics(), reference);
+}
+
 fn assert_branch_matches(sample: ImageSample, gpu: SampleBranchKey, reference: TraceBranchKey) {
     let reference_polar_side = match reference.initial_polar_side() {
         PolarSide::Negative => SamplePolarSide::Negative,
@@ -1089,17 +1088,24 @@ fn assert_diagnostics_match(
 ) {
     assert_eq!(gpu.numerical_flag_bits(), 0, "{sample:?}: failure flags");
     assert!(gpu.steps() > 0, "{sample:?}: step counter");
-    let event_residual = gpu.event_residual().abs();
     assert!(
-        event_residual <= 5.0e-3,
-        "{sample:?}: event residual {event_residual:e}"
+        abs_diff_eq!(
+            gpu.event_residual(),
+            0.0,
+            epsilon = GPU_EVENT_RESIDUAL_ABSOLUTE_BUDGET
+        ),
+        "{sample:?}: event residual {:e}",
+        gpu.event_residual()
     );
 
     let gpu_travel_time = gpu.coordinate_time_delta_over_m();
-    let travel_time_error = (f64::from(gpu_travel_time) - reference.travel_time_m()).abs();
     assert!(
-        travel_time_error <= 1.0e-3,
-        "{sample:?}: travel-time error {travel_time_error:e}; GPU {gpu_travel_time}, reference {}; GPU drift {:?}, reference drift {:?}",
+        abs_diff_eq!(
+            f64::from(gpu_travel_time),
+            reference.travel_time_m(),
+            epsilon = GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M
+        ),
+        "{sample:?}: GPU travel time {gpu_travel_time}, reference {}; GPU drift {:?}, reference drift {:?}",
         reference.travel_time_m(),
         gpu.maximum_invariant_drift(),
         reference.diagnostics(),

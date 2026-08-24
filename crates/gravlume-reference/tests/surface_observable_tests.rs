@@ -134,15 +134,14 @@ fn unsupported_footprint_subpixel() -> impl Strategy<Value = [f64; 2]> {
         })
 }
 
-proptest! {
-    #[test]
-    fn surface_footprint_rejects_every_unsupported_subpixel_neighborhood(
-        [subpixel_x, subpixel_y] in unsupported_footprint_subpixel(),
-    ) {
-        let fixture = FixtureDocument::parse_toml(TRANSPORT_FIXTURES[0])
-            .expect("repository transport fixture parses")
-            .into_surface_observation()
-            .expect("transport fixture is a surface observation");
+#[test]
+fn surface_footprint_rejects_every_unsupported_subpixel_neighborhood() {
+    let fixture = FixtureDocument::parse_toml(TRANSPORT_FIXTURES[0])
+        .expect("repository transport fixture parses")
+        .into_surface_observation()
+        .expect("transport fixture is a surface observation");
+
+    proptest!(|([subpixel_x, subpixel_y] in unsupported_footprint_subpixel(),)| {
         let [pixel_x, pixel_y] = fixture.sample().pixel();
         let sample = fixture
             .observation()
@@ -158,5 +157,5 @@ proptest! {
             ),
             Err(SurfaceFootprintError::NeighborhoodOutsidePixel)
         ));
-    }
+    });
 }
