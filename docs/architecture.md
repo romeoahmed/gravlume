@@ -74,18 +74,14 @@ Reference 保留两个有意不同的接口：
 - `present` 只报告已提交或可恢复的 surface skip；
 - `suspend/resume` 幂等，并保留上一张完整 scene；
 - `update_output` 只换 display contract，不使 geometry generation 失效。
-- `request_sample_inspection` 只接纳当前 extent 已完整发布时的 validated `ImageSample`，并在
-  renderer 内绑定 published generation/extent 与 logical sample，并返回一个
-  `SampleInspectionTicket`；固定槽位最多容纳一个 pending request。resize 与 suspend 可把 active request
-  标记丢弃，但已提交 GPU work、mapping callback 与 `unmap` 仍必须 drain 后才能复用槽位。每个 ticket
-  经下一次 `poll` 恰好产生一个 `SampleInspectionCompletion`；它是直接区分完成、取消和失败的 enum，
-  每个 variant 原子携带原 ticket，完成与失败分别携带 evidence 或 typed source。
-- inspection completion 同时携带从目标 generation 复制的实际 `Rgba16Float` `ScientificTexel`，以及
-  fresh full Kerr–Schild/WGSL-binary32 retrace 的 typed evidence。两者来自不同 producer 路径：后者可能
-  绕过画面 accelerator/refinement 且尚未 binary16 rounding，因此接口把 `published_texel` 与
-  `fresh_retrace` 分开，不声明 bit-equal。Retrace 用 terminal-specific sum type 原子携带 source、scene
-  evaluation、branch 与 channel model；`NumericalFailure`/`Uncertain` 不可能携带 branch，step exhaustion
-  只携带 branch prefix，surface transport 数值失败是 surface evaluation 而不是第二个 trace terminal。
+- `request_sample_inspection` 只接纳当前 extent 已完整发布时的 validated `ImageSample`。Renderer
+  捕获 published generation、extent 与 sample 并返回 ticket；caller 不提供 identity、solver 或 GPU
+  handle。固定槽位最多容纳一个 pending request。
+- resize/suspend 只能逻辑取消已提交 inspection；槽位必须等 submission、mapping 和 mapped view 全部
+  drain 后才能复用。每个 ticket 经 `poll` 恰好产生一次 completed、cancelled 或 typed failed completion。
+- completed inspection 把目标 generation 的实际 `Rgba16Float` texel 与 fresh full-KS/WGSL-binary32
+  retrace 分开返回。两者的 producer、精度与 refinement 路径不同，接口不声明数值或 bit identity；
+  terminal-specific 类型负责排除无意义的 source、branch 与 radiance 组合。
 - `capture_scene_linear` 是显式阻塞的 export 操作，只读取已原子发布的 surface generation；它返回
   `ScientificTexel` slice 与 bolometric/final-spectral/LUT 模型误差 metadata，不经过 display 或
   UI。每个 texel 把 `Rgba16Float` binary16 words 与 alpha-tag classification 绑定在同一接口；只有
@@ -96,44 +92,44 @@ Reference 保留两个有意不同的接口：
 
 ## Renderer modules
 
-| 模块 | 所有权 |
-| --- | --- |
-| `renderer.rs`        | instance/surface/device/queue、extent generation、submission、publication 与 presentation |
-| `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
-| `trace.rs`、`trace/input.rs`、`trace/shader.rs` | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
-| `trace/shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                   |
-| `trace/inspection.rs` | public typed evidence、ticket、completion 与 error interface                                  |
-| `trace/inspection/protocol.rs` | 固定 host/WGSL ABI、readback bytes 与 strict typed decoder                         |
-| `trace/inspection/slot.rs` | production 单槽 request、generation/cancel/map GPU lifecycle                         |
-| `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
-| `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind、解释 metadata 与 numerical budgets |
-| `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |
-| `capabilities.rs`    | adapter baseline 与纯 surface-output resolver                                             |
-| `timing.rs`          | 有界 timestamp query、readback 与 submission lifecycle                                    |
-| `error.rs`           | error scopes、device callbacks 与 typed renderer errors                                   |
-| `extent.rs`          | non-zero extent、paused state 与 generation transition                                    |
-| `benchmark.rs`       | `gpu-benchmarks` feature 下供 Cargo bench target 使用的最小 seam                          |
-| `gpu_capture.rs`、`gpu_trace_tests.rs`、`test_device.rs` | `cfg(test)` 下的原生 GPU fixture、readback 与合同测试 |
+| 模块                                                     | 所有权                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `renderer.rs`                                            | instance/surface/device/queue、extent generation、submission、publication 与 presentation    |
+| `renderer/frame.rs`                                      | frame bundle、trace scheduling、resource admission 与事务式 rebuild                          |
+| `trace.rs`、`trace/input.rs`、`trace/shader.rs`          | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
+| `trace/shadow_coverage.rs`                               | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                               |
+| `trace/inspection.rs`                                    | public typed evidence、ticket、completion 与 error interface                                 |
+| `trace/inspection/protocol.rs`                           | 固定 host/WGSL ABI、readback bytes 与 strict typed decoder                                   |
+| `trace/inspection/slot.rs`                               | production 单槽 request、generation/cancel/map GPU lifecycle                                 |
+| `spectral_lut.rs`                                        | versioned Planck boxcar LUT 的独立 host generator 与固定布局                                 |
+| `scientific_capture.rs`                                  | 已发布 surface texture 的显式 readback、texel kind、解释 metadata 与 numerical budgets       |
+| `display.rs`                                             | scene/UI 线性合成、tone mapping 与 surface encoding                                          |
+| `capabilities.rs`                                        | adapter baseline 与纯 surface-output resolver                                                |
+| `timing.rs`                                              | 有界 timestamp query、readback 与 submission lifecycle                                       |
+| `error.rs`                                               | error scopes、device callbacks 与 typed renderer errors                                      |
+| `extent.rs`                                              | non-zero extent、paused state 与 generation transition                                       |
+| `benchmark.rs`                                           | `gpu-benchmarks` feature 下供 Cargo bench target 使用的最小 seam                             |
+| `gpu_capture.rs`、`gpu_trace_tests.rs`、`test_device.rs` | `cfg(test)` 下的原生 GPU fixture、readback 与合同测试                                        |
 
 WGSL 位于 `src/shaders/`：
 
-| shader | 职责 |
-| --- | --- |
-| `trace_protocol.wgsl`        | host-shareable ABI、trace 状态、termination 与公共数值 helper |
-| `kerr_schild_dynamics.wgsl`  | Cartesian Kerr–Schild geometry、Hamilton RHS 与 RK4       |
-| `geodesic_events.wgsl`       | dense event localization、invariant、observable 与 branch evidence |
-| `geodesic_integration.wgsl`  | per-ray integration state machine 与完整 KS entry points  |
-| `geodesic_acceleration.wgsl` | interval capture、escape-direction map 与完整 KS fallback |
-| `lensing_preview.wgsl`       | termination/direction 到 scene-linear preview             |
-| `surface_transport.wgsl`     | inverse-cube/slab transport、范围安全缩放与三 band 向量运算          |
-| `bolometric_surface_preview.wgsl` | equatorial source 的直接 bolometric transport                  |
-| `blackbody_surface_preview.wgsl` | blackbody LUT、三 boxcar bands 与 spectral slab transport        |
-| `surface_trace_capture.wgsl` | test-only surface GeometricSample serialization           |
-| `surface_footprint_capture.wgsl` | test-only branch-checked source-chart finite difference         |
-| `sample_inspection.wgsl`、`*_sample_inspection.wgsl` | production 按需单样本 record 与 plan-specific scene-value adapter |
-| `shadow_coverage.wgsl`       | shadow boundary classification 与 selective refinement    |
-| `display.wgsl`               | scene/UI composite 与 HDR/SDR output mapping              |
-| `*_capture.wgsl`             | test-only scientific readback entry points                |
+| shader                                               | 职责                                                               |
+| ---------------------------------------------------- | ------------------------------------------------------------------ |
+| `trace_protocol.wgsl`                                | host-shareable ABI、trace 状态、termination 与公共数值 helper      |
+| `kerr_schild_dynamics.wgsl`                          | Cartesian Kerr–Schild geometry、Hamilton RHS 与 RK4                |
+| `geodesic_events.wgsl`                               | dense event localization、invariant、observable 与 branch evidence |
+| `geodesic_integration.wgsl`                          | per-ray integration state machine 与完整 KS entry points           |
+| `geodesic_acceleration.wgsl`                         | interval capture、escape-direction map 与完整 KS fallback          |
+| `lensing_preview.wgsl`                               | termination/direction 到 scene-linear preview                      |
+| `surface_transport.wgsl`                             | inverse-cube/slab transport、范围安全缩放与三 band 向量运算        |
+| `bolometric_surface_preview.wgsl`                    | equatorial source 的直接 bolometric transport                      |
+| `blackbody_surface_preview.wgsl`                     | blackbody LUT、三 boxcar bands 与 spectral slab transport          |
+| `surface_trace_capture.wgsl`                         | test-only surface GeometricSample serialization                    |
+| `surface_footprint_capture.wgsl`                     | test-only branch-checked source-chart finite difference            |
+| `sample_inspection.wgsl`、`*_sample_inspection.wgsl` | production 按需单样本 record 与 plan-specific scene-value adapter  |
+| `shadow_coverage.wgsl`                               | shadow boundary classification 与 selective refinement             |
+| `display.wgsl`                                       | scene/UI composite 与 HDR/SDR output mapping                       |
+| `*_capture.wgsl`                                     | test-only scientific readback entry points                         |
 
 文件名描述数学或渲染职责，不使用 roadmap 阶段名。上述四个 trace core fragment 不是可独立编译的
 shader module；`trace/shader.rs` 是生产、shadow 与 test capture source 顺序的唯一所有者。仓库不维护
@@ -163,13 +159,10 @@ private TracePlan
 - surface RGB 只有 alpha tag `2.0` 才是 metadata 所述 physical radiance；escape 的 `1.0` 是解析方向
   preview、horizon 是零、负 alpha 是 failure。Display 忽略 scene alpha，scientific capture 必须分类。
 
-可选 inspection 是 publication 的旁路消费者：同一 command encoder 先清零并写入一个 96-byte
-full-KS record，再把它复制到 readback `[0, 96)`，同时把 request 所绑定 published texture 的一个
-`Rgba16Float` texel 紧接着复制到 `[96, 104)`。copy 显式提供 portable 256-byte row pitch 以满足
-Metal texture-to-buffer blit，但 [`TexelCopyBufferLayout`](https://docs.rs/wgpu/30.0.1/wgpu/struct.TexelCopyBufferLayout.html)
-只按最后一行的实际 8-byte texel 计算所需 buffer 尾部，
-`map_buffer_on_submit` 只映射这个固定范围；它不修改
-candidate、published texture 或默认 frame resource plan。
+可选 inspection 是 publication 的只读旁路消费者：同一 encoder 产生 fresh record、复制 request
+绑定的一个 published texel，并用 `map_buffer_on_submit` 把 readback 绑定到该 submission。它不修改
+candidate、published texture 或默认 frame resource plan；精确 ABI、copy 顺序与 Metal 证据见
+[按需单样本检查决策](research/on-demand-sample-inspection.md#gpu-protocol-与资源证据)。
 
 上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present，因此隐藏批次不会以扫描或低分辨率过渡暴露给用户。
 
@@ -179,10 +172,9 @@ candidate、published texture 或默认 frame resource plan。
 
 - `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
 - window event 先交给 egui，再处理应用语义；
-- 未被 egui 消费的左键释放把 finite、非负、viewport 内的 physical cursor 映射为中心
-  `ImageSample`，并通过 production inspection seam 展示同代 texel 与结构化 retrace；新 publication
-  使旧 generation 结果失效；resize 处理结束后若仍保留当前完整 publication（no-op 或非致命事务式
-  拒绝），也会结束 viewport 等待；
+- 未被 egui 消费的左键释放把有效 physical cursor 映射为中心 `ImageSample`，并展示同代 published
+  texel 与 retrace；新 publication 使旧 generation 结果失效。若 resize 没有换代并保留当前完整
+  publication，viewport wait 也必须结束；
 - 只有 `RedrawRequested` 执行 presentation；
 - `about_to_wait` 做非阻塞 GPU/native-display poll；`DesktopSchedule` 统一拥有 live resize、repaint、
   GPU poll 与 native monitor deadline，并返回唯一下一次 wake。
@@ -220,7 +212,7 @@ GPU DTO 使用 `#[repr(C)]` 标量数组、显式 padding 与 `bytemuck::Pod`。
 | `GpuTraceInputError`                  | 修正不可表示或不满足 GPU profile 的 Observation |
 | `ResizeError`                         | 处理事务式 rebuild 拒绝或资源失败               |
 | `SampleInspectionRequestError`        | 展示无 current publication、越界或固定槽 Busy   |
-| `SampleInspectionCompletion`          | 展示完成/取消；失败保留 typed readback source    |
+| `SampleInspectionCompletion`          | 展示完成/取消；失败保留 typed readback source   |
 | `PresentSkip`                         | 等待可恢复 surface 状态                         |
 | `DeviceEvent`                         | 展示异步 validation/OOM/lost/internal 诊断      |
 | `RendererInitError` / `RendererError` | 终止当前无法恢复的 renderer 操作                |

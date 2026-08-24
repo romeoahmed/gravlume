@@ -1,6 +1,8 @@
 # 原生 HDR 输出决策
 
-> **状态：已采用；Windows/Wayland 待目标平台实机发布验证。** Scene/UI/final contract、macOS EDR、Windows inbox WinRT、Wayland `color-management-v1` 状态读取和 typed SDR fallback 已进入生产。Linux 不支持 X11。
+本文保存 native HDR/SDR 路径的采用理由与被拒绝方案，不定义当前 target、surface 或 platform lifecycle；这些合同以[平台文档](../platform.md)与实际源码为准。
+
+**状态：已采用；Windows/Wayland 待目标平台实机发布验证。** Scene/UI/final contract、macOS EDR、Windows inbox WinRT、Wayland `color-management-v1` 状态读取和 typed SDR fallback 已进入 production。Linux 不支持 X11。
 
 ## 根因与选择
 

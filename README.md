@@ -6,13 +6,18 @@ Gravlume 是一个以可验证物理量为核心的原生黑洞可视化工具�
 
 ## 当前能力
 
-| 已进入主线                                                                  | 尚未形成产品闭环                                               |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| validated Kerr–Newman domain、observer frame 与 viewport ray                | production 按需路径审计、branch-aware reconstruction 与 temporal reuse |
-| 独立 DP5(4) CPU reference、版本化 transport fixture 与误差报告              | 空间变化体介质、scattering、polarization 与 slow-light |
-| Cartesian Kerr–Schild GPU trace、薄表面频移、标量 slab 与固定光谱波段       | near-critical、near-axis 与 near-extreme 的更广证据   |
-| 完整 KS fallback、完整帧原子发布、shadow coverage 与 resize 生命周期        | 稳定磁盘/喷流模型、研究工作台与资产闭包               |
-| tagged scene-linear scientific readback 与 macOS/Windows/Wayland 显示状态接入 | Windows 与 Wayland 的具名设备实机发布矩阵             |
+| 层               | 已进入主线                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------ |
+| Domain           | validated Kerr–Newman spacetime、observer frame、viewport ray 与显式 surface transport     |
+| CPU reference    | 独立 DP5(4) `f64` integration、版本化 fixture、结构化 comparison 与 source-space footprint |
+| GPU renderer     | Cartesian Kerr–Schild `f32` trace、保守 accelerator、薄表面/标量 slab/固定光谱波段         |
+| Evidence         | tagged scene-linear capture，以及区分 published texel 与 fresh retrace 的按需单样本检查    |
+| Desktop/platform | 完整帧原子发布、shadow coverage、resize/suspend 生命周期与原生 HDR/SDR 状态接入            |
+
+仍未闭合的是连续字段的 near-critical/near-axis/near-extreme 证据、独立的 science-quality
+policy、可持久化 Instrument/Research artifact、branch-aware reconstruction/temporal reuse、
+空间变化体介质、scattering、polarization、slow-light、稳定磁盘/喷流模型，以及 Windows/Wayland
+的具名设备发布矩阵。
 
 默认画面使用简化的 equatorial circular bolometric surface 验证几何、频移、HDR 和失败可见性；
 blackbody/boxcar 与 homogeneous scalar slab 也有独立证据，但都不代表稳定吸积盘或完整 GRRT。

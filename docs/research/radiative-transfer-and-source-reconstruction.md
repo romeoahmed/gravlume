@@ -1,6 +1,8 @@
 # 辐射传输、source-space 重建与解析加速证据
 
-> **状态：研究记录，非 production 契约。** 本文在提交 `6503334c1fbd` 上核验标量辐射传输、Kerr/Kerr–Newman 赤道圆轨道 source、WGSL 数据布局、branch-aware footprint 与 Carlson 椭圆积分路线。它只记录一手证据、可否证假设和建议的验收方法；已采用的稳定语义仍以 [`physics.md`](../physics.md)、[`rendering.md`](../rendering.md) 与 [`validation.md`](../validation.md) 为准，任何新结论在进入实现前必须回写对应规范。
+本文在提交 `6503334c1fbd` 上核验标量辐射传输、Kerr/Kerr–Newman 赤道圆轨道 source、WGSL 数据布局、branch-aware footprint 与 Carlson 路线；它只保存一手证据、可否证假设和验收建议，不定义 production 行为。
+
+**状态：混合研究记录。** 已采用语义以[数学物理](../physics.md)、[渲染设计](../rendering.md)、[验证合同](../validation.md)与实现证据为准；任何新结论进入实现前必须先回写其唯一权威文档。
 
 ## 结论
 
@@ -19,7 +21,7 @@
 > 五射线 surface footprint、tagged scene-linear radiance capture 与有界单样本 record 已按保守边界落地；后续又采用固定单槽 production ticket/completion seam、lifecycle cancel-drain 与 desktop consumer。当前契约与证据见
 > [`physics.md`](../physics.md#7-frequency-与-radiative-transfer)、[`validation.md`](../validation.md#32-surface-observable)、
 > [`reference-implementation.md`](../reference-implementation.md)、[`gpu-renderer.md`](../gpu-renderer.md)和[production inspection 决策](on-demand-sample-inspection.md)；
-> 连续字段质量梯、production reconstruction 与 Carlson accelerator 仍未实现。
+> 连续字段质量基线、production reconstruction 与 Carlson accelerator 仍未实现。
 
 ## 1. 问题、方法与当前差距
 
@@ -45,13 +47,13 @@ uv run --isolated --project docs/research/scripts --locked \
   python -B docs/research/scripts/verify_scalar_transport.py
 ```
 
-| 能力 | 基线/后续采用证据 | 本轮确认的缺口 |
-| --- | --- | --- |
-| source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml) | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins |
-| GPU surface | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；production 单槽 inspection 已有完整 branch-key 与 published-texel separation，test capture 另有 finite-difference Jacobian | production 没有 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
-| execution seam | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支 | 不需要为尚不存在的第二 consumer 提前公开 solver trait |
-| appearance/reconstruction | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向 | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现 |
-| analytic acceleration | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino | 尚无 root-aware Carlson implementation 或 accepted-domain classifier |
+| 能力                                  | 基线/后续采用证据                                                                                                                                                                                                                                                                                                                                                                      | 本轮确认的缺口                                                                                                        |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)                                                                                                                                                                                                                             | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins                                                     |
+| GPU surface                           | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；production 单槽 inspection 已有完整 branch-key 与 published-texel separation，test capture 另有 finite-difference Jacobian | production 没有 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
+| execution seam                        | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支                                                                                                                                                                                                                                                                                              | 不需要为尚不存在的第二 consumer 提前公开 solver trait                                                                 |
+| appearance/reconstruction             | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向                                                                                                                                                                                                                                                                                                        | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现                                                 |
+| analytic acceleration                 | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino                                                                                                                                                                                                                                                                                               | 尚无 root-aware Carlson implementation 或 accepted-domain classifier                                                  |
 
 ## 2. Invariant radiative transfer
 
@@ -84,7 +86,7 @@ uv run --isolated --project docs/research/scripts --locked \
 
 \[
 I_{\rm out}=I_{\rm in}e^{-\Delta\tau}
-  +S_\nu\left(1-e^{-\Delta\tau}\right),
++S_\nu\left(1-e^{-\Delta\tau}\right),
 \qquad S_\nu=\frac{j_\nu}{\alpha_\nu}.
 \]
 
@@ -105,15 +107,15 @@ I_{\nu,{\rm obs}}(\nu_{\rm obs})
 
 ### 2.3 最小解析 fixture
 
-| fixture | 构造 | 必须比较的 observable / 可发现错误 |
-| --- | --- | --- |
-| `rt-vacuum-redshift` | vacuum 中给定解析 $g$ 与非平坦 compact spectrum | 每个 bin 比较 $g^3I_\nu(\nu/g)$；高精度积分比较 $g^4$，发现漏掉频率换元 |
-| `rt-blackbody-shift` | 两个 $g<1$、$g>1$，同一 emitter temperature | spectrum 等于温度 $gT$ 的 Planck curve，积分同时满足 $g^4$ |
-| `rt-pure-absorption` | Minkowski/static slab，$j=0$ | $I_{\rm out}=I_{\rm in}e^{-\tau}$；覆盖 $\tau=0,2^{-20},10^{-3},1,20$ |
-| `rt-constant-slab` | $g=1$，常量正 $j,\alpha$ | 与 analytic slab 逐值比较；thin limit 由 `expm1` 保真，thick limit 趋近 $S_\nu$ |
-| `rt-pure-emission` | $\alpha=0,j>0$ | 与 path length 成线性；发现 `j/alpha` 和错误 early return |
-| `rt-partition-order` | 同一 slab 分为 1、2、17 个 segment；另以 backward accumulator 计算 | terminal intensity 与 transmittance 同解，发现 segment 顺序、重复提交 rejected step 和 signed-$\tau$ 错误 |
-| `rt-invalid-coefficient` | 负值、NaN、overflowing source | typed rejection/diagnostic，不允许 clamp 成可见 radiance |
+| fixture                  | 构造                                                               | 必须比较的 observable / 可发现错误                                                                        |
+| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `rt-vacuum-redshift`     | vacuum 中给定解析 $g$ 与非平坦 compact spectrum                    | 每个 bin 比较 $g^3I_\nu(\nu/g)$；高精度积分比较 $g^4$，发现漏掉频率换元                                   |
+| `rt-blackbody-shift`     | 两个 $g<1$、$g>1$，同一 emitter temperature                        | spectrum 等于温度 $gT$ 的 Planck curve，积分同时满足 $g^4$                                                |
+| `rt-pure-absorption`     | Minkowski/static slab，$j=0$                                       | $I_{\rm out}=I_{\rm in}e^{-\tau}$；覆盖 $\tau=0,2^{-20},10^{-3},1,20$                                     |
+| `rt-constant-slab`       | $g=1$，常量正 $j,\alpha$                                           | 与 analytic slab 逐值比较；thin limit 由 `expm1` 保真，thick limit 趋近 $S_\nu$                           |
+| `rt-pure-emission`       | $\alpha=0,j>0$                                                     | 与 path length 成线性；发现 `j/alpha` 和错误 early return                                                 |
+| `rt-partition-order`     | 同一 slab 分为 1、2、17 个 segment；另以 backward accumulator 计算 | terminal intensity 与 transmittance 同解，发现 segment 顺序、重复提交 rejected step 和 signed-$\tau$ 错误 |
+| `rt-invalid-coefficient` | 负值、NaN、overflowing source                                      | typed rejection/diagnostic，不允许 clamp 成可见 radiance                                                  |
 
 CPU oracle 应用 binary64 或更高精度直接算 analytic expression；GPU 比较 scene-linear spectral/bolometric 值和 $\tau$，不比较 tone-mapped RGB。随机 property test 可生成非负 $I,j,\alpha,L$ 并检查 positivity、partition invariance 和 monotonic transmittance，但命名 fixture 仍需固定上述边界。
 
@@ -170,12 +172,12 @@ production threshold 应由 observable error 与 false-accept sweep 反推。任
 
 [WGSL alignment and size rules](https://www.w3.org/TR/WGSL/#alignment-and-size) 给出下列关键事实：
 
-| WGSL type | alignment | size | `storage` natural array stride |
-| --- | ---: | ---: | ---: |
-| `f32` / `u32` | 4 | 4 | 4 |
-| `vec2<f32>` | 8 | 8 | 8 |
-| `vec3<f32>` | 16 | 12 | 16 |
-| `vec4<f32>` | 16 | 16 | 16 |
+| WGSL type     | alignment | size | `storage` natural array stride |
+| ------------- | --------: | ---: | -----------------------------: |
+| `f32` / `u32` |         4 |    4 |                              4 |
+| `vec2<f32>`   |         8 |    8 |                              8 |
+| `vec3<f32>`   |        16 |   12 |                             16 |
+| `vec4<f32>`   |        16 |   16 |                             16 |
 
 structure member offset 必须向该 member alignment 取整，array stride 是 element size 向 element alignment 取整。`uniform` address space 对 array/structure 还有 16-byte 级的额外约束；`storage` 使用其 host-shareable natural layout，详见 [address-space layout constraints](https://www.w3.org/TR/WGSL/#address-space-layout-constraints)。dynamic uniform binding offset 的 `minUniformBufferOffsetAlignment` 是另一项 device limit，不能反过来推导 structure size。[WebGPU limits](https://www.w3.org/TR/webgpu/#limits)
 
@@ -300,14 +302,14 @@ branch tag 都不得作为插值对象。
 
 一个可测试的最小候选 key/observable 是：
 
-| 类别 | 候选字段 | 用途 |
-| --- | --- | --- |
-| exact key | termination、source kind/chart、producer/generation | 阻止 horizon/sky/surface、旧 generation 或不同 chart 混合 |
-| branch key | radial/polar momentum sign、turning count、equatorial crossing/lensing order、winding | 区分同一 source anchor 的多像路径；具体最小集由反例缩减 |
-| orientation | parity 或可稳定复算 parity 的 sign | 阻止跨 critical curve 重建 |
-| continuous | unwrapped source coordinate、travel/emission time、$g$ | source lookup、slow-light 与 transport |
-| differential | $J_q$ 或 conservative ellipse/singular values | anisotropic filtering 与 adaptive sampling |
-| confidence | event residual、Jacobian consistency、near-critical/near-seam flag | conservative accept/refine |
+| 类别         | 候选字段                                                                              | 用途                                                      |
+| ------------ | ------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| exact key    | termination、source kind/chart、producer/generation                                   | 阻止 horizon/sky/surface、旧 generation 或不同 chart 混合 |
+| branch key   | radial/polar momentum sign、turning count、equatorial crossing/lensing order、winding | 区分同一 source anchor 的多像路径；具体最小集由反例缩减   |
+| orientation  | parity 或可稳定复算 parity 的 sign                                                    | 阻止跨 critical curve 重建                                |
+| continuous   | unwrapped source coordinate、travel/emission time、$g$                                | source lookup、slow-light 与 transport                    |
+| differential | $J_q$ 或 conservative ellipse/singular values                                         | anisotropic filtering 与 adaptive sampling                |
+| confidence   | event residual、Jacobian consistency、near-critical/near-seam flag                    | conservative accept/refine                                |
 
 当前 [`surface_footprint_capture.wgsl`](../../crates/gravlume-render/src/shaders/surface_footprint_capture.wgsl)
 已经用中心与真实 `±0.25 pixel` 四邻 ray、完整 production branch key、periodic $\phi$ unwrap 和
@@ -372,14 +374,14 @@ resident/rebuild memory，不能把较少 dispatch、较高 accept ratio 或“�
 
 ### 5.5 规范保证、假设与可证伪验收
 
-| 结论 | 性质 | 不能外推的内容 |
-| --- | --- | --- |
-| host-shared alignment/stride、requested limits 与每 dispatch 一个 usage scope | WGSL/WebGPU/`wgpu 30` 保证 | 不说明 bandwidth/residency，也不保证全分辨率 `vec4` planes 合理 |
-| barrier 只同步同 workgroup；storage atomic 为 relaxed | WGSL 保证 | 不存在 portable same-dispatch grid barrier 或 counter→payload 发布协议 |
-| 有序 dispatch/pass + 普通 binding tracking 形成 GPU producer/consumer 路径 | WebGPU usage-scope + `wgpu 30`/`wgpu-hal` 保证 | 不代表 backend 会 fusion，也不需要 CPU wait/手写 transition |
-| `textureSampleGrad` 接受显式 gradient；anisotropy 精确行为 implementation-dependent | WGSL/WebGPU 保证 | 不保证与 explicit EWA、Metal 与 Vulkan 逐值一致 |
-| finite-difference ellipse 在 smooth regular branch 可近似 footprint | Igehy/DNGR 支持的局部模型 | exact key 相同仍不能证明有限 tile 内无未采样 discontinuity |
-| coarse nodes、SoA、packed key、8×8 halo、hardware anisotropy 更快 | 待测性能假设 | 只能由端到端 paired benchmark 接受或否决 |
+| 结论                                                                                | 性质                                           | 不能外推的内容                                                         |
+| ----------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------- |
+| host-shared alignment/stride、requested limits 与每 dispatch 一个 usage scope       | WGSL/WebGPU/`wgpu 30` 保证                     | 不说明 bandwidth/residency，也不保证全分辨率 `vec4` planes 合理        |
+| barrier 只同步同 workgroup；storage atomic 为 relaxed                               | WGSL 保证                                      | 不存在 portable same-dispatch grid barrier 或 counter→payload 发布协议 |
+| 有序 dispatch/pass + 普通 binding tracking 形成 GPU producer/consumer 路径          | WebGPU usage-scope + `wgpu 30`/`wgpu-hal` 保证 | 不代表 backend 会 fusion，也不需要 CPU wait/手写 transition            |
+| `textureSampleGrad` 接受显式 gradient；anisotropy 精确行为 implementation-dependent | WGSL/WebGPU 保证                               | 不保证与 explicit EWA、Metal 与 Vulkan 逐值一致                        |
+| finite-difference ellipse 在 smooth regular branch 可近似 footprint                 | Igehy/DNGR 支持的局部模型                      | exact key 相同仍不能证明有限 tile 内无未采样 discontinuity             |
+| coarse nodes、SoA、packed key、8×8 halo、hardware anisotropy 更快                   | 待测性能假设                                   | 只能由端到端 paired benchmark 接受或否决                               |
 
 建议把下一轮 admission 固定为以下可复现 gates：
 
@@ -497,34 +499,34 @@ Carlson duplication 本身较规整，不代表前后的 root sorting、case sel
 
 ### 6.3 准入 fixture 与 oracle
 
-| gate | oracle / observable | 失败含义 |
-| --- | --- | --- |
-| special function | 80+ bit $R_F/R_C/R_D/R_J$ 与 direct quadrature、DLMF identities；覆盖零参数、尺度变换、接近相等 arguments | evaluator 不得进入 accepted candidate |
-| roots/topology | 高精度 quartic roots、potential residual、root separation、turning sequence | uncertain 必须 fallback；false accept 为 blocker |
-| terminal | 与独立 binary64 full-KS 比 termination、source anchor、travel time、$g$、event residual | potential identity 通过也不能替代 terminal observable |
-| critical ladder | radial/polar double-root 两侧、positive/negative spin、near-axis、near-extreme | accepted error 或 branch flip 为 blocker；fallback 是预期成功 |
-| classifier mutation | 删除一个 sign/root-separation/domain check 后必须触发固定反例 | 没有 witness 的 guard 需重新论证，但不能凭性能直删 |
-| GPU A/B | 相同 accepted set 和最终 observable 下，统计 analytic + compaction + fallback 总时间 | “closed form”或低 fallback ratio 本身不是收益证据 |
+| gate                | oracle / observable                                                                                       | 失败含义                                                      |
+| ------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
+| special function    | 80+ bit $R_F/R_C/R_D/R_J$ 与 direct quadrature、DLMF identities；覆盖零参数、尺度变换、接近相等 arguments | evaluator 不得进入 accepted candidate                         |
+| roots/topology      | 高精度 quartic roots、potential residual、root separation、turning sequence                               | uncertain 必须 fallback；false accept 为 blocker              |
+| terminal            | 与独立 binary64 full-KS 比 termination、source anchor、travel time、$g$、event residual                   | potential identity 通过也不能替代 terminal observable         |
+| critical ladder     | radial/polar double-root 两侧、positive/negative spin、near-axis、near-extreme                            | accepted error 或 branch flip 为 blocker；fallback 是预期成功 |
+| classifier mutation | 删除一个 sign/root-separation/domain check 后必须触发固定反例                                             | 没有 witness 的 guard 需重新论证，但不能凭性能直删            |
+| GPU A/B             | 相同 accepted set 和最终 observable 下，统计 analytic + compaction + fallback 总时间                      | “closed form”或低 fallback ratio 本身不是收益证据             |
 
 当前 fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例被拒绝，见 [`mino-step-selection.md`](mino-step-selection.md)。Carlson 路线的恢复条件不是继续扫一个更小 fixed step，而是用 root-aware integral 封闭 terminal phase，并在上述 gates 下证明 conservative acceptance。
 
 ## 7. 研究决策与恢复条件
 
-| 候选 | 本轮决策 | 进入 production / 重开条件 |
-| --- | --- | --- |
-| scalar invariant emission/absorption | **已采用为 homogeneous path-integrated operator** | 空间变化 coefficient、ordered checkpoints 与通用 volume transport 仍需新的合同和独立 evidence |
-| 对普通 RGB 直接应用 spectral redshift | **拒绝** | 引入具名 spectrum/bandpass 与频率轴后才可讨论；bolometric 继续只用 $g^4$ |
-| 把 timelike circular existence 当 stable disk | **拒绝** | 独立 effective-potential/epicyclic gate 和 ISCO fixture 通过，且产品确实需要 stable disk 语义 |
-| 持久化完整 `GeometricSample` G-buffer | **暂不采用** | branch-aware reconstruction 证明有 consumer，并通过 layout、显存、误差与 Metal/Vulkan A/B |
-| test-only source-space finite-difference footprint | **已有 ordinary-region 证据，不等于 production** | 继续保留完整 branch key 与 CPU/GPU Jacobian gate；不得将五射线 equality 解释成全 tile 连续性证明 |
-| branch-aware production reconstruction | **当前 2-pixel map 候选已实验并拒绝** | 换用能显著减少总 geodesic 的 coarse/adaptive 或 stationary-amortized 方案，再通过 requested-limit admission、跨 dispatch producer/consumer、按 branch/order 收敛、scene-linear supersample oracle 与端到端 A/B |
-| 所有 Kerr/KN ray 全量改成 Carlson | **拒绝** | 不存在 unsupported/ill-conditioned accepted ray，或始终保留可观测上等价的 KS fallback；端到端收益成立 |
-| pure-Kerr exterior Carlson terminal accelerator | **保留为受限候选** | root-aware classifier、80+ bit oracle、KS observable gate、false-accept sweep 与总 GPU A/B 全部通过 |
+| 候选                                               | 本轮决策                                          | 进入 production / 重开条件                                                                                                                                                                                     |
+| -------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| scalar invariant emission/absorption               | **已采用为 homogeneous path-integrated operator** | 空间变化 coefficient、ordered checkpoints 与通用 volume transport 仍需新的合同和独立 evidence                                                                                                                  |
+| 对普通 RGB 直接应用 spectral redshift              | **拒绝**                                          | 引入具名 spectrum/bandpass 与频率轴后才可讨论；bolometric 继续只用 $g^4$                                                                                                                                       |
+| 把 timelike circular existence 当 stable disk      | **拒绝**                                          | 独立 effective-potential/epicyclic gate 和 ISCO fixture 通过，且产品确实需要 stable disk 语义                                                                                                                  |
+| 持久化完整 `GeometricSample` G-buffer              | **暂不采用**                                      | branch-aware reconstruction 证明有 consumer，并通过 layout、显存、误差与 Metal/Vulkan A/B                                                                                                                      |
+| test-only source-space finite-difference footprint | **已有 ordinary-region 证据，不等于 production**  | 继续保留完整 branch key 与 CPU/GPU Jacobian gate；不得将五射线 equality 解释成全 tile 连续性证明                                                                                                               |
+| branch-aware production reconstruction             | **当前 2-pixel map 候选已实验并拒绝**             | 换用能显著减少总 geodesic 的 coarse/adaptive 或 stationary-amortized 方案，再通过 requested-limit admission、跨 dispatch producer/consumer、按 branch/order 收敛、scene-linear supersample oracle 与端到端 A/B |
+| 所有 Kerr/KN ray 全量改成 Carlson                  | **拒绝**                                          | 不存在 unsupported/ill-conditioned accepted ray，或始终保留可观测上等价的 KS fallback；端到端收益成立                                                                                                          |
+| pure-Kerr exterior Carlson terminal accelerator    | **保留为受限候选**                                | root-aware classifier、80+ bit oracle、KS observable gate、false-accept sweep 与总 GPU A/B 全部通过                                                                                                            |
 
 后续采用记录显示，标量 invariant transport、spectral/blackbody fixture、最小 branch key、production
 单样本 inspection 与 test-only finite-difference footprint 已完成；第 5.6 节的 production reconstruction
 候选未通过端到端 A/B，所以当前生产路径仍保持 full KS。下一项工作应在已通过的单样本 seam 上补更广
-continuous-field quality ladder，并实现独立的 interactive/science-quality execution policy 支持域，而不放宽 observable budget；只有真实 filterable source 或 history
+continuous-field quality baseline，并实现独立的 interactive/science-quality execution policy 支持域，而不放宽 observable budget；只有真实 filterable source 或 history
 consumer 和基线同时存在后，才从新的 coarse/adaptive 或 stationary-amortized transfer-map 设计重开。
 pure-Kerr root-aware Carlson 可以先建立 CPU oracle，但不是该产品闭环的前置条件。每一步只引入当下
 consumer 需要的字段，并继续让 full-KS 定义 unsupported domain 的行为。

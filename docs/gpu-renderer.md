@@ -80,11 +80,19 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 
 ### Production 有界 sample inspection
 
-- `Renderer::request_sample_inspection` 接受一个 validated `ImageSample`，在 host 绑定当前 published generation/extent 与 logical sample，并原子返回 `SampleInspectionTicket`。固定执行方法由 `SampleRetrace::METHOD_ID` 标识为 full Kerr–Schild RK4/WGSL binary32；caller 不选择 solver、accelerator 或尚不存在的 quality policy。Private `SampleInspectionSlot` 复用 production uniform、surface policy、blackbody LUT、channel model 与 plan-specific scene-value function；ABI/decoder 与 GPU slot lifecycle 分区，但不形成 caller-visible seam。
-- 固定槽位只允许一个 pending request。Request 与 96-byte record 都是 padding-free `vec4` ABI；dispatch 前把 record 清零，使非法 zero termination 阻止 stale/partial decode。一个 `8×8` workgroup 仍只有 lane 0 执行，这是 Metal 完整字段反例约束出的 correctness specialization，不是 SIMD/subgroup 声明。
-- 同一 encoder 把 fresh full-KS record 复制到 readback `[0, 96)`，并从 request 捕获的 immutable published texture 复制实际 1×1 `Rgba16Float` texel 到 `[96, 104)`。copy 显式提供 256-byte row pitch；因为只有一行，wgpu 只要求最后一个 8-byte texel 落入 buffer。`map_buffer_on_submit` 把两次 copy 与 mapping 绑定到同一 submission；callback 只发送结果。Mapping 成功时，renderer 的非阻塞 `poll` 在 drop mapped view、`unmap` 后产生一次 completion；mapping 失败时返回 typed `Failed`，不对 unmapped buffer 再调用 `unmap`。Resize/suspend 的 logical cancellation 不伪装成 portable GPU preemption，槽位在 drain 前保持 Busy。
-- 完成值明确区分 `published_texel` 与 `fresh_retrace`：accelerated sky/shadow refinement 和 binary16 rounding 都可能使它们不同。`SampleTraceOutcome` 是 terminal 的唯一 public 真相，并原子携带合法的 source/scene/branch/channel 组合；`NumericalFailure` 与 `Uncertain` 没有 branch，step exhaustion 只有 branch prefix，surface scene evaluation failure 留在 surface variant 内。`SampleTraceDiagnostics::coordinate_time_delta_over_m` 明确表示当前 chart/profile 下的 coordinate-time duration；对 step exhaustion 只是已追迹前缀。三种 plan 的真实 GPU tests 继续覆盖 source、time、scene value、event/invariant diagnostics 与非法组合；production lifecycle tests 另覆盖资源上限、Busy/cancel-drain、generation mismatch cancellation、actual-texel separation 与单次 completion consumption。研究推导和被拒绝的 `@workgroup_size(1)` 候选见[按需 inspection 决策](research/on-demand-sample-inspection.md)与[历史 test-only 审计](research/bounded-sample-inspection.md)。
-- `gravlume-desktop` 是首个 production consumer：未被 egui 消费的画面点击请求中心 sample，并同时显示 generation、实际 binary16 texel、fresh terminal/source/branch/$g$/coordinate-time/radiance 与 event/invariant diagnostics。Resize 一到达就进入 `ViewportChanging`；调度只等待 size-dependent trace/presentation owner，不让 inspection 阻塞本应取消它的 resize，旧 ticket completion 也不能覆盖 viewport wait。窗口换代期间 request 被拒绝或 active work 被逻辑取消，不阻塞 event loop。
+- `Renderer::request_sample_inspection` 接受 validated `ImageSample`，捕获当前 published
+  generation/extent 并返回 ticket。执行方法固定为 `SampleRetrace::METHOD_ID` 所标识的 full
+  Kerr–Schild RK4/WGSL binary32；caller 不选择 solver、accelerator 或尚不存在的 quality policy。
+- Private 单槽复用 production uniform、surface policy、blackbody LUT 与 plan-specific scene-value
+  function。它只允许一个 pending request，并在 resize/suspend 后保持 Busy 直到已提交 work 和 mapping
+  drain；mapping failure 保留 typed source，只有成功 mapping 才在 mapped view drop 后 `unmap`。
+- Completion 分开携带实际 published `Rgba16Float` texel 与 fresh retrace。严格 decoder 只形成
+  terminal 合法的 source/scene/branch/channel 组合；`NumericalFailure`/`Uncertain` 没有 branch，step
+  exhaustion 只有 branch prefix。三种 plan 的 GPU tests 与 production lifecycle tests 覆盖 ABI、非法
+  branch protocol、单次消费、cancel-drain、generation mismatch 和两类像素证据分离。精确 protocol、
+  资源和 `8×8 + lane 0` Metal 反例见[采用决策](research/on-demand-sample-inspection.md)与[历史基线](research/bounded-sample-inspection.md)。
+- `gravlume-desktop` 是首个 consumer：画面点击显示同代 texel、typed retrace 与 diagnostics；新
+  publication、resize 或 suspend 使旧结果失效，旧 completion 不能覆盖 `ViewportChanging`。
 
 ### Publication 与 display
 
@@ -101,22 +109,22 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 
 `cargo test -p gravlume-render --all-targets --locked` 当前覆盖：
 
-| 层                | 合同                                                                                                         |
-| ----------------- | ------------------------------------------------------------------------------------------------------------ |
-| packing/ABI       | termination round-trip、uniform size/offset、production binding/access/format、Naga parse/validation、event candidate/ambiguity capture |
-| normalization     | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                 |
-| initial ray       | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                         |
-| solver            | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming |
-| surface           | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance    |
-| scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets  |
-| branch/footprint  | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
-| scientific export | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                |
-| sample inspection | 固定 32/96-byte ABI、104-byte readback、232-byte logical cap、published texel/retrace 分离、Busy/cancel-drain/generation mismatch、三种 plan 的真实 GPU record |
-| dispatch          | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap      |
-| acceleration      | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback |
-| coverage          | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                |
-| resources         | 4K pixel boundary、cold/completed/worst transactional plan 与分配前 typed rejection                          |
-| lifecycle/display | publication generation、resize、HDR/SDR resolver、linear composition 与 native smoke                         |
+| 层                        | 合同                                                                                                                                                         |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| packing/ABI               | termination round-trip、uniform size/offset、production binding/access/format、Naga parse/validation、event candidate/ambiguity capture                      |
+| normalization             | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                                                                 |
+| initial ray               | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                                                                         |
+| solver                    | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming                           |
+| surface                   | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance                                                    |
+| scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets                                                          |
+| branch/footprint          | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
+| scientific export         | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                                                                   |
+| sample inspection         | fixed ABI/resource cap、strict decode、published texel/retrace 分离、Busy/cancel-drain/generation mismatch 与三种 plan 的真实 GPU record                     |
+| dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap                                                      |
+| acceleration              | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback                                                 |
+| coverage                  | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                                                                |
+| resources                 | 4K pixel boundary、cold/completed/worst transactional plan 与分配前 typed rejection                                                                          |
+| lifecycle/display         | publication generation、resize、HDR/SDR resolver、linear composition 与 native smoke                                                                         |
 
 GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度、状态和积分器；agreement 只证明受测样本满足预算，不构成独立物理证明。
 

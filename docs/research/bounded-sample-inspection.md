@@ -1,115 +1,88 @@
-# 有界单样本 GPU 路径审计
+# 有界单样本 GPU 路径审计：历史基线
 
-本文记录 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad` 上按需复算一个像素样本的 test-only GPU 基线、被拒绝的候选和恢复条件；它不定义当前 production interface。后续 production 采用决策见[按需单样本检查研究](on-demand-sample-inspection.md)，当前事实见 [GPU Renderer 实现与证据](../gpu-renderer.md)，未完成交付以[路线图](../roadmap.md)为准，物理定义与误差预算分别以[数学物理合同](../physics.md)和[验证合同](../validation.md)为准。
+本文保存 revision `9f39b8d798d3889ecb3032b5dcc92ad64103c6ad` 的 test-only 单样本 GPU 实验、Metal 反例和被后续 production 继承的最小 protocol；它不定义当前 interface、资源预算或支持域。后续采用决策见[Production 按需单样本检查](on-demand-sample-inspection.md)，当前事实见 [GPU 证据](../gpu-renderer.md)。
 
-**状态：历史 test-only 基线；固定 record 与 `8×8 + lane 0` correctness specialization 已被 production 采用，224-byte 一次性资源模型已由携带实际 published texel 的 232-byte 单槽模型取代；`@workgroup_size(1)` 候选仍因 Metal 反例而拒绝。** 当时使用 wgpu `30.0.0`；当前技术栈以 workspace [`Cargo.toml`](../../Cargo.toml) 与 `Cargo.lock` 为准。
+**状态：历史基线。** 当时使用 wgpu `30.0.0`，固定 request/record 与 `8×8 + lane 0` correctness specialization 已被 production 采用；224-byte 一次性 test resource 已由当前 232-byte 单槽模型取代。历史版本不能机械替换成 workspace 当前版本。
 
-## 问题与结论
+## 问题与结果
 
-既有 [`capture_trace_sample`](../../crates/gravlume-render/src/gpu_capture.rs)只 dispatch 包含目标像素的 tile，但仍按完整 viewport 分配四个 `16 B/pixel` record plane 与 HDR texture，并复制整个 extent。它还把两个 branch count 压成 16 bit，不适合作为 exact branch 证据。
+旧 [`capture_trace_sample`](../../crates/gravlume-render/src/gpu_capture.rs)只缩小 dispatch，仍按完整
+viewport 分配四个 `16 B/pixel` planes 和 HDR texture，并复制整个 extent。它还把 branch counts 压缩
+到 16 bit，不适合 exact evidence。
 
-可否证假设是：不改变 `trace_pixel_at`、RK4 step policy 或 event state machine，只增加一个固定 request、一个固定 record 与 plan-specific f32 scene-value sink，即可复算单条 ray 并取得 termination、exact branch、source、Frequency Ratio、travel time、scene-linear output 与 event/invariant diagnostics。三种现有 `TracePlan` 的真实 GPU test 均通过，因此该技术切片被采用；它没有证明 UI、generation、取消、排队或长期 artifact interface。
+实验检验以下假设：不改变 `trace_pixel_at`、RK4 step policy 或 event state machine，只增加固定
+request、固定 record 与 plan-specific scene-value sink，能否复算一条 ray 并返回 typed terminal、
+exact branch、source、Frequency Ratio、coordinate-time duration、scene-linear output 和 diagnostics。
 
-初版曾把 production-style generation、request ID、Busy/cancel/supersede/poll 状态机放入 test helper。该 revision 没有对应 production consumer，这些字段只能回显 host context，不能增加 GPU 科学证据。按当时的“没有真实消费者就不引入 public seam”规则，基线实现删除这套兼容性垫片，只保留一个同步 interface：
+Analytic、bolometric surface 与 blackbody 三种 `TracePlan` 的真实 GPU tests 均通过，因此技术核心被
+接纳。当时没有 production consumer，所以 generation/request echo、Busy/cancel/supersede/poll 状态机被
+删除；这些字段只能回显 host context，不能增加 GPU 科学证据。后续 desktop consumer 出现后，
+publication ownership 从头定义，未冻结 test helper API。
 
-```text
-validated Observation + ImageSample
-  -> fresh plan-matched full-KS trace
-  -> fixed f32/u32 record
-  -> typed test evidence
-```
+## 历史 protocol
 
-module 内部隐藏 pipeline、bind group、request/result/readback buffer 与 decode；测试只学习一次调用和一个结果类型。后续 desktop interactive consumer 出现后，production seam 从 publication ownership 重新设计，而没有冻结这套 test helper；详见[后续决策](on-demand-sample-inspection.md)。
+WGSL request 使用两个 `vec4` lanes，record 使用六个 `vec4` lanes。Rust DTO 采用同序 scalar arrays、
+`repr(C, align(16))`、`bytemuck::Pod` 和 compile-time offsets；host-shared 数据不使用 `vec3`、`bool`、
+Rust enum 或 implicit padding。[WGSL layout](https://www.w3.org/TR/WGSL/#alignment-and-size)与
+[Rust type layout](https://doc.rust-lang.org/reference/type-layout.html#the-c-representation)是依据。
 
-## Host-shareable layout
+| bytes/offset | lane        | 语义                                                         |
+| -----------: | ----------- | ------------------------------------------------------------ |
+|  request `0` | `vec4<u32>` | pixel x/y、viewport width/height                             |
+| request `16` | `vec4<f32>` | subpixel x/y、reserved zero                                  |
+|   record `0` | `vec4<u32>` | termination、flags、steps、event candidate bits              |
+|  record `16` | `vec4<u32>` | radial/equatorial counts、signed winding、initial polar side |
+|  record `32` | `vec4<f32>` | source coordinates/direction、coordinate-time duration       |
+|  record `48` | `vec4<f32>` | plan-specific scene-linear RGBA/tag                          |
+|  record `64` | `vec4<f32>` | event residual、reserved zero                                |
+|  record `80` | `vec4<f32>` | null、energy、$L_z$、Carter max drift                        |
 
-WGSL 的 `u32/f32` size/alignment 是 `4/4`，`vec4<u32>` 与 `vec4<f32>` 是 `16/16`，structure size 向最大 member alignment 取整。[WGSL host-shareable layout](https://www.w3.org/TR/WGSL/#alignment-and-size)给出这些规则。Rust DTO 使用 `#[repr(C, align(16))]` 与同序 `[u32; 4]/[f32; 4]`；[`repr(C)` layout](https://doc.rust-lang.org/reference/type-layout.html#the-c-representation)固定 declaration-order offset，[`bytemuck::Pod` derive](https://docs.rs/bytemuck/1.25.2/bytemuck/derive.Pod.html)拒绝含 padding 的 struct。
+Record size/alignment/stride 是 `96/16/96` bytes；branch counts 保持 32 bit，negative winding 按 bitcast
+round-trip。Decoder 拒绝 unknown termination/polar side、invalid flags/tag、non-finite value、非零
+reserved lane 与非法 terminal/source/branch 组合。`NumericalFailure` 和 `Uncertain` 不暴露 provisional
+branch。
 
-双方都不使用 host-shared `vec3`、`bool`、Rust enum 或 implicit padding。
+## Workgroup 反例
 
-### Request：32 bytes
-
-| offset | lane | 语义 |
-| ---: | --- | --- |
-| 0 | `vec4<u32>` | pixel x/y、viewport width/height |
-| 16 | `vec4<f32>` | subpixel x/y、reserved = 0 |
-
-输入直接使用 domain 已验证的 `ImageSample`，并在 observation view seam 再确认 sample 属于该 extent。Request 通过 [`DeviceExt::create_buffer_init`](https://docs.rs/wgpu/30.0.0/wgpu/util/trait.DeviceExt.html#tymethod.create_buffer_init)创建，只声明实际使用的 `UNIFORM` usage；没有后续覆盖，因此不需要 `COPY_DST`。
-
-### Result：96 bytes
-
-| offset | lane | 语义 |
-| ---: | --- | --- |
-| 0 | `vec4<u32>` | termination、failure flags、steps、event candidate bits |
-| 16 | `vec4<u32>` | radial turnings、equatorial crossings、bitcast signed winding、initial polar side |
-| 32 | `vec4<f32>` | source coordinates / escape direction、travel time |
-| 48 | `vec4<f32>` | 完整 plan-specific scene-linear RGBA 与 output tag |
-| 64 | `vec4<f32>` | event residual、三个 reserved zero |
-| 80 | `vec4<f32>` | null、energy、$L_z$、Carter maximum drift |
-
-Result 的 alignment、size 与 storage-array stride 都是 `16, 96, 96`；两个 branch count 不压缩。`NumericalFailure` 没有 exact terminal branch，只接受全零 branch sentinel 并返回 `None`；`Uncertain` 可能携带 provisional counters，但仍返回 `None`。其他已提交终止保留完整 branch。Host 还检查 termination、polar side、failure/candidate bits、finite values、reserved lane 与 scene tag 的合法组合。
-
-短生命周期 record 与 host decoder 来自同一编译单元，不持久化也不跨版本读取，因此 version、producer/domain tag、request/generation echo 都是无消费者的 compatibility fields。Producer 与 arithmetic domain 仍由当前 pipeline 事实固定为 fresh full-KS retrace 与 WGSL binary32，但不伪装成 GPU 回传的额外证据。
-
-## Shader composition 与 dispatch
-
-[`sample_inspection.wgsl`](../../crates/gravlume-render/src/shaders/sample_inspection.wgsl)只保留一个 dispatch/guard/store 实现；analytic 与 surface 文件各自提供一个 plan-specific `inspected_scene_value` adapter。Surface production path 把原先直接 `textureStore` 的逻辑提取为返回 `vec4<f32>` 的纯函数，presentation 与 inspection 再分别写入 texture 或 record。这样 output seam 只有一个实现，避免 test sink 复制 transport/tag 条件。
-
-最初候选使用 `@workgroup_size(1)`。Apple M5 Metal 上它能返回正确 terminal、source 与 radiance，却把同一 canonical sample 的 travel time、maximum drift 和部分 branch fields 返回为零；恢复 production 的 `8×8` specialization 后字段完整。WGSL 只定义 invocation/workgroup 语义，不承诺 backend compiler 对等变换或具体 subgroup width，见 [compute workgroups](https://www.w3.org/TR/WGSL/#compute-shader-workgroups)。因此当前保留：
+最初候选使用 `@workgroup_size(1)`。Apple M5/Metal 上它能返回正确 terminal、source 与 radiance，却把
+同一 canonical sample 的 coordinate time、maximum drift 和部分 branch fields 返回为零；恢复
+production `8×8` specialization 后字段完整。WGSL 不承诺 backend compiler 的等价变换或固定 subgroup
+width，因此基线保留：
 
 ```wgsl
-@compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
+@compute @workgroup_size(8, 8, 1)
 fn inspect_sample(@builtin(local_invocation_index) local_index: u32) {
     if local_index != 0u {
         return;
     }
-    // one invocation executes trace_pixel_at and writes the record
+    // One invocation owns the whole sequential trace and record.
 }
 ```
 
-Host 固定 `dispatch_workgroups(1, 1, 1)`。硬件启动 64 个 invocation，但只有 lane 0 在建立 ray state 前通过 guard；一条 geodesic 的 RK/event loop 仍串行，没有 `var<workgroup>`、barrier、atomic append 或 subgroup 假设。这里的 `8×8` 是 correctness evidence，不是吞吐或 SIMD 声明。
+Host 只 dispatch 一个 workgroup。这里的 64 invocations 是已知 backend 反例约束的 correctness
+specialization，不是吞吐、SIMD 或 subgroup 声明；恢复 `workgroup_size(1)` 必须先在 Metal/Vulkan 的
+完整 record 上消除反例。
 
-## Pipeline、资源与 readback
+## 历史资源与 readback
 
-Inspection 是一次性 test pipeline，bind group 不与其他 pipeline 共享。`wgpu 30` 明确允许 `layout: None` 从所选 shader entry point 推导 default layout，再用 [`ComputePipeline::get_bind_group_layout`](https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePipeline.html#method.get_bind_group_layout)创建只供该 pipeline 使用的 bind group；[ComputePipelineDescriptor](https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePipelineDescriptor.html#structfield.layout)也明确把这列为 simple pipeline 的便利模式。若未来需要跨 pipeline 复用 bind group，应恢复显式 shared layout，而不是沿用 default layout。
+| resource | bytes | usage     |
+| -------- | ----: | --------- |
+| request  |    32 | `UNIFORM` |
+| record   |    96 | `STORAGE  | COPY_SRC` |
+| readback |    96 | `COPY_DST | MAP_READ` |
 
-固定逻辑资源为：
+合计 224 logical bytes，与 viewport extent 无关，不是 driver allocation 或 memory peak。Storage record 与
+staging readback 分离；同一 encoder 先 dispatch 再复制 96 bytes，测试随后等待 submission、map、读取、
+drop view 并 `unmap`。[wgpu `Buffer`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html#method.map_async)
+描述 mapped buffer 的 CPU/GPU exclusive ownership。
 
-| 资源 | bytes | usage |
-| --- | ---: | --- |
-| request | 32 | `UNIFORM` |
-| result | 96 | `STORAGE | COPY_SRC` |
-| readback | 96 | `COPY_DST | MAP_READ` |
+## 接纳边界
 
-合计 224 logical bytes，与 viewport extent 无关；这不是 driver allocation 或显存峰值声明。Portable WebGPU 要求 `MAP_READ` 只与 `COPY_DST` 组合，[`BufferUsages`](https://docs.rs/wgpu/30.0.0/wgpu/struct.BufferUsages.html)与 [WebGPU buffer usages](https://www.w3.org/TR/webgpu/#buffer-usage)给出该约束，因此 storage result 与 staging readback 保持分离。
+基线证明固定 record 能取得三种 plan 的 typed single-ray evidence，也保留了发现
+`workgroup_size(1)` 错误的真实 GPU witness。它没有证明 UI、generation、cancellation、actual published
+texel、持久 artifact、source edge、critical/higher-order branch、spin sweep 或独立 high-precision
+certificate。
 
-同一 encoder 先 dispatch、再执行 96-byte `copy_buffer_to_buffer`。提交后复用测试设备已有 readback helper：`map_async(Read)`、绑定 `SubmissionIndex` 的 `Device::poll(Wait)`、`get_mapped_range`、drop view、`unmap`。[`Buffer::map_async`](https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html#method.map_async)说明 callback 由 submit/poll 驱动且 mapped buffer 与 GPU 使用互斥；[`PollType::Wait`](https://docs.rs/wgpu/30.0.0/wgpu/type.PollType.html)在 native backend 等待指定 submission 并执行 callback。测试基础设施错误保持测试失败，不再复制一套 production-style 异步错误状态机。
-
-## 可导出的 observable 与限制
-
-| observable | test-only 可用性 | 限制 |
-| --- | --- | --- |
-| typed termination / failure flags | 直接 | unknown discriminant 拒绝 decode |
-| event candidates / ambiguity / residual | 直接 | ambiguity 由 candidate bit count 派生 |
-| exact branch key | terminal-dependent | `NumericalFailure` 与 `Uncertain` 为 unavailable |
-| surface source / Frequency Ratio | accepted Surface | source lanes 是 `(r/M, phi, g)` |
-| escape direction | accepted Escape | RGB 是 analytic orientation preview，不是 spectrum |
-| travel time | 直接 | 当前 profile 为以 $M$ 无量纲化的 coordinate-time duration |
-| scene-linear result | output seam | f32、tone map/display/UI 之前，按 channel model 解释 |
-| invariant diagnostics | 直接 | drift 不是独立误差 certificate |
-
-下列字段不能靠固定 record 得到：event bracket width、localized affine parameter、terminal state、逐步 min/max step、ordered checkpoints、Jacobi field、parity/footprint、独立 high-precision certificate。它们需要改变 solver state、邻 ray 或独立 oracle；当前不得用零值伪装。
-
-## 接纳证据与恢复条件
-
-当前自动化证据包括：
-
-1. Rust size/alignment/offset 固定为 32/96 byte，逻辑资源为 224 byte；
-2. 大于 `0xffff` 的 branch count 与负 winding 完整 round-trip；numerical-failure 非零 placeholder 被拒绝，`Uncertain` 不暴露 provisional branch；
-3. canonical bolometric Surface 对独立 reference 比较 exact branch、anchor、$g$、travel time、f32 radiance、event residual 与 drift；
-4. analytic Escape 保持 non-spectral kind；blackbody plan 返回 f32 scene-linear bands 并满足既有 spectral budget；
-5. 该基线 revision 的 production renderer resources 与 crate public interface 不含 inspection。
-
-该基线尚未闭合 source edge、Surface/Escape boundary、不同 winding/higher-order branch、critical curve 两侧、正负 spin 连续字段 corpus，以及 resize/suspend/device-error 的 production lifecycle。当前 production 已闭合单槽 ticket/completion 与 resize/suspend cancel-drain lifecycle，但上述连续字段 corpus 仍开放。CPU/GPU agreement 仍不是物理证明；所有正式接纳域继续受[验证合同](../validation.md)约束。
-
-Production generation、取消、排队与 error seam 已由 desktop consumer 触发并在[后续决策](on-demand-sample-inspection.md)中采用；artifact identity 与 quality 参数仍等待真实持久化消费者/第二执行政策。恢复 `@workgroup_size(1)` 必须在 Metal/Vulkan 的完整 record 上消除上述字段反例，不能只比较 terminal 或 radiance。若连续 observable 超预算，应收窄支持域、refine/fallback 或返回 typed uncertainty，不放宽阈值。
+Production 已在后续决策中闭合 ticket/completion、cancel-drain、generation 与 published-texel
+separation；连续字段 corpus 仍受[路线图](../roadmap.md#连续字段证据与质量政策)约束。若 accepted
+observable 超预算，应收窄支持域、refine/fallback 或返回 typed uncertainty，不能放宽 tolerance。
