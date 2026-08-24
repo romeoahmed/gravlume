@@ -16,7 +16,6 @@ use crate::{
         capture_sample_corpus, capture_surface_footprint_sample, capture_surface_transport_case,
         capture_trace, capture_trace_sample, inspect_sample,
     },
-    scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
         SampleRetrace, SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms,
     },
@@ -238,23 +237,7 @@ fn assert_surface_edge_sample_matches(
     };
     super::assert_branch_matches(image_sample, gpu_branch, reference.branch_key());
 
-    let diagnostics = gpu.diagnostics();
-    assert_eq!(diagnostics.numerical_flag_bits(), 0, "{image_sample:?}");
-    assert!(diagnostics.steps() > 0, "{image_sample:?}");
-    assert_abs_diff_eq!(
-        f64::from(diagnostics.coordinate_time_delta_over_m()),
-        reference.travel_time_m(),
-        epsilon = 1.0e-3
-    );
-    assert!(diagnostics.event_residual().abs() <= 5.0e-3);
-    assert!(
-        diagnostics
-            .maximum_invariant_drift()
-            .into_iter()
-            .all(|drift| (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift)),
-        "{image_sample:?}: invariant drift {:?}",
-        diagnostics.maximum_invariant_drift()
-    );
+    super::assert_diagnostics_match(image_sample, gpu.diagnostics(), reference);
 }
 
 #[test]

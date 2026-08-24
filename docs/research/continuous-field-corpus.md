@@ -37,7 +37,7 @@ fn capture_sample_corpus(
 ) -> Result<Vec<SampleRetrace>, SampleInspectionError>;
 ```
 
-它只承诺：所有 sample 属于同一 observation extent；空输入返回空输出；输出长度与顺序严格等于输入；一个 `TracePlan`/uniform snapshot 服务整个 batch；每项通过既有 strict decoder 返回与单样本 inspection 相同的 semantic `SampleRetrace`。它不接受 solver/profile 参数，不返回 wgpu handle、texture 或 full-frame index，也不形成 public artifact interface。当前内部 [`trace/inspection/corpus.rs`](../../crates/gravlume-render/src/trace/inspection/corpus.rs) 已接近这个 seam；outer test helper 可以 fail-fast，但 checked size/limit 与 decoder failure 必须在深模块边界内完成。
+它只承诺：所有 sample 属于同一 observation extent；空输入返回空输出；输出长度与顺序严格等于输入；一个 `TracePlan`/uniform snapshot 服务整个 batch；每项通过既有 strict decoder 返回与单样本 inspection 相同的 semantic `SampleRetrace`。它不接受 solver/profile 参数，不返回 wgpu handle、texture 或 full-frame index，也不形成 public artifact interface。当前内部 [`trace/inspection/corpus.rs`](../../crates/gravlume-render/src/trace/inspection/corpus.rs) 在该 seam 内完成 checked size/limit admission、linear allocation、dispatch、mapping 与 decode；production 单槽和 corpus 只以 binding element count/dispatch count 区分，共用 private kernel，不保留第二套 shader entry point 或 bindings。Outer test helper 可以 fail-fast，但 decoder failure 仍由深模块返回。
 
 这符合“小 interface、深实现”的边界：只有一个真实 test consumer 时不增加 trait；第二个真实 consumer 出现前也没有理由引入 render graph 或 compatibility layer。
 
@@ -81,7 +81,7 @@ WGSL host-shareable `f32/u32` 的 alignment/size 是 `4/4`，`vec4<f32|u32>` 是
 - record 是六个 `vec4` lane，共 96 bytes：metadata、branch、source/time、scene value、event diagnostics、四项 invariant drift；
 - Rust 侧继续使用同序 scalar arrays、`#[repr(C, align(16))]`、`Pod` 与 compile-time size/alignment/offset assertions；不跨 seam 放 WGSL `bool`、Rust enum、`vec3` 或 implicit padding。
 
-request/record 都是 runtime-sized storage array。WGSL 以 effective binding size 和 element stride决定 array length（[buffer binding determines runtime-sized array length](https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count)）；runtime-sized array 不能作为普通 uniform payload，且 uniform/storage 有不同额外布局约束（[address-space layout constraints](https://www.w3.org/TR/WGSL/#address-space-layout-constraints)）。因此不需要另加 count uniform：shader 对 request `arrayLength` bounds-check，output binding 由 host 用相同 $N$ 分配。
+request/record 都是 runtime-sized storage array。WGSL 以 effective binding size 和 element stride决定 array length（[buffer binding determines runtime-sized array length](https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count)）；runtime-sized array 不能作为普通 uniform payload，且 uniform/storage 有不同额外布局约束（[address-space layout constraints](https://www.w3.org/TR/WGSL/#address-space-layout-constraints)）。因此不需要另加 count uniform：shader 对 request `arrayLength` bounds-check，output binding 由 host 用相同 $N$ 分配。Production inspection 绑定 $N=1$，corpus 绑定请求的 $N$；两者由同一 entry point 和 auto-derived private layout 执行，不用 compatibility shader。
 
 AoS 复用避免第二套 decoder/ABI，是这个小型 evidence corpus 的最小正确 seam；它不宣称是所有 adapter 上最优 coalescing。`vec4` 在这里证明 padding-free layout 与 component grouping，不证明硬件 SIMD、subgroup width 或 store fusion。WGSL 只有显式 subgroup operations 才定义 subgroup-level SIMT communication（[WGSL subgroup operations](https://www.w3.org/TR/WGSL/#subgroup-operations)）。若具名 benchmark 证明 96-byte AoS store 是瓶颈，可在 test-only adapter 内比较六个 `array<vec4>` SoA planes，decoded interface 保持不变；没有测量前不冻结该复杂度。
 

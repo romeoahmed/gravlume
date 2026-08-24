@@ -2,17 +2,17 @@ use std::sync::mpsc::{self, TryRecvError};
 
 use gravlume_domain::ImageSample;
 
+use super::super::TracePipeline;
 use super::{
     SampleInspectionCompletion, SampleInspectionError, SampleInspectionRequestError,
     SampleInspectionTicket,
+    kernel::SampleInspectionKernel,
     protocol::{
         GpuInspectionRequest, INSPECTION_READBACK_BYTES, INSPECTION_RECORD_BYTES,
         INSPECTION_REQUEST_BYTES, PUBLISHED_TEXEL_OFFSET, decode_readback,
     },
 };
 use crate::{extent::RenderExtent, scientific_capture::ScientificChannelModel};
-
-use super::super::{TracePipeline, TracePlan, shader};
 
 pub(super) struct PendingInspection {
     pub(super) receiver: mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
@@ -34,8 +34,7 @@ impl PendingInspection {
 }
 
 pub struct SampleInspectionSlot {
-    pipeline: wgpu::ComputePipeline,
-    bind_group: wgpu::BindGroup,
+    kernel: SampleInspectionKernel,
     request: wgpu::Buffer,
     record: wgpu::Buffer,
     readback: wgpu::Buffer,
@@ -48,7 +47,7 @@ impl SampleInspectionSlot {
         let request = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sample inspection request"),
             size: INSPECTION_REQUEST_BYTES,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let record = device.create_buffer(&wgpu::BufferDescriptor {
@@ -65,11 +64,9 @@ impl SampleInspectionSlot {
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
-        let pipeline = create_inspection_pipeline(device, trace);
-        let bind_group = create_inspection_bind_group(device, trace, &pipeline, &request, &record);
+        let kernel = SampleInspectionKernel::new(device, trace, &request, &record);
         Self {
-            pipeline,
-            bind_group,
+            kernel,
             request,
             record,
             readback,
@@ -112,15 +109,7 @@ impl SampleInspectionSlot {
         // Zero is an invalid termination discriminant, so a missing or partial shader write can
         // never decode as the previous request's record.
         encoder.clear_buffer(&self.record, 0, Some(INSPECTION_RECORD_BYTES));
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("sample inspection pass"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.dispatch_workgroups(1, 1, 1);
-        }
+        self.kernel.encode_samples(&mut encoder, 1);
         encoder.copy_buffer_to_buffer(&self.record, 0, &self.readback, 0, INSPECTION_RECORD_BYTES);
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
@@ -270,72 +259,4 @@ impl SampleInspectionSlot {
     pub(crate) const fn is_pending(&self) -> bool {
         self.pending.is_some()
     }
-}
-
-fn create_inspection_pipeline(
-    device: &wgpu::Device,
-    trace: &TracePipeline,
-) -> wgpu::ComputePipeline {
-    let shader_source = match trace.plan {
-        TracePlan::AcceleratedSky => shader::analytic_sample_inspection(),
-        TracePlan::EquatorialBolometricSurface => shader::bolometric_sample_inspection(),
-        TracePlan::EquatorialBlackbodySurface => shader::blackbody_sample_inspection(),
-    };
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("bounded sample inspection shader"),
-        source: wgpu::ShaderSource::Wgsl(shader_source.into()),
-    });
-    let pipeline_constants = [(
-        "SURFACE_EVENTS_ENABLED",
-        trace.plan.surface_events_enabled(),
-    )];
-    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("inspect_sample"),
-        // The inspection module owns this pipeline and its sole bind group; no layout is shared
-        // with presentation or capture pipelines. Derive the private layout from this entry point.
-        // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.ComputePipelineDescriptor.html#structfield.layout
-        layout: None,
-        module: &shader,
-        entry_point: Some("inspect_sample"),
-        compilation_options: wgpu::PipelineCompilationOptions {
-            constants: &pipeline_constants,
-            ..Default::default()
-        },
-        cache: None,
-    })
-}
-
-fn create_inspection_bind_group(
-    device: &wgpu::Device,
-    trace: &TracePipeline,
-    pipeline: &wgpu::ComputePipeline,
-    request: &wgpu::Buffer,
-    record: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    let layout = pipeline.get_bind_group_layout(0);
-    let mut entries = vec![
-        wgpu::BindGroupEntry {
-            binding: 0,
-            resource: trace.uniforms.as_entire_binding(),
-        },
-        wgpu::BindGroupEntry {
-            binding: 3,
-            resource: record.as_entire_binding(),
-        },
-    ];
-    if let Some(blackbody_lut) = &trace.blackbody_lut {
-        entries.push(wgpu::BindGroupEntry {
-            binding: 8,
-            resource: blackbody_lut.as_entire_binding(),
-        });
-    }
-    entries.push(wgpu::BindGroupEntry {
-        binding: 9,
-        resource: request.as_entire_binding(),
-    });
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("sample inspection bind group"),
-        layout: &layout,
-        entries: &entries,
-    })
 }
