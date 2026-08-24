@@ -2,7 +2,7 @@
 
 本文记录如何把历史 test-only 单样本 GPU record 收敛为 production inspection，以及采用方案的证据、被拒绝候选和恢复条件；它不定义 public Rust interface、物理 observable 或当前支持域。当前事实分别以源码、[架构合同](../architecture.md)、[GPU 证据](../gpu-renderer.md)和[验证合同](../validation.md)为准。
 
-**状态：最小单槽 seam 已采用，连续字段质量域仍开放。** Desktop 点击是首个真实 consumer；bounded-region batch、第二质量方法、持久 artifact、reconstruction 与通用 inspector interface 均未获授权。
+**状态：最小单槽 seam 已采用，连续字段质量域仍开放。** Desktop 点击是首个真实 consumer；production bounded-region batch、第二质量方法、持久 artifact、reconstruction 与通用 inspector interface 均未获授权。Test-only ordered batch 只是执行证据，不扩大 production interface。
 
 ## 问题与结论
 
@@ -92,11 +92,11 @@ Host-shared DTO 不使用 `vec3`、`bool`、Rust enum 或 implicit padding；fun
 point 和 strict decoder。数组长度由 effective binding size 决定，见
 [WGSL runtime-sized array contract](https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count)。
 
-| logical resource    | bytes | usage     |
-| ------------------- | ----: | --------- |
-| persistent request  |    32 | `STORAGE \| COPY_DST` |
+| logical resource    | bytes | usage                             |
+| ------------------- | ----: | --------------------------------- |
+| persistent request  |    32 | `STORAGE \| COPY_DST`             |
 | persistent record   |    96 | `STORAGE \| COPY_SRC \| COPY_DST` |
-| persistent readback |   104 | `COPY_DST \| MAP_READ` |
+| persistent readback |   104 | `COPY_DST \| MAP_READ`            |
 
 总计 232 logical bytes，与 viewport extent 无关；这不包含 pipeline/bind-group/backend allocation 或
 `Queue::write_buffer` staging，也不是 driver memory peak。Readback `[0, 96)` 保存 record，`[96, 104)`
@@ -128,14 +128,14 @@ branch fields 置零；恢复 production `8×8` specialization 后完整。因�
 
 ## 被拒绝的扩张
 
-| 候选                                           | 决策         | 重开条件                                           |
-| ---------------------------------------------- | ------------ | -------------------------------------------------- |
-| public solver/profile parameter                | 延后         | 第二个真实 quality implementation 与明确支持域     |
-| bounded-region batch / active queue            | 延后         | 小区域 consumer、固定资源上限和 Metal/Vulkan A/B   |
-| public cancel / inspector trait / render graph | 拒绝当前引入 | 第二个 consumer 证明现有深模块 interface 不足      |
-| full-frame record plane                        | 拒绝         | production reconstruction consumer 与资源/误差证据 |
-| 把 fresh output 当 displayed texel             | 拒绝         | 两种 producer 真正统一；不能靠数值巧合恢复         |
-| `@workgroup_size(1)`                           | 拒绝         | Metal/Vulkan 完整 record 上消除已知反例            |
+| 候选                                           | 决策            | 重开条件                                           |
+| ---------------------------------------------- | --------------- | -------------------------------------------------- |
+| public solver/profile parameter                | 延后            | 第二个真实 quality implementation 与明确支持域     |
+| bounded-region batch / active queue            | production 延后 | 小区域 consumer、固定资源上限和 Metal/Vulkan A/B   |
+| public cancel / inspector trait / render graph | 拒绝当前引入    | 第二个 consumer 证明现有深模块 interface 不足      |
+| full-frame record plane                        | 拒绝            | production reconstruction consumer 与资源/误差证据 |
+| 把 fresh output 当 displayed texel             | 拒绝            | 两种 producer 真正统一；不能靠数值巧合恢复         |
+| `@workgroup_size(1)`                           | 拒绝            | Metal/Vulkan 完整 record 上消除已知反例            |
 
 ## 接纳证据与剩余工作
 
@@ -144,13 +144,10 @@ published-texel separation、Busy、resize/suspend cancel-drain、generation mis
 failure、branch protocol 的属性测试和 completion 单次消费。Native smoke 覆盖 event-loop poll 与
 publication/presentation 路径。
 
-后续 test-only corpus 已建立 canonical positive-spin outer source edge 的一个固定
-fresh-binary32 GPU/reference stencil，
-但 production inspection interface 未扩成 batch，独立 high-precision witness 也尚未闭合。Inner source
-edge、surface/capture boundary、different
-winding/higher-order branch、critical curve 两侧、正负 spin、near-axis/near-extreme continuous fields，
-第二 quality method 和持久 artifact 仍未闭合。它们的交付顺序与退出条件只在
-[路线图](../roadmap.md#连续字段证据与质量政策)维护。
+后续 test-only corpus 已建立 canonical positive-spin outer source edge 的 fixed fresh-binary32
+GPU/reference seed，但 production interface 仍是单样本，seed 也没有独立 high-precision witness。
+精确证据边界见[连续字段 corpus 记录](continuous-field-corpus.md)，后续 strata、质量方法与持久
+artifact 的顺序只在[路线图](../roadmap.md#连续字段证据与质量政策)维护。
 
 ## 一手来源
 
