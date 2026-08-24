@@ -71,7 +71,8 @@ pub fn capture_sample_corpus(
     let gpu = crate::test_device::native_gpu();
     let trace = TracePipeline::new(&gpu.device, observation)
         .expect("observation packs for ordered GPU sample corpus");
-    crate::trace::capture_sample_corpus(gpu, &trace, observation_extent(observation), samples)
+    trace
+        .capture_sample_corpus(gpu, observation_extent(observation), samples)
         .expect("GPU sample corpus records decode")
 }
 

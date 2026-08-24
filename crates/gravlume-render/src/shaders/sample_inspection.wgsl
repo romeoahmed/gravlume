@@ -1,5 +1,7 @@
-// Bounded on-demand single-sample evidence. Every host-shared lane is one aligned vec4; no vec3,
-// bool, implicit padding, trajectory, or extent-scaled record survives the invocation.
+// Bounded ordered sample evidence. Runtime-sized storage arrays let production bind one request
+// and tests bind a sparse corpus without a second protocol or shader entry point. Every active
+// invocation owns one request/record pair, so no synchronization is required.
+// Source: https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count
 
 struct SampleInspectionRequest {
     pixel_extent: vec4<u32>,
@@ -22,10 +24,10 @@ struct SampleInspectionRecord {
 }
 
 @group(0) @binding(3)
-var<storage, read_write> inspected_sample: SampleInspectionRecord;
+var<storage, read_write> inspection_records: array<SampleInspectionRecord>;
 
 @group(0) @binding(9)
-var<uniform> inspection_request: SampleInspectionRequest;
+var<storage, read> inspection_requests: array<SampleInspectionRequest>;
 
 fn encode_inspected_sample(sample: GeometricSample, value: vec4<f32>) -> SampleInspectionRecord {
     return SampleInspectionRecord(
@@ -43,19 +45,22 @@ fn encode_inspected_sample(sample: GeometricSample, value: vec4<f32>) -> SampleI
     );
 }
 
-fn store_inspected_sample(sample: GeometricSample, value: vec4<f32>) {
-    inspected_sample = encode_inspected_sample(sample, value);
-}
-
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
-fn inspect_sample(@builtin(local_invocation_index) local_index: u32) {
-    // A 1x1 workgroup produced incomplete records on the accepted Metal evidence platform. Keep
-    // the proven specialization, but return every inactive lane before constructing ray state.
-    if local_index != 0u {
+fn inspect_samples(
+    @builtin(workgroup_id) workgroup_id: vec3<u32>,
+    @builtin(local_invocation_index) local_index: u32,
+) {
+    let invocations_per_workgroup = TRACE_WORKGROUP_AXIS * TRACE_WORKGROUP_AXIS;
+    let index = workgroup_id.x * invocations_per_workgroup + local_index;
+    if index >= arrayLength(&inspection_requests) {
         return;
     }
-    let pixel = inspection_request.pixel_extent.xy;
-    let extent = inspection_request.pixel_extent.zw;
-    let sample = trace_pixel_at(pixel, extent, inspection_request.subpixel.xy);
-    store_inspected_sample(sample, inspected_scene_value(sample));
+
+    let request = inspection_requests[index];
+    let sample = trace_pixel_at(
+        request.pixel_extent.xy,
+        request.pixel_extent.zw,
+        request.subpixel.xy,
+    );
+    inspection_records[index] = encode_inspected_sample(sample, inspected_scene_value(sample));
 }

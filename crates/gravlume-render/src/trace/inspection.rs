@@ -7,13 +7,12 @@ use crate::{
 
 #[cfg(test)]
 mod corpus;
+mod kernel;
 mod protocol;
 mod slot;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub use corpus::capture_sample_corpus;
 #[cfg(test)]
 pub use protocol::TraceTermination;
 pub use slot::SampleInspectionSlot;

@@ -7,8 +7,8 @@ use gravlume_domain::{
     StationaryObserverInput, SurfaceTransport,
 };
 use gravlume_reference::{
-    ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy, Termination, TraceBranchKey,
-    TraceInputId,
+    ObservationTrace, ObservationTracer, PolarSide, ReferenceOutcome, ReferencePolicy, Termination,
+    TraceBranchKey, TraceInputId,
 };
 use num_traits::ToPrimitive as _;
 use proptest::prelude::*;
@@ -22,8 +22,8 @@ use crate::{
     },
     scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
-        SampleBranchKey, SamplePolarSide, SampleSurfaceEvaluation, SampleTraceOutcome,
-        TraceTermination, TraceUniforms,
+        SampleBranchKey, SamplePolarSide, SampleSurfaceEvaluation, SampleTraceDiagnostics,
+        SampleTraceOutcome, TraceTermination, TraceUniforms,
     },
 };
 
@@ -710,38 +710,7 @@ fn batched_gpu_regular_corpus_matches_reference_observables_in_request_order() {
             );
         }
 
-        let diagnostics = gpu.diagnostics();
-        assert_eq!(
-            diagnostics.numerical_flag_bits(),
-            0,
-            "{image_sample:?}: failure flags"
-        );
-        assert!(diagnostics.steps() > 0, "{image_sample:?}: step counter");
-        let event_residual = diagnostics.event_residual().abs();
-        assert!(
-            event_residual <= 5.0e-3,
-            "{image_sample:?}: event residual {event_residual:e}"
-        );
-
-        let gpu_travel_time = diagnostics.coordinate_time_delta_over_m();
-        let travel_time_error = (f64::from(gpu_travel_time) - reference.travel_time_m()).abs();
-        assert!(
-            travel_time_error <= 1.0e-3,
-            "{image_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
-            gpu_travel_time,
-            reference.travel_time_m(),
-            diagnostics.maximum_invariant_drift(),
-            reference.diagnostics(),
-        );
-        for (invariant, drift) in ["null", "energy", "angular momentum", "Carter"]
-            .into_iter()
-            .zip(diagnostics.maximum_invariant_drift())
-        {
-            assert!(
-                (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift),
-                "{image_sample:?}: {invariant} drift {drift:e}"
-            );
-        }
+        assert_diagnostics_match(image_sample, gpu.diagnostics(), &reference);
     }
 }
 
@@ -1111,4 +1080,37 @@ fn assert_branch_matches(sample: ImageSample, gpu: SampleBranchKey, reference: T
         reference.azimuth_winding(),
         "{sample:?}"
     );
+}
+
+fn assert_diagnostics_match(
+    sample: ImageSample,
+    gpu: SampleTraceDiagnostics,
+    reference: &ReferenceOutcome,
+) {
+    assert_eq!(gpu.numerical_flag_bits(), 0, "{sample:?}: failure flags");
+    assert!(gpu.steps() > 0, "{sample:?}: step counter");
+    let event_residual = gpu.event_residual().abs();
+    assert!(
+        event_residual <= 5.0e-3,
+        "{sample:?}: event residual {event_residual:e}"
+    );
+
+    let gpu_travel_time = gpu.coordinate_time_delta_over_m();
+    let travel_time_error = (f64::from(gpu_travel_time) - reference.travel_time_m()).abs();
+    assert!(
+        travel_time_error <= 1.0e-3,
+        "{sample:?}: travel-time error {travel_time_error:e}; GPU {gpu_travel_time}, reference {}; GPU drift {:?}, reference drift {:?}",
+        reference.travel_time_m(),
+        gpu.maximum_invariant_drift(),
+        reference.diagnostics(),
+    );
+    for (invariant, drift) in ["null", "energy", "angular momentum", "Carter"]
+        .into_iter()
+        .zip(gpu.maximum_invariant_drift())
+    {
+        assert!(
+            (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift),
+            "{sample:?}: {invariant} drift {drift:e}"
+        );
+    }
 }

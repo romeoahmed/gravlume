@@ -87,13 +87,16 @@ size/alignment 为 `4/4`，`vec4` 为 `16/16`；Rust side 使用同序 scalar ar
 `bytemuck::Pod` 与 compile-time offsets。[WGSL layout](https://www.w3.org/TR/WGSL/#alignment-and-size)与
 [Rust `repr(C)`](https://doc.rust-lang.org/stable/reference/type-layout.html#the-c-representation)是布局依据。
 Host-shared DTO 不使用 `vec3`、`bool`、Rust enum 或 implicit padding；function-local vector arithmetic
-不等于 storage SIMD 声明。
+不等于 storage SIMD 声明。Request/record 在 WGSL 中是 runtime-sized storage array；production 绑定
+恰好一个元素，test-only corpus 只改变 binding size 与 dispatch count，复用同一 private kernel、entry
+point 和 strict decoder。数组长度由 effective binding size 决定，见
+[WGSL runtime-sized array contract](https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count)。
 
 | logical resource    | bytes | usage     |
 | ------------------- | ----: | --------- |
-| persistent request  |    32 | `UNIFORM  | COPY_DST` |
-| persistent record   |    96 | `STORAGE  | COPY_SRC  | COPY_DST` |
-| persistent readback |   104 | `COPY_DST | MAP_READ` |
+| persistent request  |    32 | `STORAGE \| COPY_DST` |
+| persistent record   |    96 | `STORAGE \| COPY_SRC \| COPY_DST` |
+| persistent readback |   104 | `COPY_DST \| MAP_READ` |
 
 总计 232 logical bytes，与 viewport extent 无关；这不包含 pipeline/bind-group/backend allocation 或
 `Queue::write_buffer` staging，也不是 driver memory peak。Readback `[0, 96)` 保存 record，`[96, 104)`
@@ -103,7 +106,7 @@ Host-shared DTO 不使用 `vec3`、`bool`、Rust enum 或 implicit padding；fun
 
 ```text
 clear record to decoder-invalid zero termination
-→ dispatch one 8×8 workgroup; only local lane 0 traces
+→ dispatch one 8×8 workgroup; the one-element request binding activates only local lane 0
 → copy 96-byte record
 → copy one bound published texel with explicit 256-byte row pitch
 → map exactly the 104-byte readback on this submission
@@ -119,9 +122,9 @@ size 计算不把最后一行之后的 padding 算入所需 buffer 尾部，因�
 测试返回不完整 record；显式 256 后恢复。该实现证据见[锁定 wgpu source](https://github.com/gfx-rs/wgpu/blob/40f4a34ebaf56f9a046231f54125ad046239d3f3/wgpu-hal/src/metal/command.rs#L724-L735)。
 
 同一设备上，`@workgroup_size(1)` 曾返回正确 terminal/source/radiance，却把 travel time、drift 和部分
-branch fields 置零；恢复 production `8×8` specialization 后完整。因此单样本保持一个 `8×8`
-workgroup 且只有 lane 0 执行。它是 backend 反例约束的 correctness specialization，不是吞吐、subgroup
-width、parallelism 或 vectorization 声明。
+branch fields 置零；恢复 production `8×8` specialization 后完整。因此 shared kernel 保持 `8×8`，
+单样本由 one-element binding 只激活 lane 0。它是 backend 反例约束的 correctness specialization，不是
+吞吐、subgroup width、parallelism 或 vectorization 声明。
 
 ## 被拒绝的扩张
 

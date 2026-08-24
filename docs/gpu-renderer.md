@@ -85,8 +85,10 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
   generation/extent 并返回 ticket。执行方法固定为 `SampleRetrace::METHOD_ID` 所标识的 full
   Kerr–Schild RK4/WGSL binary32；caller 不选择 solver、accelerator 或尚不存在的 quality policy。
 - Private 单槽复用 production uniform、surface policy、blackbody LUT 与 plan-specific scene-value
-  function。它只允许一个 pending request，并在 resize/suspend 后保持 Busy 直到已提交 work 和 mapping
-  drain；mapping failure 保留 typed source，只有成功 mapping 才在 mapped view drop 后 `unmap`。
+  function，并以 one-element storage binding 复用 test-only corpus 的同一 private kernel；这不增加
+  production batch interface。它只允许一个 pending request，并在 resize/suspend 后保持 Busy 直到已提交
+  work 和 mapping drain；mapping failure 保留 typed source，只有成功 mapping 才在 mapped view drop 后
+  `unmap`。
 - Completion 分开携带实际 published `Rgba16Float` texel 与 fresh retrace。严格 decoder 只形成
   terminal 合法的 source/scene/branch/channel 组合；`NumericalFailure`/`Uncertain` 没有 branch，step
   exhaustion 只有 branch prefix。三种 plan 的 GPU tests 与 production lifecycle tests 覆盖 ABI、非法

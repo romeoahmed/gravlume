@@ -155,23 +155,9 @@ pub(super) fn decode_readback(
         let offset = channel * size_of::<u16>();
         u16::from_le_bytes([texel_bytes[offset], texel_bytes[offset + 1]])
     });
-    decode_record(
-        record,
-        channel_model,
-        ticket,
-        ScientificTexel::from_rgba16_float_bits(rgba16_float_bits),
-    )
-}
-
-fn decode_record(
-    raw: GpuInspectionRecord,
-    channel_model: Option<ScientificChannelModel>,
-    ticket: SampleInspectionTicket,
-    published_texel: ScientificTexel,
-) -> Result<SampleInspection, SampleInspectionError> {
-    let fresh_retrace = decode_retrace(raw, channel_model, binary32_subpixel(ticket.sample()))?;
+    let fresh_retrace = decode_retrace(record, channel_model, binary32_subpixel(ticket.sample()))?;
     Ok(SampleInspection {
-        published_texel,
+        published_texel: ScientificTexel::from_rgba16_float_bits(rgba16_float_bits),
         fresh_retrace,
     })
 }
