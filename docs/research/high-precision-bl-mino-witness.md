@@ -123,7 +123,15 @@ Chart shift 只依赖 endpoints；radial turning 的往返部分精确抵消。�
 
 ## 6. 120/180 位结果
 
-锁定环境为 Python 3.14.7、mpmath 1.3.0；依赖以 [`uv.lock`](scripts/uv.lock) 为准。120 与 180 decimal-digit 两次完整重算的最大逐字段 normalized delta 为：
+锁定环境为 Python 3.14.7、mpmath 1.3.0；依赖以 [`uv.lock`](scripts/uv.lock) 为准。`SurfaceWitness` 是认证边界，而不是原始数值容器：生成的每个实例都通过 `__post_init__` 要求所有连续字段为 real finite、terminal source 位于 $[6M,20M]$、具物理正号的 observable/conditioning 为正，并要求三个 normalized equation residual 满足
+
+\[
+\rho < 10^{-(p-15)},
+\]
+
+其中 $p$ 是本次 working decimal digits，15 位作为 guard。任何检查失败都直接返回 `UnsupportedWitness`，不会生成 certificate 或打印 `RESULT=PASS`。mpmath 官方合同说明 `workdps` 只临时改变并恢复 decimal precision；finite classification 必须显式使用 `isfinite`（[mpmath precision context 与 `isfinite`](https://mpmath.org/doc/1.3.0/general.html)）。Python 对 NaN 的有序比较恒为 false，因此不能让 `max` 或普通阈值比较隐式承担 NaN 检查（[Python value comparisons](https://docs.python.org/3/reference/expressions.html#value-comparisons)）。不可变 dataclass 的 generated `__init__` 会调用 `__post_init__`，`dataclasses.replace` 也保持这一不变量（[Python dataclasses](https://docs.python.org/3/library/dataclasses.html#post-init-processing)）。
+
+120 与 180 decimal-digit 两次完整重算再比较 source/transfer/phase、constants of motion 及 radial/polar turning derivatives；所有 normalized delta 先要求 finite。最大值为：
 
 ```text
 2.84198169412e-116
@@ -157,7 +165,7 @@ chart_primitive_residual=7.22975959531e-181
 
 ## 7. Test consumer 与证据链
 
-[`surface_observable_tests.rs`](../../crates/gravlume-reference/tests/surface_observable_tests.rs) 将上述 expectation 舍入到 binary64，并要求 `reference-regular-v1` 与 `reference-strict-v1` 同时满足 discrete identity、source、frequency、KS time 和 intensity gates。它不改变 v2 fixture 的 schema、profile、producer 字段或旧 expected。
+[`surface_observable_tests.rs`](../../crates/gravlume-reference/tests/surface_observable_tests.rs) 将上述 expectation 舍入到 binary64，并要求 `reference-regular-v1` 与 `reference-strict-v1` 同时满足 discrete identity、source、frequency、KS time 和 intensity gates。Source Anchor 只应用[验证合同定义的二维 wrapped surface-distance gate](../validation.md#52-reference-agreement)，不把 radial/azimuth component tolerance 分开后同时放行。它不改变 v2 fixture 的 schema、profile、producer 字段或旧 expected。
 
 Renderer 已有 canonical v2 的 fresh binary32 fields 与最终 `RGBA16F` gate。因此当前纵向链是：
 
@@ -188,8 +196,8 @@ independent BL/Mino 120/180 digits
 - radial/polar root 不是可分离的 simple real root；
 - source crossing 不在 `[6M,20M]`，或 horizon/escape/singularity/event competition 可能更早；
 - axis、near-axis、extreme/near-extreme、multiple/near-multiple roots；
-- precision doubling 不能保留至少 80 个 normalized decimal digits；
-- null/Mino/chart primitive residual、source/emitter frequency 或 intensity 非法。
+- precision doubling 不能保留至少 80 个 normalized decimal digits，或任一 normalized delta 非 finite；
+- 任一连续字段非 finite、source 越出 surface domain、物理正号非法，或 null/Mino/chart primitive residual 达不到 $p-15$ 位。
 
 扩展一个新 stratum 的恢复条件是：从规范十进制输入独立重建，保存 exact discrete identity，给出 root/event signed margin，至少做 120/180 位重算，并让 regular/strict 与 GPU（若声称 GPU 支持）分别通过自己的 observable gate。不能通过放宽一个 RGB max error、只看 invariant drift 或复制 Cartesian KS equations 进入 witness 来恢复。
 
@@ -222,4 +230,6 @@ cargo test -p gravlume-reference --test surface_observable_tests --locked \
 - [Carter, *Global Structure of the Kerr Family of Gravitational Fields* (1968)](https://doi.org/10.1103/PhysRev.174.1559)：Hamilton–Jacobi separability、第四常数与 quadratures；
 - [Mino, *Perturbative Approach to an Orbital Evolution around a Supermassive Black Hole* (2003)](https://doi.org/10.1103/PhysRevD.67.084027)：Mino parameter；
 - [Gralla & Lupsasca, *Null geodesics of the Kerr exterior* (2020)](https://doi.org/10.1103/PhysRevD.101.044032)：real root topology、turning segments 与 Kerr null-geodesic integrals；
-- [mpmath 1.3 quadrature](https://mpmath.org/doc/current/calculus/integration.html)、[root finding](https://mpmath.org/doc/current/calculus/optimization.html)与[polynomial roots](https://mpmath.org/doc/current/calculus/polynomials.html)：本 research tool 的 arbitrary-precision numerical contracts。
+- [mpmath 1.3 quadrature](https://mpmath.org/doc/current/calculus/integration.html)、[root finding](https://mpmath.org/doc/current/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/current/calculus/polynomials.html)与[precision/finite utilities](https://mpmath.org/doc/1.3.0/general.html)：本 research tool 的 arbitrary-precision numerical contracts；
+- [Python dataclasses](https://docs.python.org/3/library/dataclasses.html#post-init-processing)与[value comparisons](https://docs.python.org/3/reference/expressions.html#value-comparisons)：认证对象构造不变量与 NaN rejection；
+- Rust [`f64::midpoint`](https://doc.rust-lang.org/stable/std/primitive.f64.html#method.midpoint)与 [`f64::hypot`](https://doc.rust-lang.org/stable/std/primitive.f64.html#method.hypot)：binary64 Source Anchor test 的 midpoint 与 Euclidean distance primitive。

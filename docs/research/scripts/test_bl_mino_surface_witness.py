@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 import mpmath as mp
 
@@ -67,6 +68,13 @@ class CanonicalSurfaceWitnessTests(unittest.TestCase):
         self.assertLess(self.witness.initial_null_residual, mp.mpf("1e-65"))
         self.assertLess(self.witness.mino_constraint_residual, mp.mpf("1e-65"))
         self.assertLess(self.witness.chart_primitive_residual, mp.mpf("1e-65"))
+        for invalid_residual in (mp.mpf("1e-20"), mp.nan):
+            with self.subTest(invalid_residual=invalid_residual):
+                with self.assertRaises(UnsupportedWitness):
+                    replace(
+                        self.witness,
+                        mino_constraint_residual=invalid_residual,
+                    )
 
     def test_rejects_inputs_outside_the_named_observation(self) -> None:
         with self.assertRaises(UnsupportedWitness):
