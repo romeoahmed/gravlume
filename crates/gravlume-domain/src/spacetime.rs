@@ -778,8 +778,6 @@ mod tests {
     use super::{GeodesicState, KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent};
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
-
         #[test]
         fn both_charts_pull_back_to_the_same_physical_kerr_newman_metric(
             mass in 0.5_f64..4.0,

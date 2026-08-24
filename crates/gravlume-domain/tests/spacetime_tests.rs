@@ -67,8 +67,6 @@ fn validated_spacetime_rejects_an_unrepresentable_outer_horizon() {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(128))]
-
     #[test]
     fn oblate_radius_and_rank_one_metric_inverse_satisfy_the_algebra_contract(
         mass in 0.5_f64..4.0,

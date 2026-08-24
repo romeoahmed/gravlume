@@ -95,12 +95,13 @@ const fn floor_valid_coordinate(coordinate: f64) -> u32 {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
     use super::{InspectionStatus, completion_is_current, cursor_pixel};
 
     #[test]
-    fn publication_reconciliation_expires_waits_and_old_generations() {
+    fn publication_or_retained_scene_settles_a_viewport_wait() {
         let mut publication_wait = InspectionStatus::ViewportChanging;
         publication_wait.on_publication(9);
         assert!(matches!(publication_wait, InspectionStatus::Idle));
@@ -118,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn non_pending_states_reject_same_or_old_generation_completions() {
+    fn completion_is_rejected_without_a_pending_ticket() {
         assert!(!completion_is_current(
             &InspectionStatus::ViewportChanging,
             9,
@@ -128,42 +129,83 @@ mod tests {
         assert!(!completion_is_current(&InspectionStatus::Idle, 9, 9));
     }
 
-    #[test]
-    fn finite_window_positions_map_to_the_containing_physical_pixel() {
-        let extent = PhysicalSize::new(1280, 720);
+    fn position_inside_physical_pixel()
+    -> impl Strategy<Value = (PhysicalPosition<f64>, PhysicalSize<u32>, [u32; 2])> {
+        (1_u32..=u32::MAX, 1_u32..=u32::MAX)
+            .prop_flat_map(|(width, height)| {
+                (
+                    Just(width),
+                    Just(height),
+                    0..width,
+                    0..height,
+                    0_u16..=1023,
+                    0_u16..=1023,
+                )
+            })
+            .prop_map(
+                |(width, height, pixel_x, pixel_y, subpixel_x, subpixel_y)| {
+                    let position = PhysicalPosition::new(
+                        f64::from(pixel_x) + f64::from(subpixel_x) / 1024.0,
+                        f64::from(pixel_y) + f64::from(subpixel_y) / 1024.0,
+                    );
+                    (
+                        position,
+                        PhysicalSize::new(width, height),
+                        [pixel_x, pixel_y],
+                    )
+                },
+            )
+    }
 
-        assert_eq!(
-            cursor_pixel(PhysicalPosition::new(0.0, 0.0), extent),
-            Some([0, 0])
-        );
-        assert_eq!(
-            cursor_pixel(PhysicalPosition::new(41.875, 12.25), extent),
-            Some([41, 12])
-        );
-        assert_eq!(
-            cursor_pixel(PhysicalPosition::new(1279.999, 719.999), extent),
-            Some([1279, 719])
-        );
+    fn position_outside_physical_extent()
+    -> impl Strategy<Value = (PhysicalPosition<f64>, PhysicalSize<u32>)> {
+        (1_u32..=u32::MAX, 1_u32..=u32::MAX, 0_u8..4, 0_u16..=1023).prop_map(
+            |(width, height, edge, offset)| {
+                let inside = 0.5;
+                let negative_offset = (f64::from(offset) + 1.0) / 1024.0;
+                let positive_offset = f64::from(offset) / 1024.0;
+                let position = match edge {
+                    0 => PhysicalPosition::new(-negative_offset, inside),
+                    1 => PhysicalPosition::new(f64::from(width) + positive_offset, inside),
+                    2 => PhysicalPosition::new(inside, -negative_offset),
+                    _ => PhysicalPosition::new(inside, f64::from(height) + positive_offset),
+                };
+                (position, PhysicalSize::new(width, height))
+            },
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn finite_positions_map_to_their_containing_physical_pixel(
+            (position, extent, expected) in position_inside_physical_pixel(),
+        ) {
+            prop_assert_eq!(cursor_pixel(position, extent), Some(expected));
+        }
+
+        #[test]
+        fn finite_positions_outside_each_physical_edge_are_rejected(
+            (position, extent) in position_outside_physical_extent(),
+        ) {
+            prop_assert_eq!(cursor_pixel(position, extent), None);
+        }
     }
 
     #[test]
-    fn invalid_or_outside_window_positions_do_not_name_a_pixel() {
+    fn non_finite_positions_and_empty_extents_are_rejected() {
         let extent = PhysicalSize::new(1280, 720);
-        let invalid = [
-            PhysicalPosition::new(-0.001, 0.0),
-            PhysicalPosition::new(0.0, -0.001),
+        for position in [
             PhysicalPosition::new(f64::NAN, 0.0),
+            PhysicalPosition::new(f64::NEG_INFINITY, 0.0),
             PhysicalPosition::new(0.0, f64::INFINITY),
-            PhysicalPosition::new(1280.0, 0.0),
-            PhysicalPosition::new(0.0, 720.0),
-        ];
-
-        for position in invalid {
+        ] {
             assert_eq!(cursor_pixel(position, extent), None);
         }
-        assert_eq!(
-            cursor_pixel(PhysicalPosition::new(0.0, 0.0), PhysicalSize::new(0, 720)),
-            None
-        );
+        for empty_extent in [PhysicalSize::new(0, 720), PhysicalSize::new(1280, 0)] {
+            assert_eq!(
+                cursor_pixel(PhysicalPosition::new(0.0, 0.0), empty_extent),
+                None
+            );
+        }
     }
 }

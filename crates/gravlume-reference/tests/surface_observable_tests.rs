@@ -2,6 +2,7 @@ use gravlume_reference::{
     FixtureDocument, ObservationTracer, ReferenceComparison, ReferencePolicy,
     SurfaceFootprintError, SurfaceFootprintEstimate, SurfaceParity,
 };
+use proptest::prelude::*;
 
 const SURFACE_OBSERVABLE: &str = include_str!("../fixtures/v2/kerr-surface-observable.toml");
 const TRANSPORT_FIXTURES: [&str; 4] = [
@@ -108,24 +109,54 @@ fn canonical_surface_footprint_is_resolved_only_with_one_exact_branch_key() {
     );
 }
 
-#[test]
-fn surface_footprint_rejects_a_neighborhood_outside_one_pixel() {
-    let fixture = FixtureDocument::parse_toml(TRANSPORT_FIXTURES[0])
-        .expect("repository transport fixture parses")
-        .into_surface_observation()
-        .expect("transport fixture is a surface observation");
-    let [pixel_x, pixel_y] = fixture.sample().pixel();
-    let sample = fixture
-        .observation()
-        .view()
-        .sample(pixel_x, pixel_y, 0.125, 0.5)
-        .expect("the off-center sample is valid");
-    let error = ObservationTracer::baseline_v1()
-        .surface_footprint_v1(fixture.observation(), sample, ReferencePolicy::regular_v1())
-        .expect_err("a centered quarter-pixel stencil would cross the pixel boundary");
+fn unsupported_footprint_coordinate() -> impl Strategy<Value = f64> {
+    prop_oneof![
+        Just(0.25_f64.next_down()),
+        Just(0.75_f64.next_up()),
+        (0_u16..=249).prop_map(|value| f64::from(value) / 1000.0),
+        (751_u16..=1000).prop_map(|value| f64::from(value) / 1000.0),
+    ]
+}
 
-    assert!(matches!(
-        error,
-        SurfaceFootprintError::NeighborhoodOutsidePixel
-    ));
+fn unsupported_footprint_subpixel() -> impl Strategy<Value = [f64; 2]> {
+    (
+        any::<bool>(),
+        unsupported_footprint_coordinate(),
+        0_u16..=1024,
+    )
+        .prop_map(|(unsupported_x, outside, other)| {
+            let other = f64::from(other) / 1024.0;
+            if unsupported_x {
+                [outside, other]
+            } else {
+                [other, outside]
+            }
+        })
+}
+
+proptest! {
+    #[test]
+    fn surface_footprint_rejects_every_unsupported_subpixel_neighborhood(
+        [subpixel_x, subpixel_y] in unsupported_footprint_subpixel(),
+    ) {
+        let fixture = FixtureDocument::parse_toml(TRANSPORT_FIXTURES[0])
+            .expect("repository transport fixture parses")
+            .into_surface_observation()
+            .expect("transport fixture is a surface observation");
+        let [pixel_x, pixel_y] = fixture.sample().pixel();
+        let sample = fixture
+            .observation()
+            .view()
+            .sample(pixel_x, pixel_y, subpixel_x, subpixel_y)
+            .expect("generated subpixel belongs to the fixture view");
+
+        prop_assert!(matches!(
+            ObservationTracer::baseline_v1().surface_footprint_v1(
+                fixture.observation(),
+                sample,
+                ReferencePolicy::regular_v1(),
+            ),
+            Err(SurfaceFootprintError::NeighborhoodOutsidePixel)
+        ));
+    }
 }

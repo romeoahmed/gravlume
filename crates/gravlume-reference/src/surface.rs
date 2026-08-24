@@ -385,15 +385,18 @@ mod tests {
             let observable = observable_at(surface(6.0, 20.0), spacetime, state, 1.0)
                 .expect("generated circular source orbit is timelike");
             let anchor = observable.source_anchor();
-            let azimuth_error =
-                wrapped_angle_difference(anchor.azimuth_rad(), azimuth_rad).abs();
+            let azimuth_error = wrapped_angle_difference(anchor.azimuth_rad(), azimuth_rad);
 
             prop_assert!(abs_diff_eq!(
                 anchor.radius_m(),
                 radius_m,
                 epsilon = 64.0 * f64::EPSILON * radius_m
             ));
-            prop_assert!(azimuth_error <= 64.0 * f64::EPSILON);
+            prop_assert!(abs_diff_eq!(
+                azimuth_error,
+                0.0,
+                epsilon = 64.0 * f64::EPSILON
+            ));
         }
 
         #[test]

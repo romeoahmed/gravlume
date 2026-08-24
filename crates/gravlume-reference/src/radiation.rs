@@ -267,8 +267,6 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(64))]
-
         #[test]
         fn visible_boxcar_bands_remain_a_bounded_bolometric_fraction(
             log2_temperature in lut_log2_temperature(),

@@ -33,7 +33,7 @@ const EVENT_CANDIDATE_ESCAPE: u32 = 1 << 3;
 mod surface;
 
 #[test]
-fn trace_termination_discriminants_are_stable_and_checked() {
+fn trace_termination_discriminants_are_stable() {
     let cases = [
         (1, TraceTermination::HorizonCrossing),
         (2, TraceTermination::Escape),
@@ -47,13 +47,6 @@ fn trace_termination_discriminants_are_stable_and_checked() {
     for (raw, expected) in cases {
         assert_eq!(u32::from(expected), raw);
         assert_eq!(TraceTermination::try_from(raw), Ok(expected));
-    }
-
-    for raw in [0, 8, u32::MAX] {
-        assert!(matches!(
-            TraceTermination::try_from(raw),
-            Err(error) if error == raw
-        ));
     }
 }
 
@@ -105,12 +98,8 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     );
     let azimuth_error = (f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad())
         .sin()
-        .atan2((f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad()).cos())
-        .abs();
-    assert!(
-        azimuth_error <= 3.0e-4,
-        "source azimuth error {azimuth_error:e}"
-    );
+        .atan2((f64::from(gpu.source_time[1]) - reference_anchor.azimuth_rad()).cos());
+    assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.0e-4);
     let reference_ratio = reference_observable.frequency_ratio().value();
     assert_abs_diff_eq!(
         f64::from(gpu.source_time[2]),
@@ -180,9 +169,8 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
     );
     let azimuth_error = (f64::from(azimuth_radians) - reference_anchor.azimuth_rad())
         .sin()
-        .atan2((f64::from(azimuth_radians) - reference_anchor.azimuth_rad()).cos())
-        .abs();
-    assert!(azimuth_error <= 3.0e-4);
+        .atan2((f64::from(azimuth_radians) - reference_anchor.azimuth_rad()).cos());
+    assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.0e-4);
     assert_abs_diff_eq!(
         f64::from(frequency_ratio),
         reference_observable.frequency_ratio().value(),
@@ -218,7 +206,7 @@ fn bounded_sample_inspection_exposes_the_canonical_surface_observables() {
         0
     );
     assert_eq!(diagnostics.event_candidate_bits().count_ones(), 1);
-    assert!(diagnostics.event_residual().abs() <= 5.0e-3);
+    assert_abs_diff_eq!(diagnostics.event_residual(), 0.0, epsilon = 5.0e-3);
     assert_eq!(diagnostics.numerical_flag_bits(), 0);
     assert!(diagnostics.steps() > 0);
     assert!(
@@ -258,8 +246,8 @@ fn bounded_sample_inspection_keeps_analytic_escape_semantics_non_spectral() {
 
 proptest! {
     #[test]
-    fn non_boundary_unknown_trace_termination_discriminants_are_rejected(
-        raw in 8_u32..u32::MAX,
+    fn unknown_trace_termination_discriminants_are_rejected(
+        raw in prop_oneof![Just(0), Just(8), Just(u32::MAX), 9_u32..u32::MAX],
     ) {
         prop_assert!(matches!(
             TraceTermination::try_from(raw),
@@ -454,16 +442,11 @@ fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
         origin_direction.map(f64::from),
         translated_direction.map(f64::from),
     );
-    assert!(
-        angular_difference <= 2.0e-6,
-        "time translation changed the trace direction by {angular_difference:e} rad"
-    );
-    let travel_time_difference = (origin.source_time[3] - translated.source_time[3]).abs();
-    assert!(
-        travel_time_difference <= 1.0e-3,
-        "time translation changed travel time from {} to {}",
+    assert_abs_diff_eq!(angular_difference, 0.0, epsilon = 2.0e-6);
+    assert_abs_diff_eq!(
         origin.source_time[3],
-        translated.source_time[3]
+        translated.source_time[3],
+        epsilon = 1.0e-3
     );
 }
 
@@ -471,8 +454,11 @@ fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
 fn far_field_geometry_does_not_fail_when_the_guard_observable_exceeds_f32() {
     let observation = observation_with(1.0, 0.8, 0.0, [1.0e10, 0.0, 0.0], 1.0, 1, 1);
     let capture = capture_initial_rays(&observation, [0.5, 0.5]);
+    let record = capture.records[0];
 
-    assert_eq!(capture.records[0].metadata, [0; 4]);
+    assert_eq!(record.metadata[0], 0, "initial-ray construction failed");
+    assert!(record.source_time.into_iter().all(f32::is_finite));
+    assert_abs_diff_eq!(record.invariant_drift[0], 0.0, epsilon = 8.0e-5);
 }
 
 #[test]

@@ -494,8 +494,6 @@ mod tests {
     use super::*;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
-
         #[test]
         fn trace_progress_covers_native_extents_once_with_bounded_batches(
             width in 1_u32..=3_840,
