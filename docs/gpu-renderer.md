@@ -119,12 +119,12 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | normalization             | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                                                                 |
 | initial ray               | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                                                                         |
 | solver                    | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming                           |
-| surface                   | canonical v2 fixture 验证 event/anchor/Frequency Ratio/travel time 与最终 `RGBA16F` radiance；outer source-edge stencil 只验证 regular/strict CPU 收敛与 fresh binary32 terminal/branch、anchor/Frequency Ratio/travel time/radiance |
+| surface                   | canonical v2 最终 `RGBA16F`；outer-edge seed 只覆盖 CPU convergence 与 fresh binary32 fields                                                                 |
 | scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets                                                          |
 | branch/footprint          | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
 | scientific export         | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                                                                   |
 | sample inspection         | fixed ABI/resource cap、strict decode、published texel/retrace 分离、Busy/cancel-drain/generation mismatch 与三种 plan 的真实 GPU record                     |
-| dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、65 个乱序 sample 的 runtime-array partial workgroup、device workgroup-dimension cap    |
+| dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、65 个乱序 sample 的 runtime-array partial workgroup、device workgroup-dimension cap |
 | acceleration              | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback                                                 |
 | coverage                  | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                                                                |
 | resources                 | 4K pixel boundary、cold/completed/worst transactional plan 与分配前 typed rejection                                                                          |
@@ -146,13 +146,11 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
 - Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
 - Scientific capture 是最终 radiance 的整帧内存 readback API，不是稳定的磁盘 container；production sample inspection 是 live process 内的一次性证据，也不是持久 artifact interface。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
-- Production inspection 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v2` policy；有序 sample
-  corpus 只是 test-only evidence module，不是 bounded-region production interface。当前仍没有
-  trajectory/checkpoint、event bracket width、独立 high-precision certificate 或第二 science-quality
-  GPU policy。Canonical positive-spin outer source edge 已通过 fresh binary32 GPU/reference
-  comparison；当前证据不包含该 stencil 的最终 `RGBA16F` publication gate。独立 high-precision
-  witness、inner edge、surface/capture boundary、critical curve 两侧、higher-order
-  winding 与正负 spin 的连续字段 corpus 尚未闭合；因此路线图的质量基线仍开放。
+- Production inspection 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v2` policy；test-only ordered
+  batch 不构成 bounded-region production interface。Canonical positive-spin outer source edge 已通过
+  fresh binary32 GPU/reference comparison，但尚无独立 high-precision witness 或该 stencil 的最终
+  `RGBA16F` publication gate；其余 strata 也未闭合。精确边界见
+  [连续字段 corpus 记录](research/continuous-field-corpus.md)，因此路线图的质量基线仍开放。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。

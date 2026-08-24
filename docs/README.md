@@ -59,3 +59,4 @@
 - 公式注明坐标、符号、单位、时间定向与适用域；数值注明 precision、输入、observable 和 tolerance。
 - 性能绑定 revision、平台、adapter、backend、scene、extent、profile、样本设计和统计量，不能用 ray count 代替端到端延迟。
 - API、行为、阈值、平台支持或科学声明变化时，同步更新其唯一权威文档和当前证据摘要。
+- 研究方案落地或否决后，把索引与正文状态改为结果口吻；不要让“建议/应实现”继续描述当前路径。
