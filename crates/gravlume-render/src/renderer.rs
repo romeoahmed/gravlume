@@ -21,8 +21,8 @@ use crate::{
     scientific_capture::{ScientificCapture, ScientificCaptureError, capture_texture},
     timing::GpuTimings,
     trace::{
-        SampleInspectionCompletion, SampleInspectionRequestError, SampleInspectionTicket,
-        SampleInspector, TracePipeline, TraceTimestampWrites,
+        SampleInspectionCompletion, SampleInspectionRequestError, SampleInspectionSlot,
+        SampleInspectionTicket, TracePipeline, TraceTimestampWrites,
     },
 };
 
@@ -201,7 +201,7 @@ pub struct Renderer {
     frame_resources: Option<FrameResources>,
     published_scene: PublishedScene,
     trace: TracePipeline,
-    sample_inspector: SampleInspector,
+    inspection_slot: SampleInspectionSlot,
     display: DisplayPipeline,
     egui: egui_wgpu::Renderer,
     timings: GpuTimings<u64>,
@@ -261,7 +261,7 @@ impl Renderer {
         let (_device_event_sender, device_events) = install_device_callbacks(&device);
         let resource_scopes = GpuErrorScopes::push(&device);
         let trace = TracePipeline::new(&device, observation)?;
-        let sample_inspector = SampleInspector::new(&device, &trace);
+        let inspection_slot = SampleInspectionSlot::new(&device, &trace);
         let display = DisplayPipeline::new(&device, selection);
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
@@ -282,7 +282,7 @@ impl Renderer {
             frame_resources: None,
             published_scene,
             trace,
-            sample_inspector,
+            inspection_slot,
             display,
             egui,
             timings,
@@ -319,7 +319,7 @@ impl Renderer {
         match change {
             ExtentChange::Unchanged => return Ok(()),
             ExtentChange::Paused => {
-                self.sample_inspector.cancel_active();
+                self.inspection_slot.cancel_active();
                 self.extent = candidate_extent;
             }
             ExtentChange::Rebuild { extent, .. } => {
@@ -363,7 +363,7 @@ impl Renderer {
                 }
 
                 self.install_surface_selection(selection, presentation_pipeline);
-                self.sample_inspector.cancel_active();
+                self.inspection_slot.cancel_active();
                 self.extent = candidate_extent;
                 self.frame_resources = Some(replacement);
                 self.pending_present_generation = None;
@@ -492,7 +492,7 @@ impl Renderer {
         let published =
             inspection_generation(self.published_scene.generation(), self.extent.generation())?;
         let extent = self.published_scene.extent();
-        self.sample_inspector.request(
+        self.inspection_slot.request(
             &self.device,
             &self.queue,
             self.published_scene.view().texture(),
@@ -580,9 +580,7 @@ impl Renderer {
             .is_some_and(|status| status.is_queue_empty())
             .then(|| self.pending_present_generation.take())
             .flatten();
-        let sample_inspection = self
-            .sample_inspector
-            .poll(self.published_scene.generation());
+        let sample_inspection = self.inspection_slot.poll(self.published_scene.generation());
         let events = self.device_events.try_iter().collect();
         Ok(RendererUpdate {
             published_generation,
@@ -594,7 +592,7 @@ impl Renderer {
 
     pub const fn has_pending_work(&self) -> bool {
         self.timings.has_pending_readback()
-            || self.sample_inspector.has_pending_request()
+            || self.inspection_slot.is_pending()
             || self.pending_present_generation.is_some()
     }
 
@@ -618,7 +616,7 @@ impl Renderer {
     }
 
     pub fn suspend(&mut self) {
-        self.sample_inspector.cancel_active();
+        self.inspection_slot.cancel_active();
         self.surface = None;
         self.surface_suspended = true;
     }

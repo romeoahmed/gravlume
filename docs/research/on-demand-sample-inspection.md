@@ -8,7 +8,7 @@
 
 [路线图的下一项 resolved work](../roadmap.md#有界样本审计与质量基线)要求用户和验证工具取得与画面同代、同 profile 的结构化物理证据，同时明确资源上限、读取范围、generation、一致性、取消和错误语义。研究检查了：
 
-- 当前 [`trace/inspection.rs`](../../crates/gravlume-render/src/trace/inspection.rs)及其三个 WGSL adapter、真实 GPU tests 与[既有 test-only 审计](bounded-sample-inspection.md)；
+- 当前 [`trace/inspection.rs`](../../crates/gravlume-render/src/trace/inspection.rs)、private [`protocol`](../../crates/gravlume-render/src/trace/inspection/protocol.rs) / [`slot`](../../crates/gravlume-render/src/trace/inspection/slot.rs) partitions、三个 WGSL adapter、真实 GPU tests 与[既有 test-only 审计](bounded-sample-inspection.md)；
 - [`renderer.rs`](../../crates/gravlume-render/src/renderer.rs)、[`renderer/frame.rs`](../../crates/gravlume-render/src/renderer/frame.rs)、[`display.rs`](../../crates/gravlume-render/src/display.rs)、[`timing.rs`](../../crates/gravlume-render/src/timing.rs)和[`scientific_capture.rs`](../../crates/gravlume-render/src/scientific_capture.rs)的 publication/readback 生命周期；
 - workspace `Cargo.lock` 锁定的 wgpu `30.0.1`，以及 W3C WGSL/WebGPU、wgpu、Rust 的一手规范；
 - Carter separability、相对论辐射传输与 Kerr 高阶像的原始文献。
@@ -70,19 +70,22 @@ impl Renderer {
     ) -> Result<SampleInspectionTicket, SampleInspectionRequestError>;
 }
 
-struct SampleInspectionCompletion {
-    ticket: SampleInspectionTicket,
-    disposition: SampleInspectionDisposition,
-}
-
-enum SampleInspectionDisposition {
-    Completed(SampleInspection),
-    Cancelled,
-    Failed(SampleInspectionError),
+enum SampleInspectionCompletion {
+    Completed {
+        ticket: SampleInspectionTicket,
+        inspection: SampleInspection,
+    },
+    Cancelled {
+        ticket: SampleInspectionTicket,
+    },
+    Failed {
+        ticket: SampleInspectionTicket,
+        error: SampleInspectionError,
+    },
 }
 ```
 
-Completion 随既有 `RendererUpdate` 被 `poll` 汇总，而不是增加一个会阻塞 event loop 的同步 API。外部只学习 request/update；resize 与 suspend 的取消属于 renderer lifecycle，不增加无消费者的 public cancel seam。Private `SampleInspector` 独占 pipeline、bind group、fixed buffers、map callback channel、decode 和状态转移。它直接复用 sealed `TracePipeline` 的 uniform、plan 与 LUT，不暴露 `wgpu` handle、solver、pass 或 shader record。
+Completion 随既有 `RendererUpdate` 被 `poll` 汇总，而不是增加一个会阻塞 event loop 的同步 API。直接 enum 避免 `Completion -> Disposition` 的透传层，并让每个 terminal variant 原子携带 ticket 与自己的 payload。外部只学习 request/update；resize 与 suspend 的取消属于 renderer lifecycle，不增加无消费者的 public cancel seam。Private `SampleInspectionSlot` 独占 pipeline、bind group、fixed buffers、map callback channel 和状态转移；相邻的 private `protocol` partition 独占 exact ABI 与 strict decoder。两者共同复用 sealed `TracePipeline` 的 uniform、plan 与 LUT，不暴露 `wgpu` handle、solver、pass 或 shader record。
 
 第一版只有一个真实执行方法，因此 request 不接受 quality/profile 参数，也不建立三个单 variant runtime enum；`SampleRetrace::METHOD_ID` 原子标识 profile、producer 与 arithmetic domain。未来真正存在 science-quality 执行时，它必须有自己的 method identity 和新 ticket，不能在同一 request 下静默重追或改变 step policy。这符合[路线图的质量政策要求](../roadmap.md#有界样本审计与质量基线)，也避免只有一个 variant 的假扩展 seam。
 
@@ -166,7 +169,7 @@ Portable WebGPU 的 `MAP_READ` buffer 只能与 `COPY_DST` 组合；storage reco
 
 ## 错误语义与 TDD 交付顺序
 
-Request-time typed errors 区分 `NoCurrentPublication`、`SampleOutsideExtent` 与 `Busy`；pipeline/buffer creation 属于 renderer initialization，不混入 request error。Completion disposition 区分 `Completed`、`Cancelled`、mapping failure 与 invalid GPU record；unknown termination、unknown flag/tag、non-finite value、nonzero reserved lane 和非法 terminal/source/scene/branch 组合必须拒绝，不返回部分成功。
+Request-time typed errors 区分 `NoCurrentPublication`、`SampleOutsideExtent` 与 `Busy`；pipeline/buffer creation 属于 renderer initialization，不混入 request error。Completion variants 区分 `Completed`、`Cancelled`、mapping failure 与 invalid GPU record；unknown termination、unknown flag/tag、non-finite value、nonzero reserved lane 和非法 terminal/source/scene/branch 组合必须拒绝，不返回部分成功。
 
 实现应先增加不需要 GPU 的 failing tests，再接线资源和 shader：
 
@@ -184,7 +187,7 @@ Interactive 与未来 science-quality policy 对 accepted physical result 使用
 建议 production 切片采用：
 
 1. `Renderer` 上的 request/update 两个窄动作，取消只属于 resize/suspend lifecycle；
-2. private、renderer-owned、固定 232 logical bytes、最多一个 pending 的 `SampleInspector`；
+2. private、renderer-owned、固定 232 logical bytes、最多一个 pending 的 `SampleInspectionSlot`；
 3. target 绑定 immutable observation 与当前 `PublishedScene` generation/extent；
 4. fixed full-KS/WGSL-binary32 method identity、terminal-specific sum type 和严格 typed decode；
 5. non-blocking `map_buffer_on_submit` + existing renderer poll；

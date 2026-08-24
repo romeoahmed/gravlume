@@ -8,13 +8,13 @@ mod shadow_coverage;
 
 pub use input::{GpuTraceInputError, TraceUniforms};
 
-pub use inspection::SampleInspector;
+pub use inspection::SampleInspectionSlot;
 #[cfg(test)]
 pub use inspection::TraceTermination;
 pub use inspection::{
-    SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionDisposition,
-    SampleInspectionError, SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide,
-    SampleRetrace, SampleSurfaceEvaluation, SampleTraceDiagnostics, SampleTraceOutcome,
+    SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionError,
+    SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide, SampleRetrace,
+    SampleSurfaceEvaluation, SampleTraceDiagnostics, SampleTraceOutcome,
 };
 
 use input::TraceDispatch;

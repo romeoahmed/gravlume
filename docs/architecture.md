@@ -78,7 +78,8 @@ Reference 保留两个有意不同的接口：
   renderer 内绑定 published generation/extent 与 logical sample，并返回一个
   `SampleInspectionTicket`；固定槽位最多容纳一个 pending request。resize 与 suspend 可把 active request
   标记丢弃，但已提交 GPU work、mapping callback 与 `unmap` 仍必须 drain 后才能复用槽位。每个 ticket
-  经下一次 `poll` 恰好产生一个 `SampleInspectionCompletion`，其中 disposition 明确区分完成、取消和失败。
+  经下一次 `poll` 恰好产生一个 `SampleInspectionCompletion`；它是直接区分完成、取消和失败的 enum，
+  每个 variant 原子携带原 ticket，完成与失败分别携带 evidence 或 typed source。
 - inspection completion 同时携带从目标 generation 复制的实际 `Rgba16Float` `ScientificTexel`，以及
   fresh full Kerr–Schild/WGSL-binary32 retrace 的 typed evidence。两者来自不同 producer 路径：后者可能
   绕过画面 accelerator/refinement 且尚未 binary16 rounding，因此接口把 `published_texel` 与
@@ -101,7 +102,9 @@ Reference 保留两个有意不同的接口：
 | `renderer/frame.rs`  | frame bundle、trace scheduling、resource admission 与事务式 rebuild                       |
 | `trace.rs`、`trace/input.rs`、`trace/shader.rs` | private sealed `TracePlan` 与 pipeline/scratch、受检 GPU ABI packing、唯一有序 WGSL 组合入口 |
 | `trace/shadow_coverage.rs` | capture/escape 边缘分类、选择性 subpixel refinement 与 scratch                   |
-| `trace/inspection.rs` | production 单槽 sample request、generation/cancel/map 状态机、固定 readback ABI 与 typed decoding |
+| `trace/inspection.rs` | public typed evidence、ticket、completion 与 error interface                                  |
+| `trace/inspection/protocol.rs` | 固定 host/WGSL ABI、readback bytes 与 strict typed decoder                         |
+| `trace/inspection/slot.rs` | production 单槽 request、generation/cancel/map GPU lifecycle                         |
 | `spectral_lut.rs`    | versioned Planck boxcar LUT 的独立 host generator 与固定布局                         |
 | `scientific_capture.rs` | 已发布 surface texture 的显式 readback、texel kind、解释 metadata 与 numerical budgets |
 | `display.rs`         | scene/UI 线性合成、tone mapping 与 surface encoding                                       |

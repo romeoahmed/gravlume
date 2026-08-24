@@ -1,7 +1,7 @@
 use gravlume_render::{
     DeviceEvent, RendererDiagnostics, SampleBranchKey, SampleInspection,
-    SampleInspectionCompletion, SampleInspectionDisposition, SampleInspectionTicket, SampleRetrace,
-    SampleSurfaceEvaluation, SampleTraceOutcome,
+    SampleInspectionCompletion, SampleInspectionTicket, SampleRetrace, SampleSurfaceEvaluation,
+    SampleTraceOutcome,
 };
 
 use crate::{inspection::InspectionStatus, preview::Preview};
@@ -115,15 +115,14 @@ fn show_sample_inspection(ui: &mut egui::Ui, status: &InspectionStatus) {
 }
 
 fn show_inspection_completion(ui: &mut egui::Ui, completion: &SampleInspectionCompletion) {
-    let ticket = completion.ticket();
-    match completion.disposition() {
-        SampleInspectionDisposition::Completed(inspection) => {
-            show_completed_inspection(ui, ticket, inspection);
+    match completion {
+        SampleInspectionCompletion::Completed { ticket, inspection } => {
+            show_completed_inspection(ui, *ticket, inspection);
         }
-        SampleInspectionDisposition::Cancelled => {
+        SampleInspectionCompletion::Cancelled { .. } => {
             ui.weak("Inspection was cancelled after GPU drain.");
         }
-        SampleInspectionDisposition::Failed(error) => {
+        SampleInspectionCompletion::Failed { error, .. } => {
             ui.colored_label(
                 egui::Color32::from_rgb(255, 170, 80),
                 format!("Inspection failed: {error}"),
@@ -225,11 +224,11 @@ fn show_trace_outcome(ui: &mut egui::Ui, outcome: SampleTraceOutcome) {
             ));
             show_branch(ui, "branch", branch);
         }
-        SampleTraceOutcome::StepExhausted {
+        SampleTraceOutcome::StepExhaustion {
             branch_prefix,
             visible_rgb,
         } => {
-            ui.label(format!("fresh StepExhausted: visible RGB {visible_rgb:?}"));
+            ui.label(format!("fresh StepExhaustion: visible RGB {visible_rgb:?}"));
             show_branch(ui, "branch prefix", branch_prefix);
         }
         SampleTraceOutcome::NumericalFailure { visible_rgb } => {

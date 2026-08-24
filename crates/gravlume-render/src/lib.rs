@@ -32,9 +32,8 @@ pub use scientific_capture::{
 pub use timing::TimingError;
 pub use trace::{
     GpuTraceInputError, SampleBranchKey, SampleInspection, SampleInspectionCompletion,
-    SampleInspectionDisposition, SampleInspectionError, SampleInspectionRequestError,
-    SampleInspectionTicket, SamplePolarSide, SampleRetrace, SampleSurfaceEvaluation,
-    SampleTraceDiagnostics, SampleTraceOutcome,
+    SampleInspectionError, SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide,
+    SampleRetrace, SampleSurfaceEvaluation, SampleTraceDiagnostics, SampleTraceOutcome,
 };
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
