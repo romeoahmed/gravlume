@@ -178,22 +178,22 @@ expected 来自 strict reference convergence；transfer identity、Planck normal
 
 `reference-regular-v1` 使用第 1 节的 DP5(4)，所有状态在 pack 前保持 `f64`。输入已经以 $M=\omega_{\rm obs}=1$ 归一化；直接尺度输入 $M$ 必须精确为 1，派生的 tetrad contraction $\omega_{\rm obs}$ 按具名浮点预算验证。
 
-| policy field                 |                         v1 值 |
-| ---------------------------- | ----------------------------: |
-| position/time `rtol`         |                       `2e-12` |
-| position/time `atol`         |                       `2e-13` |
-| covariant momentum `rtol`    |                       `2e-12` |
-| covariant momentum `atol`    |                       `2e-13` |
-| initial step magnitude       |                      `1e-3 M` |
-| minimum step magnitude       |                    $2^{-40}M$ |
-| maximum step magnitude       |                       `0.5 M` |
-| safety / shrink / growth     |             `0.9 / 0.2 / 5.0` |
-| max accepted steps           |                      `200000` |
-| max consecutive rejects      |                          `64` |
-| dense-event affine tolerance |                     `2e-11 M` |
-| event tie tolerance          |                     `5e-11 M` |
+| policy field                 |                                     v1 值 |
+| ---------------------------- | ----------------------------------------: |
+| position/time `rtol`         |                                   `2e-12` |
+| position/time `atol`         |                                   `2e-13` |
+| covariant momentum `rtol`    |                                   `2e-12` |
+| covariant momentum `atol`    |                                   `2e-13` |
+| initial step magnitude       |                                  `1e-3 M` |
+| minimum step magnitude       |                                $2^{-40}M$ |
+| maximum step magnitude       |                                   `0.5 M` |
+| safety / shrink / growth     |                         `0.9 / 0.2 / 5.0` |
+| max accepted steps           |                                  `200000` |
+| max consecutive rejects      |                                      `64` |
+| dense-event affine tolerance |                                 `2e-11 M` |
+| event tie tolerance          |                                 `5e-11 M` |
 | event arming band            | `1.28e-9` normalized event-function units |
-| singularity guard            |    $(r^4+a^2z^2)/M^4=2^{-40}$ |
+| singularity guard            |                $(r^4+a^2z^2)/M^4=2^{-40}$ |
 
 `reference-strict-v1` 把所有 `rtol/atol` 除以 16、maximum step 降为 `0.25 M`、event tolerance 除以 4、step/reject 上限加倍。regular fixture 必须同时运行两个 policy；“baseline 成功”而 strict 改变 branch/termination 时，baseline 失败，不选择更好看的结果。
 
@@ -267,8 +267,8 @@ sticky state，只在已提交 endpoint 离开 band 后置位。
 | recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift |                                            each `0.05` |
 | Frequency Ratio relative error                        |                                                 `2e-3` |
 | surface event position                                |                                               `5e-3 M` |
-| bolometric surface `RGBA16F` relative error            |                                                 `2e-3` |
-| final spectral surface band relative error             |                                                 `4e-3` |
+| bolometric surface `RGBA16F` relative error           |                                                 `2e-3` |
+| final spectral surface band relative error            |                                                 `4e-3` |
 | numerical failure on regular matrix                   |                                                    `0` |
 | stale history after generation/resize/cut             |                                   `0` accepted samples |
 

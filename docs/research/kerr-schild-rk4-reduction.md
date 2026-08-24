@@ -1,6 +1,8 @@
 # Cartesian Kerr–Schild RK4 代数约化与事件定位
 
-> **状态：主要代数约化与事件定位已采用；step policy 仍实验。** 本文给出 outgoing Cartesian Kerr–Schild（KS）affine RK4 主路径的精确代数约化、可检验的数值改进顺序与准入条件。研究基线为 `a5048a0490b0fd05d19fd40857886824179ecb07`。production 随后采用 contracted null-gradient、compact geometry、discriminant-root `Sigma`、共享 reciprocal、六维动态 phase、全域 Cartesian Carter invariant、单调 Hermite event localization 与 Kerr–Newman interval capture。新的 step controller 仍未获 production 授权。
+本文保存 outgoing Cartesian KS/RK4 的代数约化、实验顺序和准入证据，不定义当前 solver 或 tolerance；连续方程、验收预算与当前实现分别以[数学物理](../physics.md)、[验证合同](../validation.md)和 [GPU 证据](../gpu-renderer.md)为准。
+
+**状态：主要代数约化与事件定位已采用；step policy 仍实验。** 研究基线为 `a5048a0490b0fd05d19fd40857886824179ecb07`。production 随后采用 contracted null-gradient、compact geometry、discriminant-root `Sigma`、共享 reciprocal、六维 dynamic phase、全域 Cartesian Carter invariant、单调 Hermite event localization 与 Kerr–Newman interval capture；新的 step controller 仍未获授权。
 
 ## 结论
 

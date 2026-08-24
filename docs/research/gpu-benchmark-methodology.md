@@ -1,6 +1,8 @@
 # 原生 GPU 基准方法
 
-> **状态：当前方法。** 仓库只保留一个针对现行 production trace pipeline 的固定原生 GPU benchmark。历史 shader 变体、配对 runner、CSV artifact generator 与 `wgpu-profiler` 集成已经完成决策使命，不再作为永久代码维护；实验结果归档在 [GPU 测地线加速决策账本](gpu-geodesic-acceleration.md)。
+本文定义研究 benchmark 的测量与解释方法，不是用户性能承诺、跨平台结果或 production interface；实际 workload 以 benchmark source 为准，历史结果只进入对应决策账本。
+
+**状态：当前方法。** 仓库只保留一个针对现行 production trace pipeline 的固定原生 GPU benchmark。历史 shader 变体、配对 runner、CSV artifact generator 与 `wgpu-profiler` 集成已经完成决策使命，不再作为永久代码维护；实验结果归档在 [GPU 测地线加速决策账本](gpu-geodesic-acceleration.md)。
 
 ## 1. 测量对象
 

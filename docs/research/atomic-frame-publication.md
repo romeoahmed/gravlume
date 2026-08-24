@@ -1,6 +1,8 @@
 # 完整帧原子发布
 
-> **状态：已采用。** GPU 只发布完整、当前 generation 的原生分辨率 scene。研究阶段尝试的低分辨率阶梯和可见 tile 扫描均已拒绝。
+本文保存完整帧 publication 的采用理由与被拒绝候选，不定义当前 renderer interface 或 lifecycle；当前合同与证据分别见[架构](../architecture.md)和 [GPU Renderer](../gpu-renderer.md)。
+
+**状态：已采用。** GPU 只发布完整、当前 generation 的原生分辨率 scene。研究阶段尝试的低分辨率阶梯和可见 tile 扫描均已拒绝。
 
 ## 决策
 
