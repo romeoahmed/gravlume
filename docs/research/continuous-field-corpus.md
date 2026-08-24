@@ -2,7 +2,7 @@
 
 本文记录路线图“连续字段 corpus + 独立证据”的首个切片：已经采用的 test-only ordered batch、当前 source-edge seed 能证明什么，以及仍需独立 artifact 才能关闭的科学证据。它不定义 production 行为、public API、fixture profile 或质量政策；这些事实分别以[数学物理](../physics.md)、[验证合同](../validation.md)、[Reference 证据](../reference-implementation.md)和 [GPU 证据](../gpu-renderer.md)为准。
 
-**状态：执行 seam 已采用；独立证据待闭合。** 当前 seed 只提供 CPU regular/strict convergence 与 fresh WGSL-binary32 agreement。它没有独立方程或高精度 expectation、分类 margin 和最终 texture-path gate，不能被称为 scientific fixture，也不能扩大 production 支持域。
+**状态：执行 seam 与一个 canonical 独立 witness 已采用；完整 corpus 证据待闭合。** 当前 seed 整体只提供 CPU regular/strict convergence 与 fresh WGSL-binary32 agreement；其中与 v2 fixture 重合的 `(640,16)` 另有 separated BL/Mino high-precision witness。其余样本仍没有独立 expectation、分类 margin 和最终 texture-path gate，整个 seed 不能被称为 scientific fixture，也不能扩大 production 支持域。
 
 ## 1. 已采用决策与有限适用域
 
@@ -23,7 +23,7 @@
 | CPU convergence      | 同一 Cartesian `f64` integrator 的 regular/strict outcome 收敛                                      | 独立 equation/chart witness               |
 | GPU agreement        | fresh binary32 terminal/branch、source、transfer、phase 与 diagnostics 满足适用 gate                | CPU 与 GPU 共同正确                       |
 | Texture path         | canonical v2 case 另有 `RGBA16F` 证据                                                               | 当前九点 seed 的 texture publication gate |
-| Independent artifact | 尚不存在                                                                                            | 已关闭 source-edge science domain         |
+| Independent artifact | 无 schema/artifact；只有 `(640,16)` 的可复算 BL/Mino witness                                       | 已关闭 source-edge science domain         |
 
 ## 2. Private execution seam
 
@@ -61,9 +61,23 @@ Direct 与 highly bent Kerr rays 形成不同 image sequence，并有不同 rota
 | Continuous phase       | coordinate-time duration                                                               | 独立累积 separated $t$ integral，并按 exact BL↔ingoing KS map 转换两端；使用 absolute gate                                                    |
 | Continuous diagnostics | event residual、null/$E$/$L_z$/$\mathcal Q$ max drift                                  | 每项单独验收；小 drift 不能替代 terminal、branch、source 或 radiance witness                                                                  |
 
-### 3.2 Artifact generator
+### 3.2 已采用的 canonical witness
 
-未来 generator 必须是 repository 内可复算、但不进入 Cargo runtime closure 的 research tool：
+[`verify_bl_mino_surface_witness.py`](scripts/verify_bl_mino_surface_witness.py) 从规范十进制输入独立重建
+canonical observer、frame 与 Photon Momentum，不导入 domain/reference crate，也不读取 CPU/GPU trace
+输出。它在 BL chart 中形成 $E,L_z,\mathcal Q$，按 Mino-separated potentials 与已分类 turning
+segments 求第一个有效 equatorial surface terminal；KS coordinate-time/azimuth shift 同时使用
+quadrature 与闭式 horizon primitive 交叉检查。
+
+当前 external seam 只接受 `(640,16,0.5,0.5)`。120/180 decimal-digit precision doubling、独立
+branch identity、逐 observable 结果、误差余量与一手来源集中在
+[high-precision BL/Mino witness](high-precision-bl-mino-witness.md)。Reference test 只消费舍入后的
+expectation，并同时约束 regular/strict；它不是新 fixture schema、持久 artifact、production solver 或
+整个九点 stencil 的授权。
+
+### 3.3 Artifact generator
+
+后续 corpus generator 必须继续是 repository 内可复算、但不进入 Cargo runtime closure 的 research tool：
 
 1. 从 canonical 十进制输入独立重建 observer event、tetrad 与 camera covector，不调用 Rust tracer，也不以 GPU 输出修正初值；
 2. 转为 Boyer–Lindquist covector，独立计算 $E,L_z,\mathcal Q$，用 separated $R(r),\Theta(\theta)$ 分类 roots 与 initial signs；
@@ -102,9 +116,13 @@ Fresh record 与 production texture 是不同 producer。`rgba16float` storage w
 - regular sparse sequence 按 request order 与逐样本 retrace/reference 对应；
 - 65 个逆序 case 穿过 partial workgroup，并以重复 request 验证 multiplicity/order；
 - 九点 outer source-edge seed 同时包含 Escape 与 Surface；每点先通过 CPU regular/strict comparison，再逐 terminal 比较 fresh GPU branch、source/transfer、time 与 diagnostics；
+- 其中 canonical `(640,16)` 由独立 BL/Mino witness 约束 path identity 与 continuous surface observable，
+  再经 CPU regular/strict 与已有 GPU/texture tests 形成一条纵向链；
 - production $N=1$ 与 test $N>1$ 使用同一 kernel、record ABI 和 strict decoder。
 
-仍缺：独立 schema/artifact、100-digit BL/Mino expectation、edge/competing-event margin 与逐字段 bound；具名 Metal/Vulkan 双平台 batch 证据；当前九点的最终 `RGBA16F` texture gate；以及路线图其余 strata。
+仍缺：独立 schema/artifact、其余八点的 BL/Mino expectation、edge/competing-event margin 与逐字段
+bound；具名 Metal/Vulkan 双平台 batch 证据；九点统一的最终 `RGBA16F` texture gate；以及路线图其余
+strata。
 
 这个切片只有在以下条件同时满足后才能关闭：
 

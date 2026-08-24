@@ -119,7 +119,7 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | normalization             | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                                                                 |
 | initial ray               | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                                                                         |
 | solver                    | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming                           |
-| surface                   | canonical v2 最终 `RGBA16F`；outer-edge seed 只覆盖 CPU convergence 与 fresh binary32 fields                                                                 |
+| surface                   | canonical v2 有独立 BL/Mino → CPU regular/strict → fresh binary32 → 最终 `RGBA16F` 链；outer-edge seed 其余样本只覆盖 CPU convergence 与 fresh binary32 fields |
 | scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets                                                          |
 | branch/footprint          | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
 | scientific export         | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                                                                   |
@@ -147,9 +147,10 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 - Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
 - Scientific capture 是最终 radiance 的整帧内存 readback API，不是稳定的磁盘 container；production sample inspection 是 live process 内的一次性证据，也不是持久 artifact interface。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
 - Production inspection 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v2` policy；test-only ordered
-  batch 不构成 bounded-region production interface。Canonical positive-spin outer source edge 已通过
-  fresh binary32 GPU/reference comparison，但尚无独立 high-precision witness 或该 stencil 的最终
-  `RGBA16F` publication gate；其余 strata 也未闭合。精确边界见
+  batch 不构成 bounded-region production interface。与 canonical v2 重合的 `(640,16)` 已有独立
+  BL/Mino witness，并通过 CPU regular/strict、fresh binary32 与最终 `RGBA16F` 链；outer source-edge
+  stencil 的其余样本仍无独立 high-precision witness，整个 stencil 也没有统一的最终 texture gate。
+  其余 strata 同样未闭合。精确边界见
   [连续字段 corpus 记录](research/continuous-field-corpus.md)，因此路线图的质量基线仍开放。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
