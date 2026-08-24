@@ -2,7 +2,10 @@ use gravlume_domain::{ImageSample, Observation};
 
 use crate::{
     extent::RenderExtent,
-    trace::{SampleInspection, TileRegion, TracePipeline, tile_grid, trace_record_plane_size},
+    trace::{
+        SampleInspection, SampleRetrace, TileRegion, TracePipeline, tile_grid,
+        trace_record_plane_size,
+    },
 };
 
 const RECORD_FIELD_SIZE: usize = std::mem::size_of::<[u32; 4]>();
@@ -56,6 +59,20 @@ pub fn inspect_sample(observation: &Observation, sample: ImageSample) -> SampleI
     let trace = TracePipeline::new(&gpu.device, observation)
         .expect("observation packs for bounded GPU inspection");
     trace.inspect_sample(gpu, observation_extent(observation), sample)
+}
+
+pub fn capture_sample_corpus(
+    observation: &Observation,
+    samples: &[ImageSample],
+) -> Vec<SampleRetrace> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    let gpu = crate::test_device::native_gpu();
+    let trace = TracePipeline::new(&gpu.device, observation)
+        .expect("observation packs for ordered GPU sample corpus");
+    crate::trace::capture_sample_corpus(gpu, &trace, observation_extent(observation), samples)
+        .expect("GPU sample corpus records decode")
 }
 
 pub fn capture_surface_footprint_sample(

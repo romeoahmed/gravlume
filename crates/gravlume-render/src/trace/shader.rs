@@ -28,6 +28,8 @@ const INITIAL_RAY_CAPTURE: &str = include_str!("../shaders/initial_ray_capture.w
 const INVARIANT_GATE_CAPTURE: &str = include_str!("../shaders/invariant_gate_capture.wgsl");
 #[cfg(test)]
 const EVENT_POLICY_CAPTURE: &str = include_str!("../shaders/event_policy_capture.wgsl");
+#[cfg(test)]
+const SAMPLE_CORPUS_CAPTURE: &str = include_str!("../shaders/sample_corpus_capture.wgsl");
 
 const TRACE_CORE: [&str; 4] = [
     TRACE_PROTOCOL,
@@ -81,6 +83,40 @@ pub(super) fn blackbody_sample_inspection() -> String {
         BLACKBODY_SURFACE_PREVIEW,
         SAMPLE_INSPECTION,
         SURFACE_SAMPLE_INSPECTION,
+    ])
+}
+
+#[cfg(test)]
+pub(super) fn analytic_sample_corpus() -> String {
+    assemble(&[
+        LENSING_PREVIEW,
+        SAMPLE_INSPECTION,
+        ANALYTIC_SAMPLE_INSPECTION,
+        SAMPLE_CORPUS_CAPTURE,
+    ])
+}
+
+#[cfg(test)]
+pub(super) fn bolometric_sample_corpus() -> String {
+    assemble(&[
+        LENSING_PREVIEW,
+        SURFACE_TRANSPORT,
+        BOLOMETRIC_SURFACE_PREVIEW,
+        SAMPLE_INSPECTION,
+        SURFACE_SAMPLE_INSPECTION,
+        SAMPLE_CORPUS_CAPTURE,
+    ])
+}
+
+#[cfg(test)]
+pub(super) fn blackbody_sample_corpus() -> String {
+    assemble(&[
+        LENSING_PREVIEW,
+        SURFACE_TRANSPORT,
+        BLACKBODY_SURFACE_PREVIEW,
+        SAMPLE_INSPECTION,
+        SURFACE_SAMPLE_INSPECTION,
+        SAMPLE_CORPUS_CAPTURE,
     ])
 }
 

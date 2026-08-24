@@ -7,7 +7,9 @@ use super::{
     SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionError,
     SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide, SampleRetrace,
     SampleTraceOutcome,
-    protocol::{TraceTermination, decode_branch_key},
+    protocol::{
+        INSPECTION_RECORD_BYTES, TraceTermination, decode_branch_key, decode_corpus_readback,
+    },
     slot::{PendingInspection, SampleInspectionSlot},
 };
 use crate::{
@@ -71,6 +73,27 @@ fn fixture_extent(fixture: &gravlume_reference::SurfaceObservationFixture) -> Re
         fixture.observation().view().height().get(),
     )
     .expect("fixture extent is nonzero")
+}
+
+#[test]
+fn corpus_decoder_requires_one_exact_record_per_sample() {
+    let fixture = surface_fixture();
+    let samples = [fixture.sample()];
+    let short_record = vec![
+        0;
+        usize::try_from(INSPECTION_RECORD_BYTES - 1)
+            .expect("inspection record size fits usize")
+    ];
+
+    assert!(matches!(
+        decode_corpus_readback(&short_record, None, &samples),
+        Err(SampleInspectionError::InvalidReadback)
+    ));
+    assert!(
+        decode_corpus_readback(&[], None, &[])
+            .expect("empty corpus has an empty exact readback")
+            .is_empty()
+    );
 }
 
 fn branch_counter() -> impl Strategy<Value = u32> {
@@ -238,7 +261,7 @@ fn completion_binds_ticket_and_fixed_retrace_method() {
     assert_eq!(request.sample(), fixture.sample());
     assert_eq!(
         SampleRetrace::METHOD_ID,
-        "gpu-ks-rk4-v1/full-kerr-schild-retrace/wgsl-binary32"
+        "gpu-ks-rk4-v2/full-kerr-schild-retrace/wgsl-binary32"
     );
     assert!(matches!(
         inspection.fresh_retrace().outcome(),

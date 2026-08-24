@@ -1,5 +1,8 @@
 // Per-ray integration loop and image-space trace entry points.
 
+const SOURCE_EDGE_REFINEMENT_BAND_OVER_M: f32 = 0.25;
+const SOURCE_EDGE_REFINED_STEP_POLICY: vec3<f32> = vec3<f32>(0.0025, 0.000125, 0.25);
+
 fn failure_result(
     flags: u32,
     steps: u32,
@@ -21,7 +24,11 @@ fn failure_result(
     );
 }
 
-fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> GeometricSample {
+fn trace_initialized(
+    initial: InitialState,
+    initial_invariants: Invariants,
+    step_policy: vec3<f32>,
+) -> GeometricSample {
     var state = initial.state;
     let energy = initial.energy;
     var state_geometry = initial.geometry;
@@ -71,9 +78,9 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
         }
 
         let step_magnitude = clamp(
-            trace_uniforms.step_policy.x * start_geometry.radius,
-            trace_uniforms.step_policy.y,
-            trace_uniforms.step_policy.z,
+            step_policy.x * start_geometry.radius,
+            step_policy.y,
+            step_policy.z,
         );
         let stepped = rk4_step(state, energy, state_rhs, -step_magnitude);
         if stepped.flags != 0u {
@@ -165,9 +172,9 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
         }
         // Arming controls whether a crossing may terminate on the configured surface. The branch
         // key still commits every accepted plane crossing, including one inside the initial band.
-        let crosses_equatorial_plane = SURFACE_EVENTS_ENABLED != 0u
-            && ((state.position.z > 0.0 && stepped.state.position.z <= 0.0)
-                || (state.position.z < 0.0 && stepped.state.position.z >= 0.0));
+        let crosses_equatorial_plane = (state.position.z > 0.0
+                && stepped.state.position.z <= 0.0)
+            || (state.position.z < 0.0 && stepped.state.position.z >= 0.0);
         var equatorial_crossing_fraction = 2.0;
         if crosses_equatorial_plane {
             let surface_fraction = event_fraction(
@@ -177,7 +184,7 @@ fn trace_initialized(initial: InitialState, initial_invariants: Invariants) -> G
                 signed_step * next_rhs.spacetime.w,
             );
             equatorial_crossing_fraction = surface_fraction;
-            if surface_armed {
+            if SURFACE_EVENTS_ENABLED != 0u && surface_armed {
                 let surface_weights = cubic_dense_weights(signed_step, surface_fraction);
                 let surface_state = dense_state_at(
                     state,
@@ -427,7 +434,22 @@ fn trace_pixel_at(
     if initial_invariants.flags != 0u {
         return failure_result(initial_invariants.flags, 0u, 0.0, vec4<f32>(0.0));
     }
-    return trace_initialized(initial, initial_invariants);
+    let result = trace_initialized(initial, initial_invariants, trace_uniforms.step_policy.xyz);
+    if result.termination == TERMINATION_EQUATORIAL_SURFACE {
+        let source_radius = result.source_coordinates.x;
+        let distance_to_source_edge = min(
+            abs(source_radius - trace_uniforms.surface_emitter.x),
+            abs(trace_uniforms.surface_emitter.y - source_radius),
+        );
+        if distance_to_source_edge <= SOURCE_EDGE_REFINEMENT_BAND_OVER_M {
+            return trace_initialized(
+                initial,
+                initial_invariants,
+                SOURCE_EDGE_REFINED_STEP_POLICY,
+            );
+        }
+    }
+    return result;
 }
 
 fn trace_pixel(pixel: vec2<u32>, extent: vec2<u32>) -> GeometricSample {

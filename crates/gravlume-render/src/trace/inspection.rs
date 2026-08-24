@@ -5,11 +5,15 @@ use crate::{
     scientific_capture::{ScientificChannelModel, ScientificTexel},
 };
 
+#[cfg(test)]
+mod corpus;
 mod protocol;
 mod slot;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub use corpus::capture_sample_corpus;
 #[cfg(test)]
 pub use protocol::TraceTermination;
 pub use slot::SampleInspectionSlot;
@@ -178,8 +182,8 @@ pub struct SampleRetrace {
 }
 
 impl SampleRetrace {
-    /// Identifies the fixed full Kerr-Schild RK4 retrace and its WGSL binary32 arithmetic domain.
-    pub const METHOD_ID: &str = "gpu-ks-rk4-v1/full-kerr-schild-retrace/wgsl-binary32";
+    /// Identifies the full Kerr-Schild RK4 retrace and its WGSL binary32 arithmetic domain.
+    pub const METHOD_ID: &str = "gpu-ks-rk4-v2/full-kerr-schild-retrace/wgsl-binary32";
 
     #[must_use]
     pub const fn effective_subpixel(self) -> [f32; 2] {

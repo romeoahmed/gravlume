@@ -255,11 +255,18 @@ coordinates 接近。
 
 `gpu-ks-rk4-v1` 以 $M$ 无量纲化，固定 radial step scale `0.1`、step range
 `[0.005M,8M]`、最多 `2048` steps、event tie tolerance $2^{-17}M$ 与 equatorial surface
-arming band $2^{-12}M$。tie 比较 localized fractions 的差乘当前 affine step magnitude；candidate
-以 singularity → horizon → emitter → escape bit order 保存，ambiguity 独立保存。arming 是 per-ray
-sticky state，只在已提交 endpoint 离开 band 后置位。
+arming band $2^{-12}M$。`gpu-ks-rk4-v2` 保留该 base policy 与全部 v1 gate；若无歧义 base
+surface terminal 的 Source Anchor 距任一 source radial edge 不超过 `0.25M`，则从同一 canonical
+initial state 重追，使用 radial step scale `0.0025`、step range `[0.000125M,0.25M]` 和相同
+`2048` step 上限，只以第二次完整结果作为 v2 outcome。该条件重追属于新 method identity，不改变
+v1 profile 的含义；重追若不能给出满足同一 gate 的确定结果，仍须返回 typed uncertainty/failure。
 
-| observable                                            |                                                v1 gate |
+两个 profile 的 tie 都比较 localized fractions 的差乘当前 affine step magnitude；candidate 以
+singularity → horizon → emitter → escape bit order 保存，ambiguity 独立保存。arming 是 per-ray
+sticky state，只在已提交 endpoint 离开 band 后置位。Equatorial crossing 属于 branch observable，
+不因 scene 未安装 surface 而停止计数；arming 只控制 crossing 能否成为 surface terminal。
+
+| observable                                            |                                             v1/v2 gate |
 | ----------------------------------------------------- | -----------------------------------------------------: |
 | regular termination / branch                          |                               exact reference equality |
 | regular escape/source angular error                   | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
