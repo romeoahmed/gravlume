@@ -48,7 +48,7 @@ validated Observation
   一起用 `vec4` 做 RK accumulation。
 - Geometry 复用 discriminant-root $\Sigma$、$1/r$ 与 $1/(r^2+a^2)$；Hamilton force 只计算 contracted principal-null Jacobian。Carter diagnostic 使用不借 $H=0$、无 axis seam 的 Cartesian 表达式。
 - Ordinary accepted step 复用 exact endpoint geometry/RHS 供 event、invariant 与下一步 $k_1$ 使用；它没有把 classical RK4 的 $k_4$ 错当成 FSAL。
-- Event 保留 endpoint bracket。每个 armed crossed guard 独立定位后选择 affine traversal 上最早 candidate；tie 以具单位 affine distance 判定，全部 candidates 按稳定 bit order 保留，ambiguity 独立记录并降为 `Uncertain`。Surface 从 profile arming band 外进入后才允许 crossing。仅当 Bézier derivative controls 证明 guard cubic 单调且 derivative 有条件时，执行固定六次 safeguarded Newton；否则保留 chord fraction。Radial turning 在同一 cubic dense state 上重算 geometry/RHS 并二分 bracket；若 terminal fraction 落入 bracket，则离散顺序降为 `Uncertain`。Branch key 只提交严格先于 terminal 的 turning/crossing。Travel time、source coordinate、event residual 与 drift 均来自同一个 localized state。
+- Event 保留 endpoint bracket。每个 armed crossed guard 独立定位后选择 affine traversal 上最早 candidate；tie 以具单位 affine distance 判定，全部 candidates 按稳定 bit order 保留，ambiguity 独立记录并降为 `Uncertain`。Equatorial crossing 始终计入 branch，surface arming 只决定它能否成为 terminal。仅当 Bézier derivative controls 证明 guard cubic 单调且 derivative 有条件时，执行固定六次 safeguarded Newton；否则保留 chord fraction。Radial turning 在同一 cubic dense state 上重算 geometry/RHS 并二分 bracket；若 terminal fraction 落入 bracket，则离散顺序降为 `Uncertain`。Branch key 只提交严格先于 terminal 的 turning/crossing。Travel time、source coordinate、event residual 与 drift 均来自同一个 localized state。
 - 四项 recorded invariant 任一超过 GPU profile budget，就把确定终止降为 `Uncertain`。Radicand、denominator、finite 与 singularity guards 都产生 machine-readable failure。
 
 完整公式、符号验证和 binary32 边界见 [KS RK4 约化记录](research/kerr-schild-rk4-reduction.md)。
@@ -64,6 +64,7 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 ### Thin surface transport 与 scientific capture
 
 - Surface event 使用 $z=0$ 双向 crossing；dense-localized radius 必须位于 source inclusive interval。
+- `gpu-ks-rk4-v2` 对 base trace 落在任一 source radial edge `0.25M` 内的确定 surface ray，从同一 initial state 使用具名 fine-step policy 完整重追；只有重追结果进入 radiance 与 inspection。该局部分支不共享 queue、workgroup memory 或中间 trajectory，仍由一个 invocation 独占一条 ray。
 - Localized state 独立求 Kerr–Newman prograde circular emitter、oblate chart azimuth 与 $g=\nu_{\rm obs}/\nu_{\rm em}$；非法 orbit/frequency 产生 visible numerical failure。
 - `GeometricSample` 只在 invocation-local function value 中存在；event ambiguity 从 candidate bitset 派生，不复制进该值。Production 不创建 G-buffer；neutral plan 将 $I_{\rm em}=I_6(r/6M)^{-3}$ 经 $g^4$ 与解析 slab 后直接写 `RGBA16F` candidate。完整乘积先按 `frexp` 分离 significand/exponent，只有最终 exponent 已证明可表示时才用 `ldexp` 物化；不会因为未输出的 vacuum 中间值溢出而拒绝最终可表示的 radiance。
 - Blackbody plan 使用 $T_{\rm obs}=gT_6(r/6M)^{-3/4}$，在固定 $\log_2T$ LUT 中插值 observer-frame `600–700/500–600/400–500 nm` boxcar 的 $\log_2$ fractions。三 channel 是具名 band-integrated intensity，不是 CIE/sRGB，也不覆盖剩余 bolometric power；shader 以 invocation-local `vec3` 一次分解、缩放和有界求和三个 band，将 fraction 的 normal significand/整数 exponent 与 intensity、$g^4$、径向 dilution 和 transmittance 一起累计，直到完整 radiance 的 exponent 已知后才用 vector `ldexp` 物化并交给 `RGBA16F` rounding。Storage LUT 仍使用 16-byte stride 的 `vec4`，没有把 local vector 写法误当作 12-byte host ABI。该路径不把 standalone subnormal fraction 传给 WGSL built-in，也不因未缩放 fraction 的 FTZ 静默丢失可表示 radiance。
@@ -116,12 +117,12 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | normalization             | 物理等价质量尺度产生相同 dimensionless record；时间原点平移不改变 observable                                                                                 |
 | initial ray               | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                                                                         |
 | solver                    | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming                           |
-| surface                   | canonical v2 fixture 的 event position、oblate anchor、Frequency Ratio、travel time 与 `RGBA16F` radiance                                                    |
+| surface                   | canonical v2 fixture 及跨 outer source edge 的有序 stencil：regular/strict CPU 收敛、terminal/branch、anchor、Frequency Ratio、travel time 与 radiance gate    |
 | scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets                                                          |
 | branch/footprint          | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
 | scientific export         | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                                                                   |
 | sample inspection         | fixed ABI/resource cap、strict decode、published texel/retrace 分离、Busy/cancel-drain/generation mismatch 与三种 plan 的真实 GPU record                     |
-| dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、device workgroup-dimension cap                                                      |
+| dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、65 个乱序 sample 的 runtime-array partial workgroup、device workgroup-dimension cap    |
 | acceleration              | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback                                                 |
 | coverage                  | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                                                                |
 | resources                 | 4K pixel boundary、cold/completed/worst transactional plan 与分配前 typed rejection                                                                          |
@@ -131,17 +132,24 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 
 ## 适用域与限制
 
-- Regular continuous-observable matrix 仍以 canonical exterior Kerr surface sample 为主；扩展
-  Schwarzschild、正/负自旋与 Kerr–Newman matrix 目前只准入 terminal/branch exactness。默认
-  presentation RK4 的非 canonical source/time phase 尚未满足同一预算，详见
+- Regular continuous-observable matrix 已覆盖 canonical exterior Kerr surface sample 及同一
+  positive-spin observation 上跨 outer source edge 的固定 stencil；扩展 Schwarzschild、负自旋与
+  Kerr–Newman matrix 目前只准入 terminal/branch exactness。其他非 canonical source/time phase 尚未
+  满足同一预算，详见
   [reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#57-surface-full-ks-的-binary32-phase-边界)。
   KN accelerator equality 也只覆盖严格亚极端的具名样本，不是完整 charge sweep。
 - Near-critical、高绕转、near-axis 与 near-extreme 的 GPU/reference ladder 尚未闭合。
-- RK4 使用固定 radius-scaled step policy；当前没有 `Uncertain` ray 的第二遍更高精度追迹。
+- RK4 v2 只对具名 source-edge band 条件重追；当前没有 near-critical、axis、near-extreme 或一般
+  `Uncertain` ray 的第二种 science-quality GPU policy。
 - CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
 - Scalar slab 只覆盖 homogeneous path-integrated analytic operator；没有空间变化 volume coefficient、ordered checkpoints、scattering、slow-light 或 polarization。
 - Scientific capture 是最终 radiance 的整帧内存 readback API，不是稳定的磁盘 container；production sample inspection 是 live process 内的一次性证据，也不是持久 artifact interface。异常 texture representation 只按 WebGPU 数值等价合同处理，不承诺 NaN/subnormal bit preservation。
-- Production inspection 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v1` policy；没有 bounded-region batch、trajectory/checkpoint、event bracket width、Jacobi/parity、独立 high-precision certificate或第二 science-quality GPU policy。Canonical surface/analytic/blackbody 已接纳，但 source edge、critical curve 两侧、higher-order winding 与正负 spin 的连续字段 corpus 尚未闭合；因此路线图的质量基线仍开放。
+- Production inspection 只覆盖一个 sample 与 presentation `gpu-ks-rk4-v2` policy；有序 sample
+  corpus 只是 test-only evidence module，不是 bounded-region production interface。当前仍没有
+  trajectory/checkpoint、event bracket width、独立 high-precision certificate 或第二 science-quality
+  GPU policy。Canonical positive-spin outer source edge 已通过当前 GPU/reference gate，但独立
+  high-precision witness、inner edge、surface/capture boundary、critical curve 两侧、higher-order
+  winding 与正负 spin 的连续字段 corpus 尚未闭合；因此路线图的质量基线仍开放。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。

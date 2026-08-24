@@ -11,6 +11,8 @@ pub use input::{GpuTraceInputError, TraceUniforms};
 pub use inspection::SampleInspectionSlot;
 #[cfg(test)]
 pub use inspection::TraceTermination;
+#[cfg(test)]
+pub use inspection::capture_sample_corpus;
 pub use inspection::{
     SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionError,
     SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide, SampleRetrace,

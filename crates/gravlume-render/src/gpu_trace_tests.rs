@@ -7,7 +7,8 @@ use gravlume_domain::{
     StationaryObserverInput, SurfaceTransport,
 };
 use gravlume_reference::{
-    ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy, Termination, TraceInputId,
+    ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy, Termination, TraceBranchKey,
+    TraceInputId,
 };
 use num_traits::ToPrimitive as _;
 use proptest::prelude::*;
@@ -16,13 +17,13 @@ use crate::{
     gpu_capture::{
         capture_accelerated_trace, capture_accelerated_trace_in_batches,
         capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
-        capture_refined_edge_count, capture_refined_trace, capture_trace, capture_trace_sample,
-        inspect_sample,
+        capture_refined_edge_count, capture_refined_trace, capture_sample_corpus, capture_trace,
+        capture_trace_sample, inspect_sample,
     },
     scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
     trace::{
-        SamplePolarSide, SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination,
-        TraceUniforms,
+        SampleBranchKey, SamplePolarSide, SampleSurfaceEvaluation, SampleTraceOutcome,
+        TraceTermination, TraceUniforms,
     },
 };
 
@@ -651,9 +652,8 @@ fn wgsl_initial_rays_match_cpu_center_corners_and_jitter() {
 }
 
 #[test]
-fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_direction() {
+fn batched_gpu_regular_corpus_matches_reference_observables_in_request_order() {
     let observation = default_observation(7, 5);
-    let capture = capture_trace(&observation);
     let samples = [
         sample(&observation, 0, 0, 0.5, 0.5),
         sample(&observation, 6, 0, 0.5, 0.5),
@@ -662,14 +662,12 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
         sample(&observation, 3, 0, 0.5, 0.5),
         sample(&observation, 3, 2, 0.5, 0.5),
     ];
+    let retraces = capture_sample_corpus(&observation, &samples);
     let oracle = ObservationTracer::baseline_v1();
 
-    for image_sample in samples {
+    assert_eq!(retraces.len(), samples.len());
+    for (image_sample, gpu) in samples.into_iter().zip(retraces) {
         let [pixel_x, pixel_y] = image_sample.pixel();
-        let index = usize::try_from(pixel_y * 7 + pixel_x).expect("test index fits usize");
-        let gpu = capture.records[index];
-        let gpu_termination =
-            TraceTermination::try_from(gpu.metadata[0]).expect("GPU writes a typed termination");
         let reference = oracle
             .trace(
                 ObservationTrace::new(
@@ -681,26 +679,30 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
                 .expect("reference request resolves"),
             )
             .expect("default observation is normalized");
-        let expected_termination = match reference.termination() {
-            Termination::HorizonCrossing => TraceTermination::HorizonCrossing,
-            Termination::Escape => TraceTermination::Escape,
-            other => panic!("regular matrix produced unsupported reference terminal {other:?}"),
+        let (gpu_branch, gpu_direction) = match gpu.outcome() {
+            SampleTraceOutcome::Horizon { branch } => {
+                assert_eq!(reference.termination(), Termination::HorizonCrossing);
+                (branch, None)
+            }
+            SampleTraceOutcome::Escape {
+                branch,
+                unit_direction,
+                ..
+            } => {
+                assert_eq!(reference.termination(), Termination::Escape);
+                (branch, Some(unit_direction.map(f64::from)))
+            }
+            other => panic!("regular corpus produced unsupported GPU terminal {other:?}"),
         };
+        let reference_branch = reference.branch_key();
+        assert_branch_matches(image_sample, gpu_branch, reference_branch);
 
-        assert_eq!(gpu_termination, expected_termination, "{image_sample:?}");
-        assert_eq!(gpu.metadata[1], 0, "{image_sample:?}: failure flags");
-        assert!(gpu.metadata[2] > 0, "{image_sample:?}: step counter");
-
-        if let Some(reference_direction) = reference
+        if let Some((reference_direction, gpu_direction)) = reference
             .terminal()
             .escape_direction()
             .and_then(gravlume_reference::EscapeDirection::xyz)
+            .zip(gpu_direction)
         {
-            let gpu_direction = [
-                f64::from(gpu.source_time[0]),
-                f64::from(gpu.source_time[1]),
-                f64::from(gpu.source_time[2]),
-            ];
             let angular_error = angle_between(reference_direction, gpu_direction);
             assert!(
                 angular_error <= 3.82e-4,
@@ -708,24 +710,32 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             );
         }
 
-        let event_residual = f32::from_bits(gpu.metadata[3]).abs();
+        let diagnostics = gpu.diagnostics();
+        assert_eq!(
+            diagnostics.numerical_flag_bits(),
+            0,
+            "{image_sample:?}: failure flags"
+        );
+        assert!(diagnostics.steps() > 0, "{image_sample:?}: step counter");
+        let event_residual = diagnostics.event_residual().abs();
         assert!(
             event_residual <= 5.0e-3,
             "{image_sample:?}: event residual {event_residual:e}"
         );
 
-        let travel_time_error = (f64::from(gpu.source_time[3]) - reference.travel_time_m()).abs();
+        let gpu_travel_time = diagnostics.coordinate_time_delta_over_m();
+        let travel_time_error = (f64::from(gpu_travel_time) - reference.travel_time_m()).abs();
         assert!(
             travel_time_error <= 1.0e-3,
             "{image_sample:?}: travel-time error {travel_time_error:e}; GPU {}, reference {}; GPU drift {:?}, reference drift {:?}",
-            gpu.source_time[3],
+            gpu_travel_time,
             reference.travel_time_m(),
-            gpu.invariant_drift,
+            diagnostics.maximum_invariant_drift(),
             reference.diagnostics(),
         );
         for (invariant, drift) in ["null", "energy", "angular momentum", "Carter"]
             .into_iter()
-            .zip(gpu.invariant_drift)
+            .zip(diagnostics.maximum_invariant_drift())
         {
             assert!(
                 (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift),
@@ -733,6 +743,33 @@ fn headless_gpu_regular_matrix_matches_reference_termination_and_escape_directio
             );
         }
     }
+}
+
+#[test]
+fn sample_corpus_crosses_a_partial_workgroup_without_reordering_records() {
+    let observation = default_observation(13, 5);
+    let mut samples = Vec::with_capacity(65);
+    for pixel_y in 0..5 {
+        for pixel_x in 0..13 {
+            samples.push(sample(&observation, pixel_x, pixel_y, 0.25, 0.75));
+        }
+    }
+    samples.reverse();
+
+    let retraces = capture_sample_corpus(&observation, &samples);
+
+    assert_eq!(retraces.len(), 65);
+    for index in [0, 63, 64] {
+        let single = inspect_sample(&observation, samples[index]).fresh_retrace();
+        assert_eq!(retraces[index], single, "request index {index}");
+    }
+    let repeated_samples = [samples[64], samples[0], samples[64]];
+    assert_eq!(
+        capture_sample_corpus(&observation, &repeated_samples),
+        vec![retraces[64], retraces[0], retraces[64]],
+        "duplicate requests preserve multiplicity and order"
+    );
+    assert!(capture_sample_corpus(&observation, &[]).is_empty());
 }
 
 #[test]
@@ -1050,4 +1087,28 @@ fn angle_between(left: [f64; 3], right: [f64; 3]) -> f64 {
         .sum::<f64>()
         .sqrt();
     cross_length.atan2(dot)
+}
+
+fn assert_branch_matches(sample: ImageSample, gpu: SampleBranchKey, reference: TraceBranchKey) {
+    let reference_polar_side = match reference.initial_polar_side() {
+        PolarSide::Negative => SamplePolarSide::Negative,
+        PolarSide::Equatorial => SamplePolarSide::Equatorial,
+        PolarSide::Positive => SamplePolarSide::Positive,
+    };
+    assert_eq!(gpu.initial_polar_side(), reference_polar_side, "{sample:?}");
+    assert_eq!(
+        gpu.radial_turnings(),
+        reference.radial_turnings(),
+        "{sample:?}"
+    );
+    assert_eq!(
+        gpu.equatorial_crossings(),
+        reference.equatorial_crossings(),
+        "{sample:?}"
+    );
+    assert_eq!(
+        gpu.azimuth_winding(),
+        reference.azimuth_winding(),
+        "{sample:?}"
+    );
 }

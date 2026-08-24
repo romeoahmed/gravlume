@@ -1,21 +1,25 @@
 use approx::assert_abs_diff_eq;
 use gravlume_domain::{
-    EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, Observation,
+    EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, ImageSample, Observation,
     SurfaceTransport,
 };
 use gravlume_reference::{
-    FixtureDocument, ObservationTrace, ObservationTracer, PolarSide, ReferencePolicy,
-    SurfaceFootprintEstimate, SurfaceParity, Termination, TraceInputId,
+    FixtureDocument, ObservationTrace, ObservationTracer, PolarSide, ReferenceComparison,
+    ReferenceOutcome, ReferencePolicy, SurfaceFootprintEstimate, SurfaceParity, Termination,
+    TraceInputId,
 };
 
 use super::{decode_f16, default_observation, sample, transfer_profile_extent};
 use crate::{
     GpuTraceInputError,
     gpu_capture::{
-        capture_surface_footprint_sample, capture_surface_transport_case, capture_trace,
-        capture_trace_sample, inspect_sample,
+        capture_sample_corpus, capture_surface_footprint_sample, capture_surface_transport_case,
+        capture_trace, capture_trace_sample, inspect_sample,
     },
-    trace::{SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms},
+    scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
+    trace::{
+        SampleRetrace, SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms,
+    },
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
@@ -96,6 +100,161 @@ fn bounded_blackbody_inspection_returns_f32_scene_linear_bands() {
     for (actual, expected) in actual.into_iter().zip(expected) {
         assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
     }
+}
+
+#[test]
+fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
+    const SURFACE_OBSERVABLE: &str =
+        include_str!("../../../gravlume-reference/fixtures/v2/kerr-surface-observable.toml");
+    let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+        .expect("repository surface fixture parses")
+        .into_surface_observation()
+        .expect("fixture is a surface observation");
+    let observation = fixture.observation();
+    let samples = (12..=20)
+        .map(|pixel_y| sample(observation, 640, pixel_y, 0.5, 0.5))
+        .collect::<Vec<_>>();
+    let retraces = capture_sample_corpus(observation, &samples);
+    let oracle = ObservationTracer::baseline_v1();
+    let mut escape_count = 0;
+    let mut surface_count = 0;
+
+    assert_eq!(retraces.len(), samples.len());
+    for (image_sample, gpu) in samples.into_iter().zip(retraces) {
+        let reference = trace_converged_surface_edge(oracle, observation, image_sample);
+        match reference.termination() {
+            Termination::Escape => escape_count += 1,
+            Termination::EquatorialSurface => surface_count += 1,
+            terminal => panic!("{image_sample:?}: unexpected reference terminal {terminal:?}"),
+        }
+        assert_surface_edge_sample_matches(image_sample, &reference, gpu);
+    }
+
+    assert!(escape_count > 0, "corpus does not bracket the source edge");
+    assert!(surface_count > 0, "corpus does not enter the source");
+}
+
+fn trace_converged_surface_edge(
+    oracle: ObservationTracer,
+    observation: &Observation,
+    image_sample: ImageSample,
+) -> ReferenceOutcome {
+    let [pixel_x, pixel_y] = image_sample.pixel();
+    let input_id = TraceInputId::new(format!("surface-edge-{pixel_x}-{pixel_y}"));
+    let trace = |policy| {
+        oracle
+            .trace(
+                ObservationTrace::new(input_id.clone(), observation, image_sample, policy)
+                    .expect("surface-edge trace request resolves"),
+            )
+            .expect("surface-edge reference trace succeeds")
+    };
+    let reference = trace(ReferencePolicy::regular_v1());
+    let strict = trace(ReferencePolicy::strict_v1());
+    let convergence = ReferenceComparison::baseline_v1(&reference, &strict)
+        .expect("regular and strict requests have the same canonical input");
+    assert!(
+        convergence.is_accepted(),
+        "{image_sample:?}: reference convergence issues {:?}",
+        convergence.issues()
+    );
+    reference
+}
+
+fn assert_surface_edge_sample_matches(
+    image_sample: ImageSample,
+    reference: &ReferenceOutcome,
+    gpu: SampleRetrace,
+) {
+    let gpu_branch = match (reference.termination(), gpu.outcome()) {
+        (
+            Termination::Escape,
+            SampleTraceOutcome::Escape {
+                branch,
+                unit_direction,
+                ..
+            },
+        ) => {
+            let reference_direction = reference
+                .terminal()
+                .escape_direction()
+                .and_then(gravlume_reference::EscapeDirection::xyz)
+                .expect("reference escape direction resolves");
+            let angular_error =
+                super::angle_between(reference_direction, unit_direction.map(f64::from));
+            assert!(
+                angular_error <= 3.82e-4,
+                "{image_sample:?}: escape direction error {angular_error:e} rad"
+            );
+            branch
+        }
+        (
+            Termination::EquatorialSurface,
+            SampleTraceOutcome::EquatorialSurface {
+                branch,
+                radius_over_m,
+                azimuth_radians,
+                frequency_ratio,
+                evaluation,
+                ..
+            },
+        ) => {
+            let observable = reference
+                .terminal()
+                .surface_observable()
+                .expect("reference surface observable resolves");
+            let anchor = observable.source_anchor();
+            assert_abs_diff_eq!(
+                f64::from(radius_over_m),
+                anchor.radius_m(),
+                epsilon = 5.0e-3
+            );
+            let azimuth_error = (f64::from(azimuth_radians) - anchor.azimuth_rad())
+                .sin()
+                .atan2((f64::from(azimuth_radians) - anchor.azimuth_rad()).cos());
+            assert_abs_diff_eq!(azimuth_error, 0.0, epsilon = 3.82e-4);
+            let expected_ratio = observable.frequency_ratio().value();
+            assert_abs_diff_eq!(
+                f64::from(frequency_ratio),
+                expected_ratio,
+                epsilon = 2.0e-3 * expected_ratio
+            );
+            let SampleSurfaceEvaluation::Radiance(actual) = evaluation else {
+                panic!("{image_sample:?}: surface radiance must be finite");
+            };
+            let expected_intensity = observable.observed_bolometric_intensity();
+            for channel in actual {
+                assert_abs_diff_eq!(
+                    f64::from(channel),
+                    expected_intensity,
+                    epsilon = 2.0e-3 * expected_intensity
+                );
+            }
+            branch
+        }
+        (expected, actual) => {
+            panic!("{image_sample:?}: CPU {expected:?} disagrees with GPU {actual:?}")
+        }
+    };
+    super::assert_branch_matches(image_sample, gpu_branch, reference.branch_key());
+
+    let diagnostics = gpu.diagnostics();
+    assert_eq!(diagnostics.numerical_flag_bits(), 0, "{image_sample:?}");
+    assert!(diagnostics.steps() > 0, "{image_sample:?}");
+    assert_abs_diff_eq!(
+        f64::from(diagnostics.coordinate_time_delta_over_m()),
+        reference.travel_time_m(),
+        epsilon = 1.0e-3
+    );
+    assert!(diagnostics.event_residual().abs() <= 5.0e-3);
+    assert!(
+        diagnostics
+            .maximum_invariant_drift()
+            .into_iter()
+            .all(|drift| (0.0..=INVARIANT_RELATIVE_DRIFT_LIMIT).contains(&drift)),
+        "{image_sample:?}: invariant drift {:?}",
+        diagnostics.maximum_invariant_drift()
+    );
 }
 
 #[test]

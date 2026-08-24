@@ -309,7 +309,7 @@ fn trace_pixel_with_radial_capture_at(
             vec4<u32>(0u),
         );
     }
-    return trace_initialized(initial, invariants);
+    return trace_initialized(initial, invariants, trace_uniforms.step_policy.xyz);
 }
 
 fn trace_pixel_with_radial_capture(

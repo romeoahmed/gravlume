@@ -169,6 +169,43 @@ fn decode_record(
     ticket: SampleInspectionTicket,
     published_texel: ScientificTexel,
 ) -> Result<SampleInspection, SampleInspectionError> {
+    let fresh_retrace = decode_retrace(raw, channel_model, binary32_subpixel(ticket.sample()))?;
+    Ok(SampleInspection {
+        published_texel,
+        fresh_retrace,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn decode_corpus_readback(
+    bytes: &[u8],
+    channel_model: Option<ScientificChannelModel>,
+    samples: &[ImageSample],
+) -> Result<Vec<SampleRetrace>, SampleInspectionError> {
+    let record_size = size_of::<GpuInspectionRecord>();
+    let expected_size = record_size
+        .checked_mul(samples.len())
+        .ok_or(SampleInspectionError::InvalidReadback)?;
+    if bytes.len() != expected_size {
+        return Err(SampleInspectionError::InvalidReadback);
+    }
+
+    bytes
+        .chunks_exact(record_size)
+        .zip(samples)
+        .map(|(record_bytes, sample)| {
+            let record = bytemuck::try_pod_read_unaligned(record_bytes)
+                .map_err(|_| SampleInspectionError::InvalidReadback)?;
+            decode_retrace(record, channel_model, binary32_subpixel(*sample))
+        })
+        .collect()
+}
+
+fn decode_retrace(
+    raw: GpuInspectionRecord,
+    channel_model: Option<ScientificChannelModel>,
+    effective_subpixel: [f32; 2],
+) -> Result<SampleRetrace, SampleInspectionError> {
     if !raw
         .source_time
         .iter()
@@ -209,19 +246,16 @@ fn decode_record(
         raw.scene_value,
         channel_model,
     )?;
-    Ok(SampleInspection {
-        published_texel,
-        fresh_retrace: SampleRetrace {
-            effective_subpixel: binary32_subpixel(ticket.sample()),
-            outcome,
-            diagnostics: SampleTraceDiagnostics {
-                coordinate_time_delta_over_m: raw.source_time[3],
-                event_candidates,
-                event_residual: raw.event_diagnostics[0],
-                steps: raw.metadata[2],
-                numerical_flags,
-                maximum_invariant_drift: raw.maximum_invariant_drift,
-            },
+    Ok(SampleRetrace {
+        effective_subpixel,
+        outcome,
+        diagnostics: SampleTraceDiagnostics {
+            coordinate_time_delta_over_m: raw.source_time[3],
+            event_candidates,
+            event_residual: raw.event_diagnostics[0],
+            steps: raw.metadata[2],
+            numerical_flags,
+            maximum_invariant_drift: raw.maximum_invariant_drift,
         },
     })
 }

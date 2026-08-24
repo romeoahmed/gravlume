@@ -27,21 +27,24 @@ var<storage, read_write> inspected_sample: SampleInspectionRecord;
 @group(0) @binding(9)
 var<uniform> inspection_request: SampleInspectionRequest;
 
+fn encode_inspected_sample(sample: GeometricSample, value: vec4<f32>) -> SampleInspectionRecord {
+    return SampleInspectionRecord(
+        vec4<u32>(
+            sample.termination,
+            sample.flags,
+            sample.steps,
+            sample.event_candidates,
+        ),
+        sample.branch_key,
+        vec4<f32>(sample.source_coordinates, sample.travel_time),
+        value,
+        vec4<f32>(sample.event_residual, 0.0, 0.0, 0.0),
+        sample.maximum_drift,
+    );
+}
+
 fn store_inspected_sample(sample: GeometricSample, value: vec4<f32>) {
-    inspected_sample.metadata = vec4<u32>(
-        sample.termination,
-        sample.flags,
-        sample.steps,
-        sample.event_candidates,
-    );
-    inspected_sample.branch_key = sample.branch_key;
-    inspected_sample.source_time = vec4<f32>(
-        sample.source_coordinates,
-        sample.travel_time,
-    );
-    inspected_sample.scene_value = value;
-    inspected_sample.event_diagnostics = vec4<f32>(sample.event_residual, 0.0, 0.0, 0.0);
-    inspected_sample.maximum_invariant_drift = sample.maximum_drift;
+    inspected_sample = encode_inspected_sample(sample, value);
 }
 
 @compute @workgroup_size(TRACE_WORKGROUP_AXIS, TRACE_WORKGROUP_AXIS, 1)
