@@ -1,6 +1,7 @@
+use approx::assert_abs_diff_eq;
 use gravlume_reference::{
-    FixtureDocument, ObservationTracer, ReferenceComparison, ReferencePolicy,
-    SurfaceFootprintError, SurfaceFootprintEstimate, SurfaceParity,
+    FixtureDocument, ObservationTracer, PolarSide, ReferenceComparison, ReferencePolicy,
+    SurfaceFootprintError, SurfaceFootprintEstimate, SurfaceParity, Termination,
 };
 use proptest::prelude::*;
 
@@ -38,6 +39,63 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
     assert!(fixture.accepts(&regular));
     assert!(fixture.accepts(&strict));
     assert!(comparison.is_accepted(), "{:?}", comparison.issues());
+}
+
+#[test]
+fn canonical_surface_matches_the_independent_bl_mino_witness() {
+    // Generated at 120/180 decimal digits by the independent separated-chart
+    // witness in docs/research/scripts/verify_bl_mino_surface_witness.py.
+    const SOURCE_RADIUS_M: f64 = 19.650_678_984_603_292;
+    const SOURCE_AZIMUTH_RAD: f64 = 3.087_156_262_423_669;
+    const FREQUENCY_RATIO: f64 = 0.953_264_138_194_622_9;
+    const TRAVEL_TIME_M: f64 = 54.902_474_247_630_05;
+    const EMITTED_INTENSITY: f64 = 0.028_465_647_567_239_85;
+    const OBSERVED_INTENSITY: f64 = 0.023_505_748_696_197_13;
+
+    let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+        .expect("repository surface fixture parses")
+        .into_surface_observation()
+        .expect("fixture is a surface observation");
+
+    for policy in [ReferencePolicy::regular_v1(), ReferencePolicy::strict_v1()] {
+        let outcome = ObservationTracer::baseline_v1()
+            .trace(
+                fixture
+                    .trace_request(policy)
+                    .expect("fixture sample resolves through its observation"),
+            )
+            .expect("canonical surface source is valid");
+        assert_eq!(outcome.termination(), Termination::EquatorialSurface);
+        let branch = outcome.branch_key();
+        assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
+        assert_eq!(branch.radial_turnings(), 1);
+        assert_eq!(branch.equatorial_crossings(), 0);
+        assert_eq!(branch.azimuth_winding(), 0);
+
+        let observable = outcome
+            .terminal()
+            .surface_observable()
+            .expect("canonical trace carries its surface observable");
+        let anchor = observable.source_anchor();
+        assert_abs_diff_eq!(anchor.radius_m(), SOURCE_RADIUS_M, epsilon = 2.0e-9);
+        assert_abs_diff_eq!(anchor.azimuth_rad(), SOURCE_AZIMUTH_RAD, epsilon = 1.0e-10);
+        assert_abs_diff_eq!(
+            observable.frequency_ratio().value(),
+            FREQUENCY_RATIO,
+            epsilon = 2.0e-9 * FREQUENCY_RATIO
+        );
+        assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
+        assert_abs_diff_eq!(
+            observable.emitted_bolometric_intensity(),
+            EMITTED_INTENSITY,
+            epsilon = 1.0e-12
+        );
+        assert_abs_diff_eq!(
+            observable.observed_bolometric_intensity(),
+            OBSERVED_INTENSITY,
+            epsilon = 1.0e-12
+        );
+    }
 }
 
 #[test]
