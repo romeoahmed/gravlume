@@ -2,16 +2,9 @@
 
 本文只定义尚未完成工作的依赖顺序、交付物、退出条件和非目标，不维护当前实现细节。当前能力以 [Reference 证据](reference-implementation.md)与 [GPU 证据](gpu-renderer.md)为准，连续模型和误差预算以[数学物理](physics.md)与[验证合同](validation.md)为准，实验历史只保留在[研究记录](research/README.md)。
 
-## 已完成的前置
-
-- `surface-transport-v1` 已闭合具名 equatorial source 的 Source Anchor、Frequency Ratio、vacuum/homogeneous-slab transport 与固定 observer-frame bands；ordinary-region branch/footprint 另有 CPU/GPU 证据。
-- Renderer 已有固定单槽 production inspection 和 desktop consumer，并分开返回 actual published texel 与 fresh full-KS evidence；它仍是 process-local 单样本能力，不是持久 artifact 或 science-quality policy。
-- Test-only ordered batch 已复用同一 private inspection kernel，并以 canonical positive-spin outer source-edge seed 验证 CPU regular/strict convergence 与 fresh GPU fields；它没有独立 high-precision artifact，不能扩大科学支持域。
-- 默认画面保持 invocation-local transport、完整帧原子发布和有界资源；当前没有 production semantic map、reconstruction、temporal reuse 或全帧 observation plane。
-
-这些条目只确定路线的起点，适用域和限制不得从本页外推；见两份实现证据。
-
 ## 依赖顺序
+
+下图从下一项未闭合工作开始，不把已实现能力重复列为里程碑。
 
 ```text
 连续字段 corpus + 独立证据
