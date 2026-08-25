@@ -161,11 +161,15 @@ mino_constraint_residual=1.44183089292e-180
 chart_primitive_residual=7.22975959531e-181
 ```
 
+`compute_canonical_surface_witness` 的外部 seam 还要求两个 pixel coordinate 的 runtime type 精确为 `int`，先拒绝 `bool`、float 数值别名及其他对象，再检查 viewport 与 canonical sample。这样 `(640.0,16.0)` 不会因 Python 数值相等规则绕过整数 sample interface。
+
 `polyroots` 的官方合同指出 multiple/ill-conditioned roots 需要额外 precision 与 convergence study；脚本因此把 root classification、simple-root derivative 和完整 precision doubling 分开保存，而不把一次 `polyroots` return 当作充分证明。[mpmath polynomial roots](https://mpmath.org/doc/current/calculus/polynomials.html) `findroot(..., verify=True)` 只验证求得点的 residual，仍不替代 bracket/root-topology 证据。[mpmath root finding](https://mpmath.org/doc/current/calculus/optimization.html)
 
 ## 7. Test consumer 与证据链
 
 [`surface_observable_tests.rs`](../../crates/gravlume-reference/tests/surface_observable_tests.rs) 将上述 expectation 舍入到 binary64，并要求 `reference-regular-v1` 与 `reference-strict-v1` 同时满足 discrete identity、source、frequency、KS time 和 intensity gates。Source Anchor 只应用[验证合同定义的二维 wrapped surface-distance gate](../validation.md#52-reference-agreement)，不把 radial/azimuth component tolerance 分开后同时放行。它不改变 v2 fixture 的 schema、profile、producer 字段或旧 expected。
+
+Research module test 保留具名 deterministic oracle，并用 Hypothesis 性质覆盖非 canonical 整数 sample、非整数 coordinate、非法 precision、离散 identity 变异与 residual certification boundary；不再为 viewport 内外各保存一个重复样例，也不重复断言成功构造已经保证的 post-init 条件。Hypothesis 的 `@given` 可直接由 unittest 收集，并负责生成与缩减反例（[Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/settings.html#hypothesis.given)、[unittest compatibility](https://hypothesis.readthedocs.io/en/latest/compatibility.html#unittest)）。具名 `mpf` observable 使用显式 `rel_eps=0`、`abs_eps=gate` 的 [`mpmath.almosteq`](https://mpmath.org/doc/1.3.0/general.html#almosteq)，不会退回 working-precision 默认容差。
 
 Renderer 已有 canonical v2 的 fresh binary32 fields 与最终 `RGBA16F` gate。因此当前纵向链是：
 
@@ -197,6 +201,7 @@ independent BL/Mino 120/180 digits
 - source crossing 不在 `[6M,20M]`，或 horizon/escape/singularity/event competition 可能更早；
 - axis、near-axis、extreme/near-extreme、multiple/near-multiple roots；
 - precision doubling 不能保留至少 80 个 normalized decimal digits，或任一 normalized delta 非 finite；
+- pixel coordinate 的 runtime type 不是精确 `int`，或整数 sample 不是 `(640,16)`；
 - terminal/branch 的 runtime type 或 value 不精确匹配本 canonical case；
 - 任一连续字段非 finite、source 越出 surface domain、物理正号非法，或 null/Mino/chart primitive residual 达不到 $p-15$ 位。
 
@@ -231,6 +236,7 @@ cargo test -p gravlume-reference --test surface_observable_tests --locked \
 - [Carter, *Global Structure of the Kerr Family of Gravitational Fields* (1968)](https://doi.org/10.1103/PhysRev.174.1559)：Hamilton–Jacobi separability、第四常数与 quadratures；
 - [Mino, *Perturbative Approach to an Orbital Evolution around a Supermassive Black Hole* (2003)](https://doi.org/10.1103/PhysRevD.67.084027)：Mino parameter；
 - [Gralla & Lupsasca, *Null geodesics of the Kerr exterior* (2020)](https://doi.org/10.1103/PhysRevD.101.044032)：real root topology、turning segments 与 Kerr null-geodesic integrals；
-- [mpmath 1.3 quadrature](https://mpmath.org/doc/current/calculus/integration.html)、[root finding](https://mpmath.org/doc/current/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/current/calculus/polynomials.html)与[precision/finite utilities](https://mpmath.org/doc/1.3.0/general.html)：本 research tool 的 arbitrary-precision numerical contracts；
+- [mpmath 1.3 quadrature](https://mpmath.org/doc/current/calculus/integration.html)、[root finding](https://mpmath.org/doc/current/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/current/calculus/polynomials.html)与[precision/finite/almosteq utilities](https://mpmath.org/doc/1.3.0/general.html)：本 research tool 的 arbitrary-precision numerical contracts；
+- [Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/settings.html#hypothesis.given)与[unittest compatibility](https://hypothesis.readthedocs.io/en/latest/compatibility.html#unittest)：research boundary 的生成式性质测试与反例缩减；
 - [Python dataclasses](https://docs.python.org/3/library/dataclasses.html#post-init-processing)与[value comparisons](https://docs.python.org/3/reference/expressions.html#value-comparisons)：认证对象构造不变量与 NaN rejection；
 - Rust [`f64::midpoint`](https://doc.rust-lang.org/stable/std/primitive.f64.html#method.midpoint)与 [`f64::hypot`](https://doc.rust-lang.org/stable/std/primitive.f64.html#method.hypot)：binary64 Source Anchor test 的 midpoint 与 Euclidean distance primitive。

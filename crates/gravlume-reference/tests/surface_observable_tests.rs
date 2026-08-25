@@ -84,10 +84,7 @@ fn canonical_surface_matches_the_independent_bl_mino_witness() {
             (anchor.azimuth_rad() - SOURCE_AZIMUTH_RAD + PI).rem_euclid(TAU) - PI;
         let mean_radius = anchor.radius_m().midpoint(SOURCE_RADIUS_M);
         let source_anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
-        assert!(
-            source_anchor_distance_m <= 2.0e-9,
-            "source anchor distance {source_anchor_distance_m:e} M exceeds the witness budget"
-        );
+        assert_abs_diff_eq!(source_anchor_distance_m, 0.0, epsilon = 2.0e-9);
         assert_abs_diff_eq!(
             observable.frequency_ratio().value(),
             FREQUENCY_RATIO,
