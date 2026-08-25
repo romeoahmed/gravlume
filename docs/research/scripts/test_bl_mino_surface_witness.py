@@ -45,6 +45,18 @@ class CanonicalSurfaceWitnessTests(unittest.TestCase):
         self.assertEqual(self.witness.polar_turnings, 1)
         self.assertEqual(self.witness.equatorial_crossings_before_terminal, 0)
         self.assertEqual(self.witness.azimuth_winding, 0)
+        invalid_identity_fields = (
+            ("terminal", "escape"),
+            ("initial_polar_side", "negative"),
+            ("radial_turnings", True),
+            ("polar_turnings", 1.0),
+            ("equatorial_crossings_before_terminal", -1),
+            ("azimuth_winding", 1),
+        )
+        for field, invalid_value in invalid_identity_fields:
+            with self.subTest(field=field, invalid_value=invalid_value):
+                with self.assertRaises(UnsupportedWitness):
+                    replace(self.witness, **{field: invalid_value})
 
     def test_recovers_transfer_and_phase_observables(self) -> None:
         self.assertLess(

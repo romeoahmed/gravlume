@@ -123,15 +123,15 @@ Chart shift 只依赖 endpoints；radial turning 的往返部分精确抵消。�
 
 ## 6. 120/180 位结果
 
-锁定环境为 Python 3.14.7、mpmath 1.3.0；依赖以 [`uv.lock`](scripts/uv.lock) 为准。`SurfaceWitness` 是认证边界，而不是原始数值容器：生成的每个实例都通过 `__post_init__` 要求所有连续字段为 real finite、terminal source 位于 $[6M,20M]$、具物理正号的 observable/conditioning 为正，并要求三个 normalized equation residual 满足
+锁定环境为 Python 3.14.7、mpmath 1.3.0；依赖以 [`uv.lock`](scripts/uv.lock) 为准。`SurfaceWitness` 是认证边界，而不是原始数值容器：生成的每个实例都通过 `__post_init__` 要求 terminal、initial side、turning/crossing counts 与 winding 的 runtime type/value 精确等于本 case 的 canonical discrete identity；所有连续字段为 real finite；terminal source 位于 $[6M,20M]$；具物理正号的 observable/conditioning 为正；并要求三个 normalized equation residual 满足
 
 \[
 \rho < 10^{-(p-15)},
 \]
 
-其中 $p$ 是本次 working decimal digits，15 位作为 guard。任何检查失败都直接返回 `UnsupportedWitness`，不会生成 certificate 或打印 `RESULT=PASS`。mpmath 官方合同说明 `workdps` 只临时改变并恢复 decimal precision；finite classification 必须显式使用 `isfinite`（[mpmath precision context 与 `isfinite`](https://mpmath.org/doc/1.3.0/general.html)）。Python 对 NaN 的有序比较恒为 false，因此不能让 `max` 或普通阈值比较隐式承担 NaN 检查（[Python value comparisons](https://docs.python.org/3/reference/expressions.html#value-comparisons)）。不可变 dataclass 的 generated `__init__` 会调用 `__post_init__`，`dataclasses.replace` 也保持这一不变量（[Python dataclasses](https://docs.python.org/3/library/dataclasses.html#post-init-processing)）。
+其中 $p$ 是本次 working decimal digits，15 位作为 guard。任何检查失败都直接返回 `UnsupportedWitness`，不会生成 certificate 或打印 `RESULT=PASS`。mpmath 官方合同说明 `workdps` 只临时改变并恢复 decimal precision；finite classification 必须显式使用 `isfinite`（[mpmath precision context 与 `isfinite`](https://mpmath.org/doc/1.3.0/general.html)）。Python 对 NaN 的有序比较恒为 false，因此不能让 `max` 或普通阈值比较隐式承担 NaN 检查（[Python value comparisons](https://docs.python.org/3/reference/expressions.html#value-comparisons)）。不可变 dataclass 的 generated `__init__` 会调用 `__post_init__`，`dataclasses.replace` 也保持这一不变量；但 dataclass 不执行 annotation 的 runtime type check（[Python dataclasses](https://docs.python.org/3/library/dataclasses.html#dataclasses.dataclass)），且 `bool` 是 `int` 的子类（[Python boolean type](https://docs.python.org/3/library/stdtypes.html#boolean-type-bool)），所以离散 identity 同时检查 exact type 与 value，不能只依赖 `==`。
 
-120 与 180 decimal-digit 两次完整重算再比较 source/transfer/phase、constants of motion 及 radial/polar turning derivatives；所有 normalized delta 先要求 finite。最大值为：
+120 与 180 decimal-digit 两次完整重算分别先通过同一个 exact canonical identity boundary，再比较 source/transfer/phase、constants of motion 及 radial/polar turning derivatives；所有 normalized delta 先要求 finite。最大值为：
 
 ```text
 2.84198169412e-116
@@ -197,6 +197,7 @@ independent BL/Mino 120/180 digits
 - source crossing 不在 `[6M,20M]`，或 horizon/escape/singularity/event competition 可能更早；
 - axis、near-axis、extreme/near-extreme、multiple/near-multiple roots；
 - precision doubling 不能保留至少 80 个 normalized decimal digits，或任一 normalized delta 非 finite；
+- terminal/branch 的 runtime type 或 value 不精确匹配本 canonical case；
 - 任一连续字段非 finite、source 越出 surface domain、物理正号非法，或 null/Mino/chart primitive residual 达不到 $p-15$ 位。
 
 扩展一个新 stratum 的恢复条件是：从规范十进制输入独立重建，保存 exact discrete identity，给出 root/event signed margin，至少做 120/180 位重算，并让 regular/strict 与 GPU（若声称 GPU 支持）分别通过自己的 observable gate。不能通过放宽一个 RGB max error、只看 invariant drift 或复制 Cartesian KS equations 进入 witness 来恢复。
