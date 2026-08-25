@@ -33,9 +33,10 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - horizon、escape、equatorial surface、singularity guard、step exhaustion 与 same-step ambiguity；
 - 默认 Kerr Observation 的非临界收敛、negative-affine turning localization 与 batch ordering。
 - v2 equatorial prograde circular source 的 KS chart anchor 逆变换、timelike allowed domain、regular/strict Frequency Ratio、travel time 与 $g^4I_{\rm em}$。
-- canonical v2 `(640,16,0.5,0.5)` 另由不导入 Rust trace 的 separated BL/Mino research witness
-  重建；独立 path identity 与 120/180 位复算约束 regular/strict source、frequency、KS coordinate time
-  与 radiance。方法、数字与适用域见[独立 BL/Mino witness](research/high-precision-bl-mino-witness.md)。
+- canonical v2 `(640,16)` 与 outer-edge 相邻 `(640,13)/(640,14)` center-subpixel pair 另由不导入
+  Rust trace 的 separated BL/Mino research witness 重建；120/180 位复算分别约束 exact path identity、
+  Escape position/direction/time/event order 与 surface source/frequency/time/radiance。方法、数字与适用域见
+  [独立 BL/Mino witness](research/high-precision-bl-mino-witness.md)。
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
@@ -50,9 +51,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - published Kerr/Kerr–Newman trajectory、独立 chart/state representation、near-axis Killing-tensor overlap 与更广参数扫描尚未闭合；
 - finite escape sphere 是数值边界，不能解释为无穷远精确 observable；
 - renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
-- CPU surface geometry 仍以一个默认 Kerr image neighborhood 为主；只有 canonical v2 sample 已有独立
-  high-precision terminal witness。更广 Kerr–Newman 参数、retrograde、branch-discontinuity/critical、
-  多绕转与独立 high-precision corpus/Jacobi oracle 尚未闭合；
+- CPU surface geometry 仍以一个默认 Kerr image neighborhood 为主；只有 canonical v2 与一对相邻
+  outer-edge sample 有独立 high-precision terminal witness。其余 edge stencil、更广 Kerr–Newman 参数、
+  retrograde、branch-discontinuity/critical、多绕转与独立 artifact/Jacobi oracle 尚未闭合；
 - 当前 slab 是 terminal analytic operator，不沿 volume ray 积分变化的 invariant coefficients；它不能
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。
