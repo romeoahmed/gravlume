@@ -119,6 +119,22 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
     assert_eq!(retraces.len(), samples.len());
     for (image_sample, gpu) in samples.into_iter().zip(retraces) {
         let reference = trace_converged_surface_edge(oracle, observation, image_sample);
+        let [_, pixel_y] = image_sample.pixel();
+        match pixel_y {
+            // The adjacent pair is independently certified by the separated
+            // BL/Mino witness in docs/research/scripts.
+            13 => {
+                assert_eq!(reference.termination(), Termination::Escape);
+                assert_eq!(reference.branch_key().radial_turnings(), 1);
+                assert_eq!(reference.branch_key().equatorial_crossings(), 1);
+            }
+            14 => {
+                assert_eq!(reference.termination(), Termination::EquatorialSurface);
+                assert_eq!(reference.branch_key().radial_turnings(), 1);
+                assert_eq!(reference.branch_key().equatorial_crossings(), 0);
+            }
+            _ => {}
+        }
         match reference.termination() {
             Termination::Escape => escape_count += 1,
             Termination::EquatorialSurface => surface_count += 1,
