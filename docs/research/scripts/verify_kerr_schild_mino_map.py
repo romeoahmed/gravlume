@@ -10,7 +10,7 @@ from __future__ import annotations
 import platform
 import random
 from dataclasses import dataclass
-from enum import IntEnum
+from enum import Enum
 
 import sympy as sp
 from sympy_checks import (
@@ -26,14 +26,19 @@ from sympy_checks import (
 SEED = 0x4B534D53  # ASCII-ish "KSMS"
 PRECISION_DIGITS = 180
 BOUNDARY_TOLERANCE = sp.Rational(1, 10**80)
+RANDOM_FRACTION_BITS = 64
 
 
-class Chart(IntEnum):
+class Chart(Enum):
     INGOING = 1
     OUTGOING = -1
 
+    @property
+    def branch(self) -> int:
+        return self.value
 
-@dataclass(frozen=True)
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BoundaryCase:
     name: str
     spin: sp.Expr
@@ -41,7 +46,7 @@ class BoundaryCase:
     sin_theta_squared: sp.Expr
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BoundaryProbe:
     state_symbols: tuple[sp.Symbol, ...]
     duality_left: tuple[sp.Expr, ...]
@@ -50,7 +55,7 @@ class BoundaryProbe:
     affine_mino_right: tuple[sp.Expr, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BoundaryResult:
     sin_theta_squared: sp.Expr
     absolute_delta: sp.Expr
@@ -60,7 +65,7 @@ class BoundaryResult:
     mino_residual: sp.Expr
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Geometry:
     mass: sp.Symbol
     radius: sp.Symbol
@@ -99,7 +104,7 @@ def build_geometry() -> Geometry:
     jacobians: dict[Chart, sp.MatrixBase] = {}
     pullbacks: dict[Chart, sp.MatrixBase] = {}
     for chart in Chart:
-        branch = int(chart)
+        branch = chart.branch
         # a is always the physical BL spin. The oblate spatial twist is s*a.
         flat_metric = sp.Matrix(
             [
@@ -231,7 +236,7 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
     spheroidal_tangent = sp.Matrix([vr, vtheta, vazimuth])
 
     for chart in Chart:
-        branch = int(chart)
+        branch = chart.branch
         chart_spin = branch * spin
         x = (radius * cos_phi - chart_spin * sin_phi) * sin_theta
         y = (radius * sin_phi + chart_spin * cos_phi) * sin_theta
@@ -329,7 +334,7 @@ def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
     covector_ks = sp.Matrix([pt, pr, ptheta, pphi])
 
     for chart in Chart:
-        branch = int(chart)
+        branch = chart.branch
         jacobian = geometry.jacobians[chart]
         tangent_ks = jacobian * tangent_bl
         covector_bl = jacobian.T * covector_ks
@@ -370,7 +375,7 @@ def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class MinoSystem:
     energy: sp.Symbol
     impact: sp.Symbol
@@ -469,36 +474,64 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
     )
 
 
-def random_rational(rng: random.Random, low: float, high: float) -> sp.Rational:
-    value = low + (high - low) * rng.random()
-    return sp.Rational(f"{value:.17g}")
+def random_rational(
+    rng: random.Random,
+    lower: sp.Rational,
+    upper: sp.Rational,
+) -> sp.Rational:
+    """Draw an exact dyadic rational without passing through binary64."""
+
+    unit = sp.Rational(rng.getrandbits(RANDOM_FRACTION_BITS), 2**RANDOM_FRACTION_BITS)
+    return lower + (upper - lower) * unit
 
 
 def build_boundary_cases(rng: random.Random) -> tuple[BoundaryCase, ...]:
     ten = sp.Integer(10)
 
-    axis_spin = random_rational(rng, 0.65, 0.85)
-    axis_radius = random_rational(rng, 3.0, 9.0)
-    axis_u = (1 + random_rational(rng, 0.0, 1.0)) / ten**70
+    axis_spin = random_rational(rng, sp.Rational(13, 20), sp.Rational(17, 20))
+    axis_radius = random_rational(rng, sp.Integer(3), sp.Integer(9))
+    axis_u = (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**70
 
-    horizon_spin = random_rational(rng, 0.65, 0.85)
+    horizon_spin = random_rational(
+        rng,
+        sp.Rational(13, 20),
+        sp.Rational(17, 20),
+    )
     horizon_plus = 1 + sp.sqrt(1 - horizon_spin**2)
-    horizon_radius = horizon_plus + (1 + random_rational(rng, 0.0, 1.0)) / ten**60
-    horizon_u = random_rational(rng, 0.2, 0.8)
+    horizon_radius = (
+        horizon_plus
+        + (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**60
+    )
+    horizon_u = random_rational(rng, sp.Rational(1, 5), sp.Rational(4, 5))
 
-    extremal_spin = 1 - (1 + random_rational(rng, 0.0, 1.0)) / ten**60
+    extremal_spin = (
+        1 - (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**60
+    )
     extremal_plus = 1 + sp.sqrt(1 - extremal_spin**2)
-    extremal_radius = extremal_plus + (1 + random_rational(rng, 0.0, 1.0)) / ten**50
-    extremal_u = random_rational(rng, 0.2, 0.8)
+    extremal_radius = (
+        extremal_plus
+        + (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**50
+    )
+    extremal_u = random_rational(rng, sp.Rational(1, 5), sp.Rational(4, 5))
 
     return (
-        BoundaryCase("near_axis", axis_spin, axis_radius, axis_u),
-        BoundaryCase("near_horizon", horizon_spin, horizon_radius, horizon_u),
         BoundaryCase(
-            "near_extremality",
-            extremal_spin,
-            extremal_radius,
-            extremal_u,
+            name="near_axis",
+            spin=axis_spin,
+            radius=axis_radius,
+            sin_theta_squared=axis_u,
+        ),
+        BoundaryCase(
+            name="near_horizon",
+            spin=horizon_spin,
+            radius=horizon_radius,
+            sin_theta_squared=horizon_u,
+        ),
+        BoundaryCase(
+            name="near_extremality",
+            spin=extremal_spin,
+            radius=extremal_radius,
+            sin_theta_squared=extremal_u,
         ),
     )
 
@@ -583,7 +616,11 @@ def evaluate_boundary_case(
 
     state_substitutions = dict(geometry_substitutions)
     for symbol in probe.state_symbols:
-        state_substitutions[symbol] = random_rational(rng, -2.0, 2.0)
+        state_substitutions[symbol] = random_rational(
+            rng,
+            sp.Integer(-2),
+            sp.Integer(2),
+        )
     duality_residual = maximum_relative_residual(
         probe.duality_left,
         probe.duality_right,
@@ -593,9 +630,9 @@ def evaluate_boundary_case(
 
     potential_substitutions = {
         **geometry_substitutions,
-        mino.energy: random_rational(rng, 0.8, 1.8),
+        mino.energy: random_rational(rng, sp.Rational(4, 5), sp.Rational(9, 5)),
         mino.impact: sp.Integer(0),
-        mino.carter: random_rational(rng, 0.5, 2.0),
+        mino.carter: random_rational(rng, sp.Rational(1, 2), sp.Integer(2)),
         mino.mu: sp.sqrt(1 - u_value),
     }
     radial_potential = mino.radial_potential.xreplace(potential_substitutions)
