@@ -14,25 +14,25 @@ Primary mathematical sources:
 * Mino's affine reparameterization:
   https://doi.org/10.1103/PhysRevD.67.084027
 * Arbitrary-precision quadrature behavior used here:
-  https://mpmath.org/doc/current/calculus/integration.html
+  https://mpmath.org/doc/1.3.0/calculus/integration.html
 * Verified root finding and polynomial-root conditioning:
-  https://mpmath.org/doc/current/calculus/optimization.html
-  https://mpmath.org/doc/current/calculus/polynomials.html
+  https://mpmath.org/doc/1.3.0/calculus/optimization.html
+  https://mpmath.org/doc/1.3.0/calculus/polynomials.html
 * Precision contexts and finite-value classification:
   https://mpmath.org/doc/1.3.0/general.html
 * Python NaN comparison semantics:
   https://docs.python.org/3/reference/expressions.html#value-comparisons
 * Dataclass post-init and replacement behavior:
-  https://docs.python.org/3/library/dataclasses.html#post-init-processing
+  https://docs.python.org/3.10/library/dataclasses.html#post-init-processing
 * Runtime relationship between bool and int:
-  https://docs.python.org/3/library/stdtypes.html#boolean-type-bool
+  https://docs.python.org/3.10/library/stdtypes.html#boolean-type-bool
 """
 
 from __future__ import annotations
 
 import platform
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
 
 import mpmath as mp
 
@@ -43,6 +43,9 @@ MINIMUM_WITNESS_DIGITS = 70
 RESIDUAL_GUARD_DIGITS = 15
 SURFACE_INNER_RADIUS_M = 6
 SURFACE_OUTER_RADIUS_M = 20
+VIEWPORT_WIDTH = 1280
+VIEWPORT_HEIGHT = 720
+CANONICAL_PIXEL = (640, 16)
 _CANONICAL_TERMINAL = "equatorial-surface"
 _CANONICAL_INITIAL_POLAR_SIDE = "positive"
 _CANONICAL_RADIAL_TURNINGS = 1
@@ -51,11 +54,11 @@ _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL = 0
 _CANONICAL_AZIMUTH_WINDING = 0
 
 
-class UnsupportedWitness(ValueError):
+class UnsupportedWitnessError(ValueError):
     """The requested case lies outside this research slice's certified domain."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class SurfaceWitness:
     """Certified canonical identity, observables, and margins for one surface ray."""
 
@@ -85,7 +88,7 @@ class SurfaceWitness:
         _validate_surface_witness(self)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PrecisionCertificate:
     """Precision-doubling evidence for the canonical witness."""
 
@@ -96,14 +99,24 @@ class PrecisionCertificate:
     witness: SurfaceWitness
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _ObservationGeometry:
+    mass: mp.mpf
+    spin: mp.mpf
+    radius: mp.mpf
+    theta: mp.mpf
+    position: tuple[mp.mpf, mp.mpf, mp.mpf]
+    metric: tuple[tuple[mp.mpf, ...], ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _InitialRay:
     momentum_covariant: tuple[mp.mpf, ...]
     observer_frequency: mp.mpf
     initial_null_residual: mp.mpf
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _SeparatedState:
     energy: mp.mpf
     impact: mp.mpf
@@ -113,11 +126,105 @@ class _SeparatedState:
     constraint_residual: mp.mpf
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _PolarMotion:
+    spin: mp.mpf
+    turning: mp.mpf
+    turning_squared: mp.mpf
+    negative_turning_squared: mp.mpf
+    quadratic_coefficient: mp.mpf
+
+    def integrate_to_turn(
+        self,
+        numerator: Callable[[mp.mpf], mp.mpf],
+        lower_mu: mp.mpf,
+    ) -> mp.mpf:
+        """Integrate through the regularized simple polar turning endpoint."""
+
+        lower_angle = mp.asin(lower_mu / self.turning)
+        return mp.quad(
+            lambda angle: (
+                numerator(self.turning * mp.sin(angle))
+                / (
+                    self.spin
+                    * mp.sqrt(
+                        self.turning_squared * mp.sin(angle) ** 2
+                        - self.negative_turning_squared
+                    )
+                )
+            ),
+            [lower_angle, mp.pi / 2],
+        )
+
+    @property
+    def turning_derivative(self) -> mp.mpf:
+        return abs(
+            2 * self.quadratic_coefficient * self.turning
+            - 4 * self.spin**2 * self.turning**3
+        )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _RadialMotion:
+    mass: mp.mpf
+    spin: mp.mpf
+    impact: mp.mpf
+    turning: mp.mpf
+    turning_derivative: mp.mpf
+    quadratic_coefficient: mp.mpf
+    linear_coefficient: mp.mpf
+
+    def delta(self, radius: mp.mpf) -> mp.mpf:
+        return radius**2 - 2 * self.mass * radius + self.spin**2
+
+    def factor(self, radius: mp.mpf) -> mp.mpf:
+        return radius**2 + self.spin**2 - self.spin * self.impact
+
+    def quotient(self, radius: mp.mpf) -> mp.mpf:
+        """Evaluate R/(r-r_turn) by synthetic division near the simple root."""
+
+        quadratic = self.quadratic_coefficient + self.turning**2
+        constant = self.linear_coefficient + self.turning * quadratic
+        return radius**3 + self.turning * radius**2 + quadratic * radius + constant
+
+    def integrate_from_turn(
+        self,
+        numerator: Callable[[mp.mpf], mp.mpf],
+        upper_radius: mp.mpf,
+    ) -> mp.mpf:
+        """Integrate through the regularized simple radial turning endpoint."""
+
+        if upper_radius < self.turning:
+            raise UnsupportedWitnessError("radial quadrature crossed its turning root")
+        upper_coordinate = mp.sqrt(upper_radius - self.turning)
+
+        def regularized(coordinate: mp.mpf) -> mp.mpf:
+            radius = self.turning + coordinate**2
+            return 2 * numerator(radius) / mp.sqrt(self.quotient(radius))
+
+        return mp.quad(regularized, [mp.mpf(0), upper_coordinate])
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _PathObservables:
+    source_azimuth: mp.mpf
+    travel_time: mp.mpf
+    azimuth_winding: int
+    chart_primitive_residual: mp.mpf
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _TransferObservables:
+    frequency_ratio: mp.mpf
+    emitted_intensity: mp.mpf
+    observed_intensity: mp.mpf
+
+
 def _validate_precision_digits(precision_digits: object) -> None:
-    if not isinstance(precision_digits, int) or isinstance(precision_digits, bool):
-        raise UnsupportedWitness("witness precision must be an integer")
+    if type(precision_digits) is not int:
+        raise UnsupportedWitnessError("witness precision must be an integer")
     if precision_digits < MINIMUM_WITNESS_DIGITS:
-        raise UnsupportedWitness(
+        raise UnsupportedWitnessError(
             f"witness precision must be at least {MINIMUM_WITNESS_DIGITS} digits"
         )
 
@@ -139,7 +246,7 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         type(actual) is not type(expected) or actual != expected
         for actual, expected in discrete_identity
     ):
-        raise UnsupportedWitness(
+        raise UnsupportedWitnessError(
             "witness does not match the canonical discrete path identity"
         )
     continuous_fields = (
@@ -159,16 +266,13 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         witness.chart_primitive_residual,
     )
     if not all(
-        isinstance(value, mp.mpf) and mp.isfinite(value)
-        for value in continuous_fields
+        isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
     ):
-        raise UnsupportedWitness("witness contains a non-real or non-finite value")
+        raise UnsupportedWitnessError("witness contains a non-real or non-finite value")
     if not (
-        SURFACE_INNER_RADIUS_M
-        <= witness.source_radius_m
-        <= SURFACE_OUTER_RADIUS_M
+        SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= SURFACE_OUTER_RADIUS_M
     ):
-        raise UnsupportedWitness("crossing lies outside the canonical surface")
+        raise UnsupportedWitnessError("crossing lies outside the canonical surface")
     positive_fields = (
         witness.frequency_ratio,
         witness.travel_time_m,
@@ -177,9 +281,9 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         witness.energy,
     )
     if any(value <= 0 for value in positive_fields):
-        raise UnsupportedWitness("witness contains a non-positive physical value")
+        raise UnsupportedWitnessError("witness contains a non-positive physical value")
     if witness.radial_turning_derivative <= 0 or witness.polar_turning_derivative <= 0:
-        raise UnsupportedWitness("separated turning root is not simple")
+        raise UnsupportedWitnessError("separated turning root is not simple")
 
     residuals = (
         witness.initial_null_residual,
@@ -193,7 +297,7 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         )
         if any(residual < 0 or residual >= residual_limit for residual in residuals):
             certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
-            raise UnsupportedWitness(
+            raise UnsupportedWitnessError(
                 "equation residual does not retain the required "
                 f"{certified_digits} decimal digits"
             )
@@ -245,7 +349,7 @@ def _project_and_normalize(
         )
     norm_squared = _metric_dot(metric, projected, projected)
     if norm_squared <= 0:
-        raise UnsupportedWitness("canonical observer frame seed is degenerate")
+        raise UnsupportedWitnessError("canonical observer frame seed is degenerate")
     return _vector_scale(projected, 1 / mp.sqrt(norm_squared))
 
 
@@ -256,14 +360,7 @@ def _orientation_determinant(columns: Sequence[Sequence[mp.mpf]]) -> mp.mpf:
     return mp.det(matrix)
 
 
-def _canonical_geometry() -> tuple[
-    mp.mpf,
-    mp.mpf,
-    mp.mpf,
-    mp.mpf,
-    tuple[mp.mpf, mp.mpf, mp.mpf],
-    tuple[tuple[mp.mpf, ...], ...],
-]:
+def _canonical_geometry() -> _ObservationGeometry:
     mass = mp.mpf(1)
     spin = mp.mpf(4) / 5
     radius = mp.mpf(30)
@@ -290,11 +387,36 @@ def _canonical_geometry() -> tuple[
         )
         for row in range(4)
     )
-    return mass, spin, radius, theta, (x, y, z), metric
+    return _ObservationGeometry(
+        mass=mass,
+        spin=spin,
+        radius=radius,
+        theta=theta,
+        position=(x, y, z),
+        metric=metric,
+    )
 
 
-def _canonical_initial_ray(pixel_x: int, pixel_y: int) -> _InitialRay:
-    _, _, _, _, (x, y, z), metric = _canonical_geometry()
+def _try_image_right_axis(
+    metric: Sequence[Sequence[mp.mpf]],
+    four_velocity: Sequence[mp.mpf],
+    sight: Sequence[mp.mpf],
+    up: Sequence[mp.mpf],
+    axis: Sequence[mp.mpf],
+) -> tuple[mp.mpf, ...] | None:
+    try:
+        return _project_and_normalize(metric, four_velocity, axis, (sight, up))
+    except UnsupportedWitnessError:
+        return None
+
+
+def _canonical_initial_ray(
+    geometry: _ObservationGeometry,
+    pixel_x: int,
+    pixel_y: int,
+) -> _InitialRay:
+    x, y, z = geometry.position
+    metric = geometry.metric
     g_tt = metric[0][0]
     four_velocity = (1 / mp.sqrt(-g_tt), mp.mpf(0), mp.mpf(0), mp.mpf(0))
     sight = _project_and_normalize(
@@ -310,20 +432,28 @@ def _canonical_initial_ray(pixel_x: int, pixel_y: int) -> _InitialRay:
         (mp.mpf(0), mp.mpf(0), mp.mpf(0), mp.mpf(1)),
         (sight,),
     )
-    right_candidates = []
-    for axis in (
-        (mp.mpf(0), mp.mpf(1), mp.mpf(0), mp.mpf(0)),
-        (mp.mpf(0), mp.mpf(0), mp.mpf(1), mp.mpf(0)),
-        (mp.mpf(0), mp.mpf(0), mp.mpf(0), mp.mpf(1)),
-    ):
-        try:
-            right_candidates.append(
-                _project_and_normalize(metric, four_velocity, axis, (sight, up))
+    right_candidates = tuple(
+        candidate
+        for candidate in (
+            _try_image_right_axis(
+                metric,
+                four_velocity,
+                sight,
+                up,
+                axis,
             )
-        except UnsupportedWitness:
-            continue
+            for axis in (
+                (mp.mpf(0), mp.mpf(1), mp.mpf(0), mp.mpf(0)),
+                (mp.mpf(0), mp.mpf(0), mp.mpf(1), mp.mpf(0)),
+                (mp.mpf(0), mp.mpf(0), mp.mpf(0), mp.mpf(1)),
+            )
+        )
+        if candidate is not None
+    )
     if not right_candidates:
-        raise UnsupportedWitness("canonical observer frame has no image-right axis")
+        raise UnsupportedWitnessError(
+            "canonical observer frame has no image-right axis"
+        )
     right = max(
         right_candidates,
         key=lambda candidate: max(abs(component) for component in candidate[1:]),
@@ -331,8 +461,8 @@ def _canonical_initial_ray(pixel_x: int, pixel_y: int) -> _InitialRay:
     if _orientation_determinant((four_velocity, right, up, arrival)) < 0:
         right = _vector_scale(right, -1)
 
-    width = mp.mpf(1280)
-    height = mp.mpf(720)
+    width = mp.mpf(VIEWPORT_WIDTH)
+    height = mp.mpf(VIEWPORT_HEIGHT)
     half = mp.mpf(1) / 2
     normalized_x = 2 * (mp.mpf(pixel_x) + half) / width - 1
     normalized_y = 1 - 2 * (mp.mpf(pixel_y) + half) / height
@@ -356,7 +486,11 @@ def _canonical_initial_ray(pixel_x: int, pixel_y: int) -> _InitialRay:
     )
     null_value = _metric_dot(metric, momentum_contravariant, momentum_contravariant)
     null_term_norm = mp.fsum(
-        abs(metric[row][column] * momentum_contravariant[row] * momentum_contravariant[column])
+        abs(
+            metric[row][column]
+            * momentum_contravariant[row]
+            * momentum_contravariant[column]
+        )
         for row in range(4)
         for column in range(4)
     )
@@ -368,8 +502,15 @@ def _canonical_initial_ray(pixel_x: int, pixel_y: int) -> _InitialRay:
     )
 
 
-def _separated_initial_state(initial_ray: _InitialRay) -> _SeparatedState:
-    mass, spin, radius, theta, (x, y, _), _ = _canonical_geometry()
+def _separated_initial_state(
+    geometry: _ObservationGeometry,
+    initial_ray: _InitialRay,
+) -> _SeparatedState:
+    mass = geometry.mass
+    spin = geometry.spin
+    radius = geometry.radius
+    theta = geometry.theta
+    x, y, _ = geometry.position
     sin_theta = mp.sin(theta)
     cos_theta = mp.cos(theta)
     p_t, p_x, p_y, p_z = initial_ray.momentum_covariant
@@ -381,9 +522,7 @@ def _separated_initial_state(initial_ray: _InitialRay) -> _SeparatedState:
     energy = -p_t
     impact = p_phi / energy
     mu = cos_theta
-    carter = (p_theta / energy) ** 2 + mu**2 * (
-        impact**2 / (1 - mu**2) - spin**2
-    )
+    carter = (p_theta / energy) ** 2 + mu**2 * (impact**2 / (1 - mu**2) - spin**2)
     radial_velocity = delta * p_r_bl / energy
     polar_velocity = -sin_theta * p_theta / energy
 
@@ -393,11 +532,7 @@ def _separated_initial_state(initial_ray: _InitialRay) -> _SeparatedState:
         return radial_factor**2 - (value**2 - 2 * mass * value + spin**2) * separation
 
     def polar_potential(value: mp.mpf) -> mp.mpf:
-        return (
-            carter
-            + (spin**2 - carter - impact**2) * value**2
-            - spin**2 * value**4
-        )
+        return carter + (spin**2 - carter - impact**2) * value**2 - spin**2 * value**4
 
     radial_residual = abs(radial_velocity**2 - radial_potential(radius)) / max(
         mp.mpf(1),
@@ -428,30 +563,28 @@ def _real_polynomial_roots(coefficients: Sequence[mp.mpf]) -> tuple[mp.mpf, ...]
     )
     imaginary_tolerance = mp.power(10, -(mp.mp.dps - 30))
     return tuple(
-        mp.re(root)
-        for root in roots
-        if abs(mp.im(root)) <= imaginary_tolerance
+        mp.re(root) for root in roots if abs(mp.im(root)) <= imaginary_tolerance
     )
 
 
 def _chart_primitives(
-    lower: mp.mpf, upper: mp.mpf, spin: mp.mpf
+    lower: mp.mpf,
+    upper: mp.mpf,
+    mass: mp.mpf,
+    spin: mp.mpf,
 ) -> tuple[mp.mpf, mp.mpf]:
-    horizon_gap = mp.sqrt(1 - spin**2)
-    outer = 1 + horizon_gap
-    inner = 1 - horizon_gap
+    horizon_gap = mp.sqrt(mass**2 - spin**2)
+    outer = mass + horizon_gap
+    inner = mass - horizon_gap
     denominator = outer - inner
 
     def time_primitive(radius: mp.mpf) -> mp.mpf:
-        return (
-            2 * outer / denominator * mp.log(radius - outer)
-            - 2 * inner / denominator * mp.log(radius - inner)
-        )
+        return 2 * mass * outer / denominator * mp.log(
+            radius - outer
+        ) - 2 * mass * inner / denominator * mp.log(radius - inner)
 
     def azimuth_primitive(radius: mp.mpf) -> mp.mpf:
-        return spin / denominator * (
-            mp.log(radius - outer) - mp.log(radius - inner)
-        )
+        return spin / denominator * (mp.log(radius - outer) - mp.log(radius - inner))
 
     return (
         time_primitive(upper) - time_primitive(lower),
@@ -463,252 +596,295 @@ def _wrap_angle(angle: mp.mpf) -> mp.mpf:
     return angle - 2 * mp.pi * mp.floor((angle + mp.pi) / (2 * mp.pi))
 
 
-def _compute_canonical_surface_witness(
-    pixel_x: int, pixel_y: int, precision_digits: int
-) -> SurfaceWitness:
-    mass, spin, observer_radius, theta, _, _ = _canonical_geometry()
-    initial_ray = _canonical_initial_ray(pixel_x, pixel_y)
-    separated = _separated_initial_state(initial_ray)
-    if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
-        raise UnsupportedWitness(
-            "first slice requires a future-outgoing ray after one northern polar turning"
+def _unit_integrand(_: mp.mpf) -> mp.mpf:
+    return mp.mpf(1)
+
+
+def _build_polar_motion(
+    spin: mp.mpf,
+    impact: mp.mpf,
+    carter: mp.mpf,
+    initial_mu: mp.mpf,
+) -> _PolarMotion:
+    quadratic_coefficient = spin**2 - carter - impact**2
+    discriminant = mp.sqrt(quadratic_coefficient**2 + 4 * spin**2 * carter)
+    turning_squared = (quadratic_coefficient + discriminant) / (2 * spin**2)
+    negative_turning_squared = (quadratic_coefficient - discriminant) / (2 * spin**2)
+    turning = mp.sqrt(turning_squared)
+    if not initial_mu < turning < 1 or negative_turning_squared >= 0:
+        raise UnsupportedWitnessError(
+            "polar potential does not have the required simple turning"
         )
+    return _PolarMotion(
+        spin=spin,
+        turning=turning,
+        turning_squared=turning_squared,
+        negative_turning_squared=negative_turning_squared,
+        quadratic_coefficient=quadratic_coefficient,
+    )
+
+
+def _build_radial_motion(
+    geometry: _ObservationGeometry,
+    separated: _SeparatedState,
+    precision_digits: int,
+) -> _RadialMotion:
+    mass = geometry.mass
+    spin = geometry.spin
     impact = separated.impact
-    carter = separated.carter
-    initial_mu = mp.cos(theta)
-    separation = (impact - spin) ** 2 + carter
+    separation = (impact - spin) ** 2 + separated.carter
+    radial_constant = spin**2 - spin * impact
+    quadratic_coefficient = 2 * radial_constant - separation
+    linear_coefficient = 2 * mass * separation
 
     def delta(radius: mp.mpf) -> mp.mpf:
         return radius**2 - 2 * mass * radius + spin**2
 
-    def radial_factor(radius: mp.mpf) -> mp.mpf:
+    def factor(radius: mp.mpf) -> mp.mpf:
         return radius**2 + spin**2 - spin * impact
 
-    def radial_potential(radius: mp.mpf) -> mp.mpf:
-        return radial_factor(radius) ** 2 - delta(radius) * separation
+    def potential(radius: mp.mpf) -> mp.mpf:
+        return factor(radius) ** 2 - delta(radius) * separation
 
-    polar_coefficient = spin**2 - carter - impact**2
-    polar_discriminant = mp.sqrt(
-        polar_coefficient**2 + 4 * spin**2 * carter
-    )
-    positive_mu_squared = (
-        polar_coefficient + polar_discriminant
-    ) / (2 * spin**2)
-    negative_mu_squared = (
-        polar_coefficient - polar_discriminant
-    ) / (2 * spin**2)
-    polar_turning = mp.sqrt(positive_mu_squared)
-    if not initial_mu < polar_turning < 1 or negative_mu_squared >= 0:
-        raise UnsupportedWitness("polar potential does not have the required simple turning")
-
-    def polar_to_turn(
-        numerator: Callable[[mp.mpf], mp.mpf], lower_mu: mp.mpf
-    ) -> mp.mpf:
-        # U = a^2 (mu_turn^2 - mu^2) (mu^2 - mu_negative^2).
-        # mu = mu_turn sin(angle) removes the simple-root endpoint singularity.
-        lower_angle = mp.asin(lower_mu / polar_turning)
-        return mp.quad(
-            lambda angle: numerator(polar_turning * mp.sin(angle))
-            / (
-                spin
-                * mp.sqrt(
-                    positive_mu_squared * mp.sin(angle) ** 2
-                    - negative_mu_squared
-                )
-            ),
-            [lower_angle, mp.pi / 2],
-        )
-
-    polar_mino_duration = polar_to_turn(lambda _: mp.mpf(1), mp.mpf(0))
-    polar_mino_duration += polar_to_turn(lambda _: mp.mpf(1), initial_mu)
-
-    outer_radius = mp.mpf(SURFACE_OUTER_RADIUS_M)
-    radial_constant = spin**2 - spin * impact
-    radial_roots = _real_polynomial_roots(
+    roots = _real_polynomial_roots(
         (
             mp.mpf(1),
             mp.mpf(0),
-            2 * radial_constant - separation,
-            2 * separation,
+            quadratic_coefficient,
+            linear_coefficient,
             radial_constant**2 - spin**2 * separation,
         )
     )
-    horizon_radius = 1 + mp.sqrt(1 - spin**2)
+    horizon_radius = mass + mp.sqrt(mass**2 - spin**2)
     turning_candidates = tuple(
-        root
-        for root in radial_roots
-        if horizon_radius < root < observer_radius
+        root for root in roots if horizon_radius < root < geometry.radius
     )
     if not turning_candidates:
-        raise UnsupportedWitness("radial root topology has no exterior turning point")
-    radial_turning = max(turning_candidates)
-    if radial_turning >= outer_radius:
-        raise UnsupportedWitness("radial turning precedes the canonical source edge")
-    radial_turning = mp.findroot(
-        radial_potential,
-        radial_turning,
+        raise UnsupportedWitnessError(
+            "radial root topology has no exterior turning point"
+        )
+    turning = max(turning_candidates)
+    if turning >= SURFACE_OUTER_RADIUS_M:
+        raise UnsupportedWitnessError(
+            "radial turning precedes the canonical source edge"
+        )
+    turning = mp.findroot(
+        potential,
+        turning,
         tol=mp.power(10, -(precision_digits - 20)),
         verify=True,
     )
-    radial_turning_derivative = (
-        4 * radial_turning * radial_factor(radial_turning)
-        - 2 * (radial_turning - mass) * separation
+    turning_derivative = (
+        4 * turning * factor(turning) - 2 * (turning - mass) * separation
     )
-    if radial_turning_derivative <= 0:
-        raise UnsupportedWitness("radial turning root is not simple and outward-facing")
-    radial_quadratic_coefficient = 2 * radial_constant - separation
-    radial_linear_coefficient = 2 * separation
-
-    def radial_quotient(radius: mp.mpf) -> mp.mpf:
-        # Synthetic division evaluates R / (r - r_turn) without subtracting
-        # nearly equal arbitrary-precision values at the simple turning root.
-        quadratic = radial_quadratic_coefficient + radial_turning**2
-        constant = radial_linear_coefficient + radial_turning * quadratic
-        return (
-            radius**3
-            + radial_turning * radius**2
-            + quadratic * radius
-            + constant
+    if turning_derivative <= 0:
+        raise UnsupportedWitnessError(
+            "radial turning root is not simple and outward-facing"
         )
+    return _RadialMotion(
+        mass=mass,
+        spin=spin,
+        impact=impact,
+        turning=turning,
+        turning_derivative=turning_derivative,
+        quadratic_coefficient=quadratic_coefficient,
+        linear_coefficient=linear_coefficient,
+    )
 
-    def radial_from_turn(
-        numerator: Callable[[mp.mpf], mp.mpf], upper_radius: mp.mpf
-    ) -> mp.mpf:
-        if upper_radius < radial_turning:
-            raise UnsupportedWitness("radial quadrature crossed its turning root")
-        upper_coordinate = mp.sqrt(upper_radius - radial_turning)
 
-        def regularized(coordinate: mp.mpf) -> mp.mpf:
-            # r = r_turn + s^2 cancels the remaining square-root endpoint.
-            radius = radial_turning + coordinate**2
-            return 2 * numerator(radius) / mp.sqrt(radial_quotient(radius))
-
-        return mp.quad(regularized, [mp.mpf(0), upper_coordinate])
-
-    observer_radial_duration = radial_from_turn(
-        lambda _: mp.mpf(1), observer_radius
+def _solve_source_radius(
+    radial: _RadialMotion,
+    observer_radius: mp.mpf,
+    polar_mino_duration: mp.mpf,
+    precision_digits: int,
+) -> mp.mpf:
+    observer_duration = radial.integrate_from_turn(
+        _unit_integrand,
+        observer_radius,
     )
 
     def crossing_equation(source_radius: mp.mpf) -> mp.mpf:
         return (
-            observer_radial_duration
-            + radial_from_turn(lambda _: mp.mpf(1), source_radius)
+            observer_duration
+            + radial.integrate_from_turn(_unit_integrand, source_radius)
             - polar_mino_duration
         )
 
-    inner_radius = radial_turning
-    inner_value = crossing_equation(inner_radius)
+    outer_radius = mp.mpf(SURFACE_OUTER_RADIUS_M)
+    inner_value = crossing_equation(radial.turning)
     outer_value = crossing_equation(outer_radius)
     if not (inner_value < 0 and outer_value > 0):
-        raise UnsupportedWitness(
+        raise UnsupportedWitnessError(
             "first equatorial crossing is not bracketed by the canonical surface: "
             f"inner={mp.nstr(inner_value, 12)}, "
             f"outer={mp.nstr(outer_value, 12)}, "
             f"polar={mp.nstr(polar_mino_duration, 12)}"
         )
-    tolerance = mp.power(10, -(precision_digits - 25))
-    source_radius = mp.findroot(
+    return mp.findroot(
         crossing_equation,
-        (inner_radius, outer_radius),
+        (radial.turning, outer_radius),
         solver="anderson",
-        tol=tolerance,
+        tol=mp.power(10, -(precision_digits - 25)),
         verify=True,
     )
 
+
+def _integrate_path_observables(
+    geometry: _ObservationGeometry,
+    polar: _PolarMotion,
+    radial: _RadialMotion,
+    initial_mu: mp.mpf,
+    source_radius: mp.mpf,
+) -> _PathObservables:
+    spin = geometry.spin
+    impact = radial.impact
+
     def radial_time_numerator(radius: mp.mpf) -> mp.mpf:
-        return (radius**2 + spin**2) * radial_factor(radius) / delta(radius)
+        return (radius**2 + spin**2) * radial.factor(radius) / radial.delta(radius)
 
-    radial_time_bl = radial_from_turn(radial_time_numerator, source_radius)
-    radial_time_bl += radial_from_turn(radial_time_numerator, observer_radius)
-    polar_time_bl = polar_to_turn(
-        lambda mu: spin * (impact - spin) + spin**2 * mu**2,
-        mp.mpf(0),
-    )
-    polar_time_bl += polar_to_turn(
-        lambda mu: spin * (impact - spin) + spin**2 * mu**2,
-        initial_mu,
-    )
+    radial_time = radial.integrate_from_turn(radial_time_numerator, source_radius)
+    radial_time += radial.integrate_from_turn(radial_time_numerator, geometry.radius)
+
+    def polar_time_numerator(mu: mp.mpf) -> mp.mpf:
+        return spin * (impact - spin) + spin**2 * mu**2
+
+    polar_time = polar.integrate_to_turn(polar_time_numerator, mp.mpf(0))
+    polar_time += polar.integrate_to_turn(polar_time_numerator, initial_mu)
+
     def radial_azimuth_numerator(radius: mp.mpf) -> mp.mpf:
-        return spin * radial_factor(radius) / delta(radius)
+        return spin * radial.factor(radius) / radial.delta(radius)
 
-    radial_azimuth_bl = radial_from_turn(
-        radial_azimuth_numerator, source_radius
+    radial_azimuth = radial.integrate_from_turn(
+        radial_azimuth_numerator,
+        source_radius,
     )
-    radial_azimuth_bl += radial_from_turn(
-        radial_azimuth_numerator, observer_radius
+    radial_azimuth += radial.integrate_from_turn(
+        radial_azimuth_numerator,
+        geometry.radius,
     )
-    polar_azimuth_bl = polar_to_turn(
-        lambda mu: impact / (1 - mu**2) - spin,
+
+    def polar_azimuth_numerator(mu: mp.mpf) -> mp.mpf:
+        return impact / (1 - mu**2) - spin
+
+    polar_azimuth = polar.integrate_to_turn(
+        polar_azimuth_numerator,
         mp.mpf(0),
     )
-    polar_azimuth_bl += polar_to_turn(
-        lambda mu: impact / (1 - mu**2) - spin,
+    polar_azimuth += polar.integrate_to_turn(
+        polar_azimuth_numerator,
         initial_mu,
     )
+
     chart_time_quad = mp.quad(
-        lambda radius: 2 * mass * radius / delta(radius),
-        [source_radius, observer_radius],
+        lambda radius: 2 * geometry.mass * radius / radial.delta(radius),
+        [source_radius, geometry.radius],
     )
     chart_azimuth_quad = mp.quad(
-        lambda radius: spin / delta(radius),
-        [source_radius, observer_radius],
+        lambda radius: spin / radial.delta(radius),
+        [source_radius, geometry.radius],
     )
-    chart_time_exact, chart_azimuth_exact = _chart_primitives(
-        source_radius, observer_radius, spin
+    chart_time, chart_azimuth = _chart_primitives(
+        source_radius,
+        geometry.radius,
+        geometry.mass,
+        spin,
     )
-    chart_primitive_residual = max(
-        abs(chart_time_quad - chart_time_exact)
-        / max(mp.mpf(1), abs(chart_time_exact)),
-        abs(chart_azimuth_quad - chart_azimuth_exact)
-        / max(mp.mpf(1), abs(chart_azimuth_exact)),
+    chart_residual = max(
+        abs(chart_time_quad - chart_time) / max(mp.mpf(1), abs(chart_time)),
+        abs(chart_azimuth_quad - chart_azimuth) / max(mp.mpf(1), abs(chart_azimuth)),
     )
-    travel_time = radial_time_bl + polar_time_bl + chart_time_exact
-    observer_minus_source_azimuth = (
-        radial_azimuth_bl + polar_azimuth_bl + chart_azimuth_exact
-    )
-    source_azimuth_unwrapped = -observer_minus_source_azimuth
-    source_azimuth = _wrap_angle(source_azimuth_unwrapped)
-    observer_cartesian_azimuth = mp.atan2(spin, observer_radius)
+    source_azimuth_unwrapped = -(radial_azimuth + polar_azimuth + chart_azimuth)
+    observer_cartesian_azimuth = mp.atan2(spin, geometry.radius)
     source_cartesian_azimuth = source_azimuth_unwrapped + mp.atan2(
-        spin, source_radius
+        spin,
+        source_radius,
     )
     observer_azimuth_cycle = mp.floor(
         (observer_cartesian_azimuth + mp.pi) / (2 * mp.pi)
     )
-    source_azimuth_cycle = mp.floor(
-        (source_cartesian_azimuth + mp.pi) / (2 * mp.pi)
+    source_azimuth_cycle = mp.floor((source_cartesian_azimuth + mp.pi) / (2 * mp.pi))
+    return _PathObservables(
+        source_azimuth=_wrap_angle(source_azimuth_unwrapped),
+        travel_time=radial_time + polar_time + chart_time,
+        azimuth_winding=int(source_azimuth_cycle - observer_azimuth_cycle),
+        chart_primitive_residual=chart_residual,
     )
-    azimuth_winding = int(source_azimuth_cycle - observer_azimuth_cycle)
 
-    angular_velocity = mp.sqrt(source_radius) / (
-        source_radius**2 + spin * mp.sqrt(source_radius)
-    )
-    g_tt = -1 + 2 / source_radius
-    g_t_phi = -2 * spin / source_radius
-    source_delta = delta(source_radius)
+
+def _surface_transfer_observables(
+    geometry: _ObservationGeometry,
+    initial_ray: _InitialRay,
+    separated: _SeparatedState,
+    radial: _RadialMotion,
+    source_radius: mp.mpf,
+) -> _TransferObservables:
+    spin = geometry.spin
+    sqrt_mass = mp.sqrt(geometry.mass)
+    angular_velocity = sqrt_mass / (source_radius ** mp.mpf("1.5") + spin * sqrt_mass)
+    g_tt = -1 + 2 * geometry.mass / source_radius
+    g_t_phi = -2 * geometry.mass * spin / source_radius
     g_phi_phi = (
-        (source_radius**2 + spin**2) ** 2 - spin**2 * source_delta
+        (source_radius**2 + spin**2) ** 2 - spin**2 * radial.delta(source_radius)
     ) / source_radius**2
     emitter_time_component = 1 / mp.sqrt(
-        -(
-            g_tt
-            + 2 * angular_velocity * g_t_phi
-            + angular_velocity**2 * g_phi_phi
-        )
+        -(g_tt + 2 * angular_velocity * g_t_phi + angular_velocity**2 * g_phi_phi)
     )
     emitter_frequency = (
         emitter_time_component
         * separated.energy
-        * (1 - angular_velocity * impact)
+        * (1 - angular_velocity * separated.impact)
     )
     frequency_ratio = initial_ray.observer_frequency / emitter_frequency
     emitted_intensity = (source_radius / SURFACE_INNER_RADIUS_M) ** -3
-    observed_intensity = emitted_intensity * frequency_ratio**4
+    return _TransferObservables(
+        frequency_ratio=frequency_ratio,
+        emitted_intensity=emitted_intensity,
+        observed_intensity=emitted_intensity * frequency_ratio**4,
+    )
 
-    radial_conditioning = radial_turning_derivative
-    polar_conditioning = abs(
-        2 * polar_coefficient * polar_turning
-        - 4 * spin**2 * polar_turning**3
+
+def _compute_canonical_surface_witness(
+    pixel_x: int, pixel_y: int, precision_digits: int
+) -> SurfaceWitness:
+    geometry = _canonical_geometry()
+    initial_ray = _canonical_initial_ray(geometry, pixel_x, pixel_y)
+    separated = _separated_initial_state(geometry, initial_ray)
+    if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
+        raise UnsupportedWitnessError(
+            "first slice requires a future-outgoing ray after one northern "
+            "polar turning"
+        )
+    initial_mu = mp.cos(geometry.theta)
+    polar = _build_polar_motion(
+        geometry.spin,
+        separated.impact,
+        separated.carter,
+        initial_mu,
+    )
+    polar_mino_duration = polar.integrate_to_turn(_unit_integrand, mp.mpf(0))
+    polar_mino_duration += polar.integrate_to_turn(_unit_integrand, initial_mu)
+
+    radial = _build_radial_motion(geometry, separated, precision_digits)
+    source_radius = _solve_source_radius(
+        radial,
+        geometry.radius,
+        polar_mino_duration,
+        precision_digits,
+    )
+
+    path = _integrate_path_observables(
+        geometry,
+        polar,
+        radial,
+        initial_mu,
+        source_radius,
+    )
+    transfer = _surface_transfer_observables(
+        geometry,
+        initial_ray,
+        separated,
+        radial,
+        source_radius,
     )
     return SurfaceWitness(
         precision_digits=precision_digits,
@@ -719,21 +895,21 @@ def _compute_canonical_surface_witness(
         equatorial_crossings_before_terminal=(
             _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL
         ),
-        azimuth_winding=azimuth_winding,
+        azimuth_winding=path.azimuth_winding,
         source_radius_m=source_radius,
-        source_azimuth_rad=source_azimuth,
-        frequency_ratio=frequency_ratio,
-        travel_time_m=travel_time,
-        emitted_bolometric_intensity=emitted_intensity,
-        observed_bolometric_intensity=observed_intensity,
+        source_azimuth_rad=path.source_azimuth,
+        frequency_ratio=transfer.frequency_ratio,
+        travel_time_m=path.travel_time,
+        emitted_bolometric_intensity=transfer.emitted_intensity,
+        observed_bolometric_intensity=transfer.observed_intensity,
         energy=separated.energy,
-        impact_parameter=impact,
-        carter_parameter=carter,
-        radial_turning_derivative=radial_conditioning,
-        polar_turning_derivative=polar_conditioning,
+        impact_parameter=separated.impact,
+        carter_parameter=separated.carter,
+        radial_turning_derivative=radial.turning_derivative,
+        polar_turning_derivative=polar.turning_derivative,
         initial_null_residual=initial_ray.initial_null_residual,
         mino_constraint_residual=separated.constraint_residual,
-        chart_primitive_residual=chart_primitive_residual,
+        chart_primitive_residual=path.chart_primitive_residual,
     )
 
 
@@ -747,11 +923,14 @@ def compute_canonical_surface_witness(
     """
 
     if type(pixel_x) is not int or type(pixel_y) is not int:
-        raise UnsupportedWitness("sample coordinates must be integers")
-    if not 0 <= pixel_x < 1280 or not 0 <= pixel_y < 720:
-        raise UnsupportedWitness("sample lies outside the canonical 1280x720 viewport")
-    if (pixel_x, pixel_y) != (640, 16):
-        raise UnsupportedWitness(
+        raise UnsupportedWitnessError("sample coordinates must be integers")
+    if not 0 <= pixel_x < VIEWPORT_WIDTH or not 0 <= pixel_y < VIEWPORT_HEIGHT:
+        raise UnsupportedWitnessError(
+            "sample lies outside the canonical "
+            f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT} viewport"
+        )
+    if (pixel_x, pixel_y) != CANONICAL_PIXEL:
+        raise UnsupportedWitnessError(
             "this first research slice certifies only canonical sample (640, 16)"
         )
     _validate_precision_digits(precision_digits)
@@ -766,14 +945,15 @@ def compute_canonical_surface_witness(
 def build_precision_certificate() -> PrecisionCertificate:
     """Recompute the canonical case at 120 and 180 digits and certify stability."""
 
+    pixel_x, pixel_y = CANONICAL_PIXEL
     low = compute_canonical_surface_witness(
-        pixel_x=640,
-        pixel_y=16,
+        pixel_x=pixel_x,
+        pixel_y=pixel_y,
         precision_digits=LOW_PRECISION_DIGITS,
     )
     high = compute_canonical_surface_witness(
-        pixel_x=640,
-        pixel_y=16,
+        pixel_x=pixel_x,
+        pixel_y=pixel_y,
         precision_digits=HIGH_PRECISION_DIGITS,
     )
     fields = (
@@ -825,7 +1005,8 @@ def main() -> None:
         "precision="
         f"{certificate.low_precision_digits},{certificate.high_precision_digits} "
         f"stable_digits>={certificate.required_stable_digits} "
-        f"maximum_normalized_delta={_scientific(certificate.maximum_normalized_delta, 12)}"
+        "maximum_normalized_delta="
+        f"{_scientific(certificate.maximum_normalized_delta, 12)}"
     )
     print("case=kerr-exterior-observation-v1:640:16:0.5:0.5")
     print(f"terminal={witness.terminal}")
@@ -858,17 +1039,14 @@ def main() -> None:
         f"{_scientific(witness.radial_turning_derivative, 20)}"
     )
     print(
-        "polar_turning_derivative="
-        f"{_scientific(witness.polar_turning_derivative, 20)}"
+        f"polar_turning_derivative={_scientific(witness.polar_turning_derivative, 20)}"
     )
     print(f"initial_null_residual={_scientific(witness.initial_null_residual, 12)}")
     print(
-        "mino_constraint_residual="
-        f"{_scientific(witness.mino_constraint_residual, 12)}"
+        f"mino_constraint_residual={_scientific(witness.mino_constraint_residual, 12)}"
     )
     print(
-        "chart_primitive_residual="
-        f"{_scientific(witness.chart_primitive_residual, 12)}"
+        f"chart_primitive_residual={_scientific(witness.chart_primitive_residual, 12)}"
     )
     print("RESULT=PASS")
 

@@ -39,13 +39,27 @@
 
 配套的 80 位 SymPy/mpmath 复算脚本是
 [`verify_scalar_transport.py`](scripts/verify_scalar_transport.py)。它验证 invariant/blackbody
-恒等式、slab 极限与 partition、Planck normalization、binary64 thin-limit cancellation、v3
-expected，以及 4097-entry LUT 的 midpoint 误差；运行方式为：
+恒等式、slab 极限与 partition、Planck normalization、binary64 thin-limit cancellation 与
+4097-entry LUT 的 midpoint 误差，并生成 v3 expected 的独立 oracle；运行方式为：
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
   python -B docs/research/scripts/verify_scalar_transport.py
 ```
+
+高精度物理常数以十进制 source 保存，并在 `workdps(80)` 生效后才构造为 `mpf`；否则
+module import 会先按 mpmath 默认精度舍入，后续提高 precision 不能恢复丢失位。该行为由
+[mpmath precision context](https://mpmath.org/doc/1.3.0/basics.html#temporarily-changing-the-precision)
+约束，并由一个具名 6000 K red-band oracle 保留最小回归测试：
+
+```text
+uv run --isolated --project docs/research/scripts --locked \
+  python -B -m unittest discover -s docs/research/scripts \
+  -p 'test_scalar_transport.py'
+```
+
+修正只更新同一 `surface-transport-v1` 物理 profile 的高精度 spectral expected；schema、
+profile meaning、输入与 tolerance 均未改变。
 
 | 能力                                  | 基线/后续采用证据                                                                                                                                                                                                                                                                                                                                                                      | 本轮确认的缺口                                                                                                        |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |

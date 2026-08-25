@@ -50,7 +50,7 @@ BOUNDED_F32 = st.floats(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class BernsteinSample:
     leading: float
     quadratic: float
@@ -71,7 +71,7 @@ BERNSTEIN_SAMPLES = st.builds(
 )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class KerrRadialModel:
     radius: sp.Symbol
     spin: sp.Symbol
@@ -260,7 +260,7 @@ def outward_upper(value: float) -> float:
     return ftz_safe_upper(next_up_f32(f32(value)))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class IntervalF32:
     lower: float
     upper: float
@@ -326,7 +326,6 @@ def interval_contains(interval: IntervalF32, exact: Fraction) -> bool:
 
 
 @settings(
-    database=None,
     deadline=None,
     derandomize=True,
     max_examples=PRIMITIVE_EXAMPLES,
@@ -397,7 +396,6 @@ def interval_bernstein_coefficients(
 
 
 @settings(
-    database=None,
     deadline=None,
     derandomize=True,
     max_examples=BERNSTEIN_EXAMPLES,

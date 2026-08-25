@@ -318,9 +318,13 @@ legacy metric、标准 BL metric 与 Jacobians。
 
 符号恒等式保持 exact `Rational`，按表达式类别显式使用 `Poly`、`cancel` 或
 `trigsimp`，不调用启发式 `simplify()`；near-boundary 数值检查把 exact substitutions
-直接传给 `evalf`，避免先替换再数值化造成精度损失。这遵循 SymPy 的
+直接传给 `evalf`，避免先替换再数值化造成精度损失。固定 seed 的随机量由
+`getrandbits(64)` 直接构造 exact dyadic `Rational`，不经过 binary64 或十进制格式化。
+这遵循 SymPy 的
 [programmatic best practices](https://docs.sympy.org/latest/explanation/best-practices.html)
-与 [`evalf(subs=...)` 建议](https://docs.sympy.org/latest/tutorials/intro-tutorial/basic_operations.html#evalf)。
+与 [`evalf(subs=...)` 建议](https://docs.sympy.org/latest/modules/evalf.html)，以及 Python
+[`Random.getrandbits`](https://docs.python.org/3.10/library/random.html#random.Random.getrandbits)
+的整数采样合同。
 
 运行命令：
 
@@ -329,7 +333,7 @@ uv run --isolated --project docs/research/scripts --locked \
   python -B docs/research/scripts/verify_kerr_schild_mino_map.py
 ```
 
-2026-08-13 的完整摘要输出：
+2026-08-25 的完整摘要输出：
 
 ```text
 python=3.14.7
@@ -342,9 +346,9 @@ symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing
 symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch=4*M*a*r*u/(a**2*(1 - u) + r**2)
 symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591
 boundary.seed=0x4B534D53 precision_digits=180
-boundary.near_axis=PASS u=1.4177889e-70 abs_delta=55.547747 M2_minus_a2=0.30789136 metric=1.6293634e-552 duality=0 mino=4.9724224e-557
-boundary.near_horizon=PASS u=0.74761718 abs_delta=1.7212955e-60 M2_minus_a2=0.39906777 metric=4.1892576e-491 duality=0 mino=7.8031003e-500
-boundary.near_extremality=PASS u=0.77608197 abs_delta=2.9993350e-80 M2_minus_a2=2.0992798e-60 metric=3.8639081e-472 duality=0 mino=1.4739640e-477
+boundary.near_axis=PASS u=1.4142218e-70 abs_delta=15.913868 M2_minus_a2=0.29217704 metric=2.6069814e-551 duality=0 mino=9.9448448e-557
+boundary.near_horizon=PASS u=0.52044339 abs_delta=2.4109578e-60 M2_minus_a2=0.44105218 metric=1.6757030e-490 duality=0 mino=9.9879684e-498
+boundary.near_extremality=PASS u=0.75735800 abs_delta=3.5419486e-80 M2_minus_a2=2.3820161e-60 metric=1.2364506e-470 duality=0 mino=1.1515344e-479
 RESULT=PASS
 ```
 

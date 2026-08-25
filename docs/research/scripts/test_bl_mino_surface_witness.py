@@ -1,7 +1,7 @@
 """Behavior tests for the independent BL/Mino surface witness.
 
 Property generation follows Hypothesis's ``@given``/unittest contract:
-https://hypothesis.readthedocs.io/en/latest/settings.html#hypothesis.given
+https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.given
 Named arbitrary-precision observables use explicit absolute ``almosteq`` budgets:
 https://mpmath.org/doc/1.3.0/general.html#almosteq
 """
@@ -14,9 +14,8 @@ from dataclasses import replace
 import mpmath as mp
 from hypothesis import example, given, settings
 from hypothesis import strategies as st
-
 from verify_bl_mino_surface_witness import (
-    UnsupportedWitness,
+    UnsupportedWitnessError,
     compute_canonical_surface_witness,
 )
 
@@ -36,9 +35,7 @@ NON_INTEGER = st.one_of(
     st.text(),
 )
 UNSUPPORTED_SAMPLE = st.one_of(
-    st.tuples(st.integers(), st.integers()).filter(
-        lambda sample: sample != (640, 16)
-    ),
+    st.tuples(st.integers(), st.integers()).filter(lambda sample: sample != (640, 16)),
     st.tuples(NON_INTEGER, st.just(16)),
     st.tuples(st.just(640), NON_INTEGER),
 )
@@ -46,7 +43,7 @@ INVALID_PRECISION = st.one_of(
     st.integers(max_value=69),
     NON_INTEGER,
 )
-NON_MPF = st.one_of(
+NON_MPF_VALUE = st.one_of(
     NON_INTEGER,
     st.integers(),
 )
@@ -60,7 +57,7 @@ with mp.workdps(TEST_PRECISION_DIGITS):
 
 
 INVALID_RESIDUAL = st.one_of(
-    NON_MPF,
+    NON_MPF_VALUE,
     st.just(mp.nan),
     st.just(mp.inf),
     st.just(RESIDUAL_LIMIT),
@@ -73,7 +70,7 @@ INVALID_RESIDUAL = st.one_of(
 def invalid_identity_mutation(draw: st.DrawFn) -> tuple[str, object]:
     field, expected = draw(st.sampled_from(tuple(CANONICAL_IDENTITY.items())))
     invalid_value = draw(
-        NON_MPF.filter(
+        NON_MPF_VALUE.filter(
             lambda value: type(value) is not type(expected) or value != expected
         )
     )
@@ -117,44 +114,44 @@ class CanonicalSurfaceWitnessTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertEqual(getattr(self.witness, field), expected)
 
-    @settings(database=None, derandomize=True)
+    @settings(derandomize=True)
     @given(mutation=invalid_identity_mutation())
     def test_rejects_every_noncanonical_discrete_identity(
         self, mutation: tuple[str, object]
     ) -> None:
         field, invalid_value = mutation
-        with self.assertRaises(UnsupportedWitness):
+        with self.assertRaises(UnsupportedWitnessError):
             replace(self.witness, **{field: invalid_value})
 
-    @settings(database=None, derandomize=True)
+    @settings(derandomize=True)
     @given(invalid_residual=INVALID_RESIDUAL)
     def test_rejects_every_uncertified_equation_residual(
-        self, invalid_residual: mp.mpf
+        self, invalid_residual: object
     ) -> None:
         for field in RESIDUAL_FIELDS:
-            with self.assertRaises(UnsupportedWitness, msg=field):
+            with self.assertRaises(UnsupportedWitnessError, msg=field):
                 replace(self.witness, **{field: invalid_residual})
 
-    @settings(database=None, derandomize=True)
+    @settings(derandomize=True)
     @example(sample=(640.0, 16.0))
     @given(sample=UNSUPPORTED_SAMPLE)
     def test_rejects_every_sample_outside_the_integer_named_case(
         self, sample: tuple[object, object]
     ) -> None:
         pixel_x, pixel_y = sample
-        with self.assertRaises(UnsupportedWitness):
+        with self.assertRaises(UnsupportedWitnessError):
             compute_canonical_surface_witness(
                 pixel_x=pixel_x,
                 pixel_y=pixel_y,
                 precision_digits=TEST_PRECISION_DIGITS,
             )
 
-    @settings(database=None, derandomize=True)
+    @settings(derandomize=True)
     @given(precision_digits=INVALID_PRECISION)
     def test_rejects_every_invalid_working_precision(
         self, precision_digits: object
     ) -> None:
-        with self.assertRaises(UnsupportedWitness):
+        with self.assertRaises(UnsupportedWitnessError):
             compute_canonical_surface_witness(
                 pixel_x=640,
                 pixel_y=16,

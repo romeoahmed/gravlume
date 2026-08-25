@@ -9,7 +9,6 @@ the script does not model binary32 rounding or GPU execution time.
 from __future__ import annotations
 
 import sympy as sp
-
 from sympy_checks import require_equal, require_matrix_equal
 
 
@@ -175,7 +174,7 @@ def verify_reduced_hamiltonian() -> None:
     )
     contraction = energy + null_spatial.dot(momentum)
     hamiltonian = (
-        -energy**2 + momentum.dot(momentum) - scalar_f * contraction**2
+        -(energy**2) + momentum.dot(momentum) - scalar_f * contraction**2
     ) / 2
 
     position_rhs = sp.ImmutableMatrix(
@@ -256,7 +255,9 @@ def verify_axis_regular_carter_invariant() -> None:
 
     angular_momentum_x = y * momentum_z - z * momentum_y
     angular_momentum_y = z * momentum_x - x * momentum_z
-    schwarzschild = sp.factor(axis_regular.subs(spin, 0).subs(radius**2, rho_squared + z**2))
+    schwarzschild = sp.factor(
+        axis_regular.subs(spin, 0).subs(radius**2, rho_squared + z**2)
+    )
     require_equal(
         schwarzschild,
         angular_momentum_x**2 + angular_momentum_y**2,
