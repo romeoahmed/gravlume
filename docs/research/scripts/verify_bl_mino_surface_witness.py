@@ -742,10 +742,12 @@ def compute_canonical_surface_witness(
 ) -> SurfaceWitness:
     """Compute the named ordinary-region surface witness.
 
-    The external seam validates the fixed viewport and a precision large enough
-    to distinguish this research tool from the binary64 reference.
+    The external seam requires exact integer pixel coordinates, validates the
+    fixed viewport, and requires enough precision to exceed binary64.
     """
 
+    if type(pixel_x) is not int or type(pixel_y) is not int:
+        raise UnsupportedWitness("sample coordinates must be integers")
     if not 0 <= pixel_x < 1280 or not 0 <= pixel_y < 720:
         raise UnsupportedWitness("sample lies outside the canonical 1280x720 viewport")
     if (pixel_x, pixel_y) != (640, 16):
