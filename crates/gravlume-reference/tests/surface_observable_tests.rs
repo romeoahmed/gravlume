@@ -2,8 +2,9 @@ use std::f64::consts::{PI, TAU};
 
 use approx::assert_abs_diff_eq;
 use gravlume_reference::{
-    FixtureDocument, ObservationTracer, PolarSide, ReferenceComparison, ReferencePolicy,
-    SurfaceFootprintError, SurfaceFootprintEstimate, SurfaceParity, Termination,
+    FixtureDocument, ObservationTrace, ObservationTracer, PolarSide, ReferenceComparison,
+    ReferenceOutcome, ReferencePolicy, SurfaceFootprintError, SurfaceFootprintEstimate,
+    SurfaceParity, Termination, TraceInputId,
 };
 use proptest::prelude::*;
 
@@ -102,6 +103,157 @@ fn canonical_surface_matches_the_independent_bl_mino_witness() {
             epsilon = 1.0e-12
         );
     }
+}
+
+#[test]
+fn source_edge_pair_matches_the_independent_bl_mino_witness() {
+    // Generated at 120/180 decimal digits by the independent separated-chart
+    // witness in docs/research/scripts/verify_bl_mino_surface_witness.py.
+    let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
+        .expect("repository surface fixture parses")
+        .into_surface_observation()
+        .expect("fixture is a surface observation");
+    let observation = fixture.observation();
+    let outside_sample = observation
+        .view()
+        .sample(640, 13, 0.5, 0.5)
+        .expect("outside source-edge sample belongs to the canonical view");
+    let inside_sample = observation
+        .view()
+        .sample(640, 14, 0.5, 0.5)
+        .expect("inside source-edge sample belongs to the canonical view");
+    let oracle = ObservationTracer::baseline_v1();
+
+    for policy in [ReferencePolicy::regular_v1(), ReferencePolicy::strict_v1()] {
+        let outside = oracle
+            .trace(
+                ObservationTrace::new(
+                    TraceInputId::new(format!("source-edge-outside-{}", policy.id())),
+                    observation,
+                    outside_sample,
+                    policy,
+                )
+                .expect("outside source-edge trace request resolves"),
+            )
+            .expect("outside source-edge trace succeeds");
+        assert_source_edge_escape(&outside);
+
+        let inside = oracle
+            .trace(
+                ObservationTrace::new(
+                    TraceInputId::new(format!("source-edge-inside-{}", policy.id())),
+                    observation,
+                    inside_sample,
+                    policy,
+                )
+                .expect("inside source-edge trace request resolves"),
+            )
+            .expect("inside source-edge trace succeeds");
+        assert_source_edge_surface(&inside);
+    }
+}
+
+fn assert_source_edge_escape(outcome: &ReferenceOutcome) {
+    const POSITION_XYZ_M: [f64; 3] = [
+        -170.447_402_756_461_1,
+        1.369_244_882_783_220_7,
+        -104.624_437_497_465_03,
+    ];
+    const DIRECTION_XYZ: [f64; 3] = [
+        -0.820_715_680_321_071_6,
+        0.006_023_904_198_189_695,
+        -0.571_305_071_440_234_7,
+    ];
+    const TRAVEL_TIME_M: f64 = 238.438_694_378_676_36;
+
+    assert_eq!(outcome.termination(), Termination::Escape);
+    let branch = outcome.branch_key();
+    assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
+    assert_eq!(branch.radial_turnings(), 1);
+    assert_eq!(branch.equatorial_crossings(), 1);
+    assert_eq!(branch.azimuth_winding(), 0);
+
+    let components = outcome.state().components();
+    let position_error = components[1..4]
+        .iter()
+        .zip(POSITION_XYZ_M)
+        .map(|(actual, expected)| (actual - expected).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert_abs_diff_eq!(position_error, 0.0, epsilon = 2.0e-9);
+
+    let direction = outcome
+        .terminal()
+        .escape_direction()
+        .and_then(gravlume_reference::EscapeDirection::xyz)
+        .expect("escape direction is available");
+    let expected_norm = DIRECTION_XYZ
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>()
+        .sqrt();
+    let expected = DIRECTION_XYZ.map(|component| component / expected_norm);
+    let dot = direction
+        .into_iter()
+        .zip(expected)
+        .map(|(actual, expected)| actual * expected)
+        .sum::<f64>()
+        .clamp(-1.0, 1.0);
+    let cross = [
+        direction[1].mul_add(expected[2], -direction[2] * expected[1]),
+        direction[2].mul_add(expected[0], -direction[0] * expected[2]),
+        direction[0].mul_add(expected[1], -direction[1] * expected[0]),
+    ];
+    let cross_norm = cross
+        .iter()
+        .map(|component| component * component)
+        .sum::<f64>()
+        .sqrt();
+    assert_abs_diff_eq!(cross_norm.atan2(dot), 0.0, epsilon = 2.0e-9);
+    assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
+}
+
+fn assert_source_edge_surface(outcome: &ReferenceOutcome) {
+    const SOURCE_RADIUS_M: f64 = 19.906_414_902_636_66;
+    const SOURCE_AZIMUTH_RAD: f64 = 3.088_172_652_067_336_7;
+    const FREQUENCY_RATIO: f64 = 0.954_336_623_855_338_7;
+    const TRAVEL_TIME_M: f64 = 55.111_445_736_567_96;
+    const EMITTED_INTENSITY: f64 = 0.027_382_594_561_449_43;
+    const OBSERVED_INTENSITY: f64 = 0.022_713_337_755_283_02;
+
+    assert_eq!(outcome.termination(), Termination::EquatorialSurface);
+    let branch = outcome.branch_key();
+    assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
+    assert_eq!(branch.radial_turnings(), 1);
+    assert_eq!(branch.equatorial_crossings(), 0);
+    assert_eq!(branch.azimuth_winding(), 0);
+
+    let observable = outcome
+        .terminal()
+        .surface_observable()
+        .expect("inside source-edge trace carries its surface observable");
+    let anchor = observable.source_anchor();
+    let radial_difference = anchor.radius_m() - SOURCE_RADIUS_M;
+    let azimuth_difference = (anchor.azimuth_rad() - SOURCE_AZIMUTH_RAD + PI).rem_euclid(TAU) - PI;
+    let mean_radius = anchor.radius_m().midpoint(SOURCE_RADIUS_M);
+    let anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
+    assert_abs_diff_eq!(anchor_distance_m, 0.0, epsilon = 2.0e-9);
+    assert_abs_diff_eq!(
+        observable.frequency_ratio().value(),
+        FREQUENCY_RATIO,
+        epsilon = 2.0e-9 * FREQUENCY_RATIO
+    );
+    assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
+    assert_abs_diff_eq!(
+        observable.emitted_bolometric_intensity(),
+        EMITTED_INTENSITY,
+        epsilon = 1.0e-12
+    );
+    assert_abs_diff_eq!(
+        observable.observed_bolometric_intensity(),
+        OBSERVED_INTENSITY,
+        epsilon = 1.0e-12
+    );
 }
 
 #[test]

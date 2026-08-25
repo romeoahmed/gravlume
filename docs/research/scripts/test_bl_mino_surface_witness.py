@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 from verify_bl_mino_surface_witness import (
     UnsupportedWitnessError,
     compute_canonical_surface_witness,
+    compute_source_edge_pair_witness,
 )
 
 CANONICAL_IDENTITY = {
@@ -157,6 +158,145 @@ class CanonicalSurfaceWitnessTests(unittest.TestCase):
                 pixel_y=16,
                 precision_digits=precision_digits,
             )
+
+
+class SourceEdgePairWitnessTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.pair = compute_source_edge_pair_witness(
+            precision_digits=TEST_PRECISION_DIGITS
+        )
+
+    def test_brackets_the_outer_source_edge_with_exact_path_identity(self) -> None:
+        outside = self.pair.outside
+        inside = self.pair.inside
+
+        self.assertEqual(outside.terminal, "escape")
+        self.assertEqual(outside.initial_polar_side, "positive")
+        self.assertEqual(outside.radial_turnings, 1)
+        self.assertEqual(outside.polar_turnings, 1)
+        self.assertEqual(outside.equatorial_crossings_before_terminal, 1)
+        self.assertEqual(outside.azimuth_winding, 0)
+        self.assertGreater(outside.first_equatorial_crossing_radius_m, mp.mpf(20))
+
+        for field, expected in CANONICAL_IDENTITY.items():
+            with self.subTest(field=field):
+                self.assertEqual(getattr(inside, field), expected)
+        self.assertLess(inside.source_radius_m, mp.mpf(20))
+
+    def test_recovers_the_inside_surface_observables(self) -> None:
+        expected_observables = (
+            ("source_radius_m", "19.9064149026366577", "2e-9"),
+            ("source_azimuth_rad", "3.08817265206733668", "1e-10"),
+            ("frequency_ratio", "0.954336623855338749", "2e-9"),
+            ("travel_time_m", "55.1114457365679603", "2e-8"),
+        )
+        for field, expected, tolerance in expected_observables:
+            actual = getattr(self.pair.inside, field)
+            with self.subTest(field=field), mp.workdps(TEST_PRECISION_DIGITS):
+                self.assertTrue(
+                    mp.almosteq(
+                        actual,
+                        mp.mpf(expected),
+                        rel_eps=mp.mpf(0),
+                        abs_eps=mp.mpf(tolerance),
+                    )
+                )
+
+    def test_recovers_the_outside_escape_observables_and_event_order(self) -> None:
+        outside = self.pair.outside
+        expected_position = tuple(
+            map(
+                mp.mpf,
+                (
+                    "-170.447402756461085",
+                    "1.36924488278322070",
+                    "-104.624437497465033",
+                ),
+            )
+        )
+        expected_direction = tuple(
+            map(
+                mp.mpf,
+                (
+                    "-0.820715680321071555",
+                    "0.00602390419818969499",
+                    "-0.571305071440234735",
+                ),
+            )
+        )
+        with mp.workdps(TEST_PRECISION_DIGITS):
+            position_error = mp.sqrt(
+                mp.fsum(
+                    (actual - expected) ** 2
+                    for actual, expected in zip(
+                        outside.escape_position_xyz_m,
+                        expected_position,
+                        strict=True,
+                    )
+                )
+            )
+            expected_direction_norm = mp.sqrt(
+                mp.fsum(component**2 for component in expected_direction)
+            )
+            direction_dot = mp.fsum(
+                actual * expected / expected_direction_norm
+                for actual, expected in zip(
+                    outside.escape_direction_xyz,
+                    expected_direction,
+                    strict=True,
+                )
+            )
+            actual_x, actual_y, actual_z = outside.escape_direction_xyz
+            expected_x, expected_y, expected_z = (
+                component / expected_direction_norm for component in expected_direction
+            )
+            direction_cross_norm = mp.sqrt(
+                (actual_y * expected_z - actual_z * expected_y) ** 2
+                + (actual_z * expected_x - actual_x * expected_z) ** 2
+                + (actual_x * expected_y - actual_y * expected_x) ** 2
+            )
+            direction_angle = mp.atan2(direction_cross_norm, direction_dot)
+
+            self.assertLess(position_error, mp.mpf("2e-9"))
+            self.assertLess(direction_angle, mp.mpf("2e-9"))
+            self.assertTrue(
+                mp.almosteq(
+                    outside.travel_time_m,
+                    mp.mpf("238.438694378676361"),
+                    rel_eps=mp.mpf(0),
+                    abs_eps=mp.mpf("2e-8"),
+                )
+            )
+        self.assertGreater(outside.escape_before_next_crossing_mino_margin, 0)
+
+    def test_rejects_uncertified_escape_identity_and_event_margins(self) -> None:
+        outside = self.pair.outside
+        invalid_mutations = (
+            {"equatorial_crossings_before_terminal": 0},
+            {"first_equatorial_crossing_radius_m": mp.mpf(20)},
+            {"escape_before_next_crossing_mino_margin": mp.mpf(0)},
+            {
+                "escape_direction_xyz": (
+                    mp.mpf(2),
+                    mp.mpf(0),
+                    mp.mpf(0),
+                )
+            },
+        )
+        for mutation in invalid_mutations:
+            with self.subTest(mutation=mutation), self.assertRaises(
+                UnsupportedWitnessError
+            ):
+                replace(outside, **mutation)
+
+    @settings(derandomize=True)
+    @given(precision_digits=INVALID_PRECISION)
+    def test_rejects_every_invalid_pair_working_precision(
+        self, precision_digits: object
+    ) -> None:
+        with self.assertRaises(UnsupportedWitnessError):
+            compute_source_edge_pair_witness(precision_digits=precision_digits)
 
 
 if __name__ == "__main__":
