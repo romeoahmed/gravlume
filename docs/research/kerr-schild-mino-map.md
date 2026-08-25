@@ -24,7 +24,7 @@ proof，避免只留下临时目录中不可复现的证据。
    physical-spin blocker，不把 BL/Mino 变成 horizon-crossing 或 axis-regular
    replacement。
 
-## 1. Normative chart convention
+## 1. 规范 chart convention
 
 仓库 canonical state 是
 
@@ -99,7 +99,7 @@ g_{t_s\phi_s}
 \tag{6}
 \]
 
-## 2. Legacy RED witness
+## 2. 旧实现的 RED witness
 
 修复前的 outgoing map 仍使用 ingoing twist：
 
@@ -133,7 +133,7 @@ BL target 精确得到
 \((M,r,a,\sin^2\theta)=(1,5,2/3,3/7)\) 精确为 \(360/1591\)。这项必须保持
 `RED_AS_EXPECTED`，防止未来退回旧 handedness。
 
-## 3. Boyer–Lindquist zero-step seam
+## 3. Boyer–Lindquist 零步 seam
 
 corrected chart 与同一个 physical-spin BL chart 的 differential 是
 
@@ -181,7 +181,7 @@ t_B=t_s-sT(r;r_0),\qquad \phi_B=\phi_s-s\Phi(r;r_0).
 这些 primitives 只能在不跨 \(\Delta=0\) 的同一连通区使用；near-extremal 时应使用
 专门极限或累计 local differential，不能直接相减两个病态 log。
 
-### 3.1 Tangent
+### 3.1 切向量
 
 令点号表示 canonical affine parameter \(\sigma\) 的导数。由 (8)：
 
@@ -223,7 +223,7 @@ Cartesian → spheroidal 局部导数为
 \tag{15}
 \]
 
-### 3.2 Canonical covector
+### 3.2 Canonical 协向量
 
 one-form invariance \(p^{(s)}_\alpha dq_s^\alpha=p^{(B)}_\alpha dq_B^\alpha\) 给出
 
@@ -265,7 +265,7 @@ p_i=p^s_r\partial_i r+p_\theta\partial_i\theta+p_\phi\partial_i\phi_s,
 \(\rho=0\) 是 azimuth seam；不能先形成奇异的 \(\phi\) 分量再期待 Carter axis limit
 补救。第一版 Mino candidate 应在 exact/near-axis 回退到 Cartesian KS。
 
-## 4. Pure-Kerr Mino zero-step state
+## 4. Pure Kerr Mino 零步状态
 
 Mino fast-path 的首版产品域仍限定 pure Kerr。使用
 
@@ -310,7 +310,7 @@ p_\theta=-\frac{E v_\mu}{\sqrt{1-\mu^2}}.
 
 turning point 的 sign 是显式 branch state，不能用 `signum(0)` 永久锁死。
 
-## 5. Reproducible verification
+## 5. 可复算验证
 
 脚本固定 SymPy 1.14.0、seed `0x4B534D53`、180 位十进制精度与 \(10^{-80}\)
 boundary normalized-residual gate。它不导入项目代码，而是独立构造 corrected metric、
@@ -355,7 +355,7 @@ RESULT=PASS
 这些 near-boundary substitutions 只验证 denominator 仍非零时的局部代数，不授权在
 exact axis 或 \(\Delta=0\) 求值，也不给出 f32 conditioning 或 full-trajectory 保证。
 
-### 5.1 Runtime mutation-sensitive contracts
+### 5.1 Runtime mutation contracts
 
 生产修复另由以下最小合同保护：
 
@@ -372,7 +372,7 @@ Kerr–Newman charge 只进入 \(2Mr-q_e^2\) 与 \(\Delta\)；chart twist 修复
 的 \(a^2\) 或 charge classification。上述 \(q_e=0.3\) full-metric contract 防止把 pure-Kerr
 符号修复误写成不兼容 Kerr–Newman 的特例。
 
-## 6. Migration and visible change
+## 6. 迁移与可见变化
 
 这是有意的 breaking physical correction：对于同一 outgoing `(r, theta, phi_s, a)`，
 Cartesian \(x,z\) 在 \(\phi_s=0\) 保持，\(y\) 的 twist 反号；一般 azimuth 下位置按
@@ -383,34 +383,34 @@ Cartesian \(x,z\) 在 \(\phi_s=0\) 保持，\(y\) 的 twist 反号；一般 azim
 应确定性搜索相邻 Horizon/Escape pair，再与 CPU reference 分类比较。ingoing chart、
 radius、horizon radii 与 parameter-state fixtures 不应变化。
 
-## 7. Remaining gates
+## 7. 剩余门槛
 
-### Gate A — continuous model: PASS
+### Gate A — 连续模型：PASS
 
 public `spin_m`、\(g_{t\phi}\)、frame dragging、BL \(a=J/M\) 与 oblate azimuth 在两
 chart 中同义；Rust、WGSL 与 normative physics contract 使用同一公式。
 
-### Gate B — zero-step identities: PASS for the convention seam
+### Gate B — 零步恒等式：convention seam PASS
 
 legacy RED、corrected metric/position/covector/tangent GREEN、axis continuity、正负 spin、
 Kerr–Newman charge 与 CPU/GPU initial-ray seam 已覆盖。这个 Gate 只证明初值变换；完整
 trajectory 由独立 observable matrix 约束。
 
-### Gate C — restricted trajectory oracle: FAIL after resolution expansion
+### Gate C — 受限轨迹 oracle：扩大分辨率后 FAIL
 
 80×45 matrix 曾在 pure Kerr、finite \(E>0\)、off-axis、受限 subextremal exterior 内通过，
 但扩展到 `320×180` 后，pixel `(175, 51)` 的 accepted result 相对独立 Cartesian KS
 reference 产生约 `2.661354e-3 M` travel-time error，超过 `1e-3 M` contract。reciprocal
 constraint 与 winding gate 没有给出 terminal phase 的充分误差界，因此 Gate C 为 FAIL。
 
-### Gate D — f32/WGSL and performance: REJECTED despite measured speedup
+### Gate D — `f32`/WGSL 与性能：虽有加速仍 REJECTED
 
 Apple M5/Metal、1280×720 的历史 256-pair ABBA 中，restricted Mino 相对 interval
 capture + KS 改善 `35.768%`，95% CI `[-36.390%, -35.189%]`。性能结果仍说明 separable
 polynomial dynamics 有价值，但 correctness gate 优先；高分辨率反例使 production
 candidate 失效，相关 WGSL、pipeline 和 benchmark variant 已删除。
 
-## 8. Primary sources and scope
+## 8. 一手来源与适用域
 
 - Campanelli et al. Eq. (22)–(24)、(34)–(36) 给出 ingoing/outgoing Kerr coordinate
   transformations 的相反 azimuth shift。

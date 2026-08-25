@@ -4,15 +4,15 @@
 
 ## 最小上下文包
 
-| 任务                       | 先读                                                                             | 再核对源码/证据                                                                                                      |
-| -------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| 理解产品与当前边界         | [根 README](../README.md) → [产品范围](product.md) → [能力路线](roadmap.md)      | [Reference 证据](reference-implementation.md)、[GPU 证据](gpu-renderer.md)                                           |
-| 修改 domain 或连续模型     | [数学物理](physics.md) → [验证合同](validation.md)                               | `crates/gravlume-domain`、`crates/gravlume-reference` 及其 fixture/tests                                             |
-| 修改 GPU trace 或 WGSL     | [数学物理](physics.md) → [验证合同](validation.md) → [架构合同](architecture.md) | `crates/gravlume-render/src/trace*`、`crates/gravlume-render/src/shaders/`、GPU tests 与 [GPU 证据](gpu-renderer.md) |
-| 修改 publication/lifecycle | [架构合同](architecture.md) → [平台合同](platform.md)                            | `renderer.rs`、`renderer/frame.rs`、desktop `app.rs`/`lifecycle.rs`/`schedule.rs` 与 native smoke                    |
-| 修改 native HDR/display    | [平台合同](platform.md) → [架构合同](architecture.md)                            | `gravlume-native-display`、render `capabilities.rs`/`display.rs` 与 [HDR 决策](research/native-hdr-output.md)        |
-| 研究新算法                 | [渲染设计](rendering.md) → [研究索引](research/README.md) → 对应记录             | 独立 oracle、可复算脚本、受影响的 production baseline 与完整 observable gate                                         |
-| 修改依赖、feature 或工具链 | workspace `Cargo.toml`、crate manifests、`Cargo.lock`、[平台合同](platform.md)   | `cargo tree -e features` 与三个目标平台的 feature closure                                                            |
+| 任务                       | 先读                                                                             | 再核对源码/证据                                                                                                                                                                                                                      |
+| -------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 理解产品与当前边界         | [产品范围](product.md) → [能力路线](roadmap.md)                                  | [Reference 证据](reference-implementation.md)、[GPU 证据](gpu-renderer.md)                                                                                                                                                           |
+| 修改 domain 或连续模型     | [数学物理](physics.md) → [验证合同](validation.md)                               | [`gravlume-domain`](../crates/gravlume-domain/)、[`gravlume-reference`](../crates/gravlume-reference/) 及其 fixture/tests                                                                                                             |
+| 修改 GPU trace 或 WGSL     | [数学物理](physics.md) → [验证合同](validation.md) → [架构合同](architecture.md) | [trace core](../crates/gravlume-render/src/trace.rs)、[inspection modules](../crates/gravlume-render/src/trace/)、[WGSL](../crates/gravlume-render/src/shaders/)、[GPU tests](../crates/gravlume-render/src/gpu_trace_tests.rs)与 [GPU 证据](gpu-renderer.md) |
+| 修改 publication/lifecycle | [架构合同](architecture.md) → [平台合同](platform.md)                            | [renderer](../crates/gravlume-render/src/renderer.rs)、[frame ownership](../crates/gravlume-render/src/renderer/frame.rs)、desktop [app](../crates/gravlume-desktop/src/app.rs)/[lifecycle](../crates/gravlume-desktop/src/lifecycle.rs) 与 native smoke                  |
+| 修改 native HDR/display    | [平台合同](platform.md) → [架构合同](architecture.md)                            | [native display](../crates/gravlume-native-display/)、[capability resolver](../crates/gravlume-render/src/capabilities.rs)、[display](../crates/gravlume-render/src/display.rs)与 [HDR 决策](research/native-hdr-output.md)                                      |
+| 研究新算法                 | [渲染设计](rendering.md) → [研究索引](research/README.md) → 对应记录             | 独立 oracle、[可复算脚本](research/scripts/)、受影响的 production baseline 与完整 observable gate                                                                                                                                   |
+| 修改依赖、feature 或工具链 | workspace [`Cargo.toml`](../Cargo.toml)、crate manifests、[`Cargo.lock`](../Cargo.lock)、[平台合同](platform.md) | `cargo tree -e features` 与三个目标平台的 feature closure                                                                                                                                                                            |
 
 贡献前始终先读 [AGENTS.md](../AGENTS.md)；它定义仓库工作流、边界和必跑检查。
 
@@ -20,7 +20,7 @@
 
 | 事实                                     | 唯一权威来源                                                               |
 | ---------------------------------------- | -------------------------------------------------------------------------- |
-| 依赖版本、Rust edition 与 Cargo features | `Cargo.toml`、`Cargo.lock`                                                 |
+| 依赖版本、Rust edition 与 Cargo features | [`Cargo.toml`](../Cargo.toml)、[`Cargo.lock`](../Cargo.lock)               |
 | public Rust interface                    | crate source 与 rustdoc                                                    |
 | WGSL entry point、binding 与布局         | shader source、host DTO、ABI/GPU tests                                     |
 | 产品边界与科学声明                       | [产品范围](product.md)                                                     |
@@ -38,13 +38,13 @@
 
 | 路径                             | 稳定职责                                                             |
 | -------------------------------- | -------------------------------------------------------------------- |
-| `src/main.rs`                    | process entry：日志初始化与 desktop 启动                             |
-| `crates/gravlume-domain`         | validated values、scene、spacetime、observer、view 与独立 `f64` 数学 |
-| `crates/gravlume-reference`      | CPU oracle、event、fixture、comparison、batch 与 footprint           |
-| `crates/gravlume-native-display` | 原生 display-state 的窄安全边界                                      |
-| `crates/gravlume-render`         | wgpu/WGSL trace、publication、inspection、capture、display 与 timing |
-| `crates/gravlume-desktop`        | winit/egui 组合根、输入、调度与用户可见状态                          |
-| `docs/research/scripts`          | 锁定的符号/高精度研究工具；不进入 Cargo runtime dependency closure   |
+| [`src/main.rs`](../src/main.rs)                                      | process entry：日志初始化与 desktop 启动                             |
+| [`crates/gravlume-domain`](../crates/gravlume-domain/)                | validated values、scene、spacetime、observer、view 与独立 `f64` 数学 |
+| [`crates/gravlume-reference`](../crates/gravlume-reference/)          | CPU oracle、event、fixture、comparison、batch 与 footprint           |
+| [`crates/gravlume-native-display`](../crates/gravlume-native-display/) | 原生 display-state 的窄安全边界                                      |
+| [`crates/gravlume-render`](../crates/gravlume-render/)                | wgpu/WGSL trace、publication、inspection、capture、display 与 timing |
+| [`crates/gravlume-desktop`](../crates/gravlume-desktop/)              | winit/egui 组合根、输入、调度与用户可见状态                          |
+| [`docs/research/scripts`](research/scripts/)                           | 锁定的符号/高精度研究工具；不进入 Cargo runtime dependency closure   |
 
 模块边界与文件所有权的细节见[架构合同](architecture.md#依赖方向)和[Renderer modules](architecture.md#renderer-modules)，这里不维护第二份接口清单。
 

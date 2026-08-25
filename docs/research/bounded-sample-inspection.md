@@ -68,8 +68,8 @@ specialization，不是吞吐、SIMD 或 subgroup 声明；恢复 `workgroup_siz
 | resource | bytes | usage     |
 | -------- | ----: | --------- |
 | request  |    32 | `UNIFORM` |
-| record   |    96 | `STORAGE  | COPY_SRC` |
-| readback |    96 | `COPY_DST | MAP_READ` |
+| record   |    96 | `STORAGE \| COPY_SRC` |
+| readback |    96 | `COPY_DST \| MAP_READ` |
 
 合计 224 logical bytes，与 viewport extent 无关，不是 driver allocation 或 memory peak。Storage record 与
 staging readback 分离；同一 encoder 先 dispatch 再复制 96 bytes，测试随后等待 submission、map、读取、

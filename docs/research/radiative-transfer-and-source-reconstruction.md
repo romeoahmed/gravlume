@@ -1,6 +1,6 @@
 # 辐射传输、source-space 重建与解析加速证据
 
-本文在提交 `6503334c1fbd` 上核验标量辐射传输、Kerr/Kerr–Newman 赤道圆轨道 source、WGSL 数据布局、branch-aware footprint 与 Carlson 路线；它只保存一手证据、可否证假设和验收建议，不定义 production 行为。
+本文以提交 `6503334c1fbd` 为研究基线，核验标量辐射传输、Kerr/Kerr–Newman 赤道圆轨道 source、WGSL 数据布局、branch-aware footprint 与 Carlson 路线，并记录后续哪些结论被采用。它只保存一手证据、可否证假设、实验结果和恢复条件，不定义 production 行为。
 
 **状态：混合研究记录。** 已采用语义以[数学物理](../physics.md)、[渲染设计](../rendering.md)、[验证合同](../validation.md)与实现证据为准；任何新结论进入实现前必须先回写其唯一权威文档。
 
@@ -9,7 +9,7 @@
 1. 基线提交已经完成 equatorial source anchor、frequency ratio、surface full-KS trace、sealed
    `TracePlan` 与即时 bolometric $g^4I_{\rm em}$；当时的下一条真实缺口是带 optical depth 的标量
    emission/absorption，而不是再次设计 surface observable。
-2. $I_\nu/\nu^3$ 是 invariant intensity；无碰撞传播给 spectral $g^3$，只有对频率积分后才得到 bolometric $g^4$。后续 transport 应以正 optical depth 和 transmittance 累积，不能对普通 RGB 做“频移”。
+2. $I_\nu/\nu^3$ 是 invariant intensity；无碰撞传播给 spectral $g^3$，只有对频率积分后才得到 bolometric $g^4$。已采用的 scalar operator 以非负 optical depth 和 transmittance 表达；未来 volume transport 仍必须保持这一方向语义，不能对普通 RGB 做“频移”。
 3. 当前 Kerr–Newman 圆轨道公式与 timelike existence check 有一手文献支持，但 existence 不等于 radial stability。若 source 只表示运动学薄面，当前支持域可保留；若称为稳定吸积盘，必须另加 ISCO/effective-potential gate。
 4. 基线 host-shared ABI 使用 `vec4`/`[f32; 4]`，当时的 160-byte uniform 与 16-byte record
    element 都符合 WGSL 布局。`vec3<f32>` 的 size 是 12 byte、alignment 是 16 byte，放进 array
@@ -33,9 +33,9 @@
 - source-space differential 至少需要保存哪些离散 branch key 与连续 observable；
 - Carlson 路线在哪些受限域能够成为 conservative accelerator，而不重复已否决的 fixed-step Mino 外推。
 
-方法是对当前 Rust/WGSL、v2 fixture 和规范做静态核对，再与原始论文、W3C 标准及作者代码交叉检查。
+方法是对研究基线的 Rust/WGSL、v2 fixture 和规范做静态核对，再与原始论文、W3C 标准及作者代码交叉检查。
 一手资料核对阶段没有修改 production；其后的 reconstruction 候选实验及 benchmark 单列在第 5.6 节，
-最终没有保留候选代码。除此之外，下文的 fixture 是待实现的验证设计，不是已通过证据。
+最终没有保留候选代码。后续落地状态以本节证据表和第 2.3 节矩阵为准，不从最初的建议语气推断当前能力。
 
 配套的 80 位 SymPy/mpmath 复算脚本是
 [`verify_scalar_transport.py`](scripts/verify_scalar_transport.py)。它验证 invariant/blackbody
@@ -49,8 +49,10 @@ uv run --isolated --project docs/research/scripts --locked \
 
 高精度物理常数以十进制 source 保存，并在 `workdps(80)` 生效后才构造为 `mpf`；否则
 module import 会先按 mpmath 默认精度舍入，后续提高 precision 不能恢复丢失位。该行为由
-[mpmath precision context](https://mpmath.org/doc/1.3.0/basics.html#temporarily-changing-the-precision)
-约束，并由一个具名 6000 K red-band oracle 保留最小回归测试：
+[mpmath precision management](https://mpmath.org/doc/1.3.0/general.html#precision-management)
+约束，并由一个具名 6000 K red-band oracle 保留最小回归测试。旧构造在该 case 引入
+$6.21612160649749\times10^{-20}$ 的 absolute error，远大于 `1e-70` oracle gate；影响范围是四份
+v3 fixture 的 spectral expected，geometry、bolometric、输入与 tolerance 均未改变。
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
@@ -59,15 +61,15 @@ uv run --isolated --project docs/research/scripts --locked \
 ```
 
 修正只更新同一 `surface-transport-v1` 物理 profile 的高精度 spectral expected；schema、
-profile meaning、输入与 tolerance 均未改变。
+profile meaning、输入与 tolerance 均未改变，符合[验证合同的 oracle 勘误条件](../validation.md#6-fixture-envelope)。
 
-| 能力                                  | 基线/后续采用证据                                                                                                                                                                                                                                                                                                                                                                      | 本轮确认的缺口                                                                                                        |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| source anchor、$g$、bolometric source | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)                                                                                                                                                                                                                             | fixture 只覆盖 vacuum surface，不覆盖 absorption 或 spectral bins                                                     |
-| GPU surface                           | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；[`bolometric_surface_preview.wgsl`](../../crates/gravlume-render/src/shaders/bolometric_surface_preview.wgsl) 即时做 $g^4$；production 单槽 inspection 已有完整 branch-key 与 published-texel separation，test capture 另有 finite-difference Jacobian | production 没有 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
-| execution seam                        | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支                                                                                                                                                                                                                                                                                              | 不需要为尚不存在的第二 consumer 提前公开 solver trait                                                                 |
-| appearance/reconstruction             | [`rendering.md`](../rendering.md) 已定义 trace → transport → reconstruct 的方向                                                                                                                                                                                                                                                                                                        | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现                                                 |
-| analytic acceleration                 | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino                                                                                                                                                                                                                                                                                               | 尚无 root-aware Carlson implementation 或 accepted-domain classifier                                                  |
+| 能力                                  | 当前采用证据                                                                                                                                                                                                                                                                                                                                                                                                                                               | 未闭合边界                                                                                                            |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| source、frequency 与 scalar transport | CPU [`surface.rs`](../../crates/gravlume-reference/src/surface.rs)、[v2 neutral fixture](../../crates/gravlume-reference/fixtures/v2/kerr-surface-observable.toml)与 [v3 spectral/slab fixtures](../../crates/gravlume-reference/fixtures/v3/)                                                                                                                                                                                                                   | 更广 source geometry、空间变化 coefficient、scattering 与 polarization                                               |
+| GPU surface                           | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；plan-specific surface shader 完成 bolometric 或 spectral/slab transport；production 单槽 inspection 已有完整 branch key 与 published-texel separation，test capture 另有 finite-difference Jacobian                                                                                                                          | production 没有 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
+| execution seam                        | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支                                                                                                                                                                                                                                                                                                                                                                   | 不需要为尚不存在的第二 consumer 提前公开 solver trait                                                                 |
+| appearance/reconstruction             | [渲染设计](../rendering.md)定义 trace → transport → reconstruct 的准入边界                                                                                                                                                                                                                                                                                                                                                                                | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现                                                 |
+| analytic acceleration                 | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino                                                                                                                                                                                                                                                                                                                                                                    | 尚无 root-aware Carlson implementation 或 accepted-domain classifier                                                  |
 
 ## 2. Invariant radiative transfer
 
@@ -119,19 +121,21 @@ I_{\nu,{\rm obs}}(\nu_{\rm obs})
 
 沿 volume ray，$j_\nu$ 与 $\alpha_\nu$ 必须在每个 accepted sample 的 local fluid frequency 上求值。一个固定的 observer spectral bin 会沿路径对应不同 local frequency；这正是 spectral LUT 需要频率坐标而 RGB 不足以替代它的原因。
 
-### 2.3 最小解析 fixture
+### 2.3 最小解析验证矩阵
 
-| fixture                  | 构造                                                               | 必须比较的 observable / 可发现错误                                                                        |
-| ------------------------ | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `rt-vacuum-redshift`     | vacuum 中给定解析 $g$ 与非平坦 compact spectrum                    | 每个 bin 比较 $g^3I_\nu(\nu/g)$；高精度积分比较 $g^4$，发现漏掉频率换元                                   |
-| `rt-blackbody-shift`     | 两个 $g<1$、$g>1$，同一 emitter temperature                        | spectrum 等于温度 $gT$ 的 Planck curve，积分同时满足 $g^4$                                                |
-| `rt-pure-absorption`     | Minkowski/static slab，$j=0$                                       | $I_{\rm out}=I_{\rm in}e^{-\tau}$；覆盖 $\tau=0,2^{-20},10^{-3},1,20$                                     |
-| `rt-constant-slab`       | $g=1$，常量正 $j,\alpha$                                           | 与 analytic slab 逐值比较；thin limit 由 `expm1` 保真，thick limit 趋近 $S_\nu$                           |
-| `rt-pure-emission`       | $\alpha=0,j>0$                                                     | 与 path length 成线性；发现 `j/alpha` 和错误 early return                                                 |
-| `rt-partition-order`     | 同一 slab 分为 1、2、17 个 segment；另以 backward accumulator 计算 | terminal intensity 与 transmittance 同解，发现 segment 顺序、重复提交 rejected step 和 signed-$\tau$ 错误 |
-| `rt-invalid-coefficient` | 负值、NaN、overflowing source                                      | typed rejection/diagnostic，不允许 clamp 成可见 radiance                                                  |
+下表是验证 case，不是稳定 artifact ID。采用状态只说明当前仓库覆盖了该数学命题；精确 fixture、profile 与 tolerance 仍以[验证合同](../validation.md)和版本化 TOML 为准。
 
-CPU oracle 应用 binary64 或更高精度直接算 analytic expression；GPU 比较 scene-linear spectral/bolometric 值和 $\tau$，不比较 tone-mapped RGB。随机 property test 可生成非负 $I,j,\alpha,L$ 并检查 positivity、partition invariance 和 monotonic transmittance，但命名 fixture 仍需固定上述边界。
+| Case                    | 构造                                                               | 必须比较的 observable / 可发现错误                                                                        | 状态                                      |
+| ----------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- | ----------------------------------------- |
+| vacuum spectral shift   | vacuum 中给定解析 $g$ 与非平坦 compact spectrum                    | 每个 bin 比较 $g^3I_\nu(\nu/g)$；高精度积分比较 $g^4$，发现漏掉频率换元                                   | 一般 compact spectrum 尚未实现            |
+| blackbody shift         | $g<1$ 的 canonical surface 与独立 Planck oracle                    | spectrum 等于温度 $gT$ 的 Planck curve，积分同时满足 $g^4$                                                | 已由 symbolic identity 与 v3 fixture 覆盖 |
+| pure absorption         | static homogeneous slab，$j=0$                                     | $I_{\rm out}=I_{\rm in}e^{-\tau}$；覆盖 zero、thin、regular 与 high optical depth                         | 已由 v3 fixture 与边界测试覆盖            |
+| constant slab           | $g=1$，常量正 source function                                      | 与 analytic slab 逐值比较；thin limit 由 `expm1` 保真，thick limit 趋近 source                             | 已由 v3 fixture 与 property test 覆盖     |
+| pure emission           | $\alpha=0,j>0$                                                     | 与 integrated emission 成线性；发现 `j/alpha` 和错误 early return                                        | 已由 v3 fixture 覆盖                      |
+| partition/order         | 同一 homogeneous operator 分段组合                                 | terminal intensity 与 transmittance 同解，发现顺序、重复提交与 signed-$\tau$ 错误                         | operator 已覆盖；volume checkpoints 未实现 |
+| invalid coefficient     | 负值、NaN、overflowing source                                      | typed rejection/diagnostic，不允许 clamp 成可见 radiance                                                  | domain/property tests 已覆盖              |
+
+CPU oracle 使用 binary64 或更高精度直接计算 analytic expression；GPU 比较 scene-linear spectral/bolometric 值，不比较 tone-mapped RGB。Property tests 覆盖连续代数域，具名 fixture 保留 canonical scientific case；两者不相互替代。
 
 ## 3. Kerr/Kerr–Newman 赤道圆轨道 emitter
 
@@ -172,7 +176,9 @@ near-extreme fixture 应记录无量纲 condition signals，而非预先宣布�
 
 production threshold 应由 observable error 与 false-accept sweep 反推。任一 condition 不确定就返回 typed invalid/fallback；不得通过 clamp 或强制选择 prograde sign 继续。
 
-### 3.3 建议 fixture
+### 3.3 尚未采用的 stability fixture
+
+以下是把运动学 circular emitter 扩展为稳定轨道声明时需要的新证据；当前 `EquatorialCircularEmitter` 不作该声明，这些 case 尚未进入 versioned fixture。
 
 1. `orbit-schwarzschild`: $r=3M$ 两侧验证 null denominator，$r=6M$ 两侧用 $R''$ 验证 marginal stability，$r=10M$ 交叉比较 metric normalization、$R=R'=0$ 与解析 $\Omega$。
 2. `orbit-kerr-spin-pair`: 同一 $|a|$ 的 prograde/retrograde 分支，比较 Bardeen–Press–Teukolsky ISCO、$u^t$、specific energy 和正 emitted frequency。

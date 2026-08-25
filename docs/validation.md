@@ -320,52 +320,35 @@ presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 
 fixture 使用 UTF-8 TOML，未知字段和未知 enum 一律拒绝。`schema_version` 管结构，`profile` 管阈值；两者不能互相替代。输入/期望的高精度十进制以字符串保存，解析器必须明确转换精度，不能先经 `f64` 再声称 80 位来源；固定 canonical preset 的十进制原文是规范 artifact，必须在舍入到 `f64` 前精确核对。
 
 v1 保存 geometry/Observation，v2 保存 neutral surface observable，v3 保存 blackbody/slab transport；
-旧 schema 的字段与 profile 含义不原地扩展。每个 parser 只接受仓库内具名 canonical preset，修改
-任一 expected、producer 或 applicability 字段都必须以新 artifact identity/version 进入。
+旧 schema 的字段、profile 含义、canonical 输入、tolerance 与 applicability 不原地扩展。模型、输入、
+阈值、适用域或 intended producer method 的变化必须以新 artifact identity/version 进入。
 
-```toml
-schema_version = 1
-profile = "baseline-v1"
-id = "schwarzschild-scatter-b6-v1"
-kind = "geodesic"
-evidence = "numeric"
+若独立复算证明 expected 是 oracle 实现错误，而模型、输入、profile、tolerance 与适用域均未改变，
+修正属于同一 artifact 的勘误，不伪造一个新的物理 profile。勘误必须同时满足：先加入能复现根因的
+独立最小 oracle；在 research record 中保存根因、影响范围与复算命令；原子更新全部消费者；不得借
+勘误放宽 tolerance、扩大 applicability 或更换 intended method。Git history 保留旧值。v3 spectral
+expected 的精度勘误见[辐射传输研究记录](research/radiative-transfer-and-source-reconstruction.md#1-问题方法与当前差距)。
 
-[producer]
-method = "80-digit direct-r and reciprocal-u quadrature"
+不要在文档中维护一份带省略号的伪 schema。具名实例分别见
+[`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/)、
+[`fixtures/v2`](../crates/gravlume-reference/fixtures/v2/)与
+[`fixtures/v3`](../crates/gravlume-reference/fixtures/v3/)；结构接受范围以对应 parser 和
+`deny_unknown_fields` tests 为准，语义与阈值仍由本合同定义。
 
-[spacetime]
-family = "kerr-newman"
-chart = "ingoing-cartesian-kerr-schild"
-mass_m = "1"
-spin_m = "0"
-charge_m = "0"
-
-[initial]
-position_txyz_m = ["0", "50", "0", "0"]
-momentum_covariant = ["-1", "...", "0.12", "0"]
-affine_direction = "positive"
-
-[expected]
-termination = "escape"
-turning_radius_m = "..."
-azimuth_advance_rad = "..."
-
-[tolerance]
-turning_radius_abs_m = "5e-11"
-azimuth_advance_abs_rad = "5e-10"
-```
-
-必需字段：
+每个 artifact 必须解析出以下语义。v1 在文件内完整保存 geometry/initial/applicability；v2/v3 通过
+versioned `base_observation_id` 继承 canonical Observation，再只保存自己的 sample、surface、transport
+与 expected，不能覆盖 base convention：
 
 - envelope：schema/profile/id/kind/evidence；
 - producer：方法、precision、独立来源或推导；
+- identity/base：完整 canonical input，或唯一且受检的 base artifact reference；
 - convention：chart、signature、component order、mass/frequency normalization；
-- initial：完整状态、integration direction、event arming；
+- initial/sample：完整状态或 Observation sample、integration direction 与 event arming；
 - expected：typed terminal 与具名 continuous observables；
 - tolerance：每个 continuous observable 独立 abs/rel 规则；
 - applicability：regular/near-critical、参数域和不适用条件。
 
-持久化 enum 名称是 versioned protocol，不由 UI label 或 `strum` iteration order 生成。NaN/Inf、负零和未声明单位在 input seam 拒绝；同一 logical label 若绑定到不同 canonical bits，comparison 返回 identity collision，不能进入数值验收。artifact 额外记录 producer revision、policy、dtype、adapter/backend、shader digest 与实际 resource counters。
+持久化 enum 名称是 versioned protocol，不由 UI label 或 iteration order 生成。NaN/Inf、负零和未声明单位在 input seam 拒绝；同一 logical label 若绑定到不同 canonical bits，comparison 返回 identity collision，不能进入数值验收。当前 CPU fixture 的 producer 只保存独立方法与 precision；未来由 GPU/Instrument 生成的持久 artifact 才必须另外记录 producer revision、policy、dtype、adapter/backend、shader digest 与实际 resource counters，不能把这些字段倒灌进旧 schema。
 
 ## 7. 80 位 Schwarzschild 基准
 
