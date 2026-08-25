@@ -22,6 +22,10 @@ Primary mathematical sources:
   https://mpmath.org/doc/1.3.0/general.html
 * Python NaN comparison semantics:
   https://docs.python.org/3/reference/expressions.html#value-comparisons
+* Dataclass post-init and replacement behavior:
+  https://docs.python.org/3/library/dataclasses.html#post-init-processing
+* Runtime relationship between bool and int:
+  https://docs.python.org/3/library/stdtypes.html#boolean-type-bool
 """
 
 from __future__ import annotations
@@ -39,6 +43,12 @@ MINIMUM_WITNESS_DIGITS = 70
 RESIDUAL_GUARD_DIGITS = 15
 SURFACE_INNER_RADIUS_M = 6
 SURFACE_OUTER_RADIUS_M = 20
+_CANONICAL_TERMINAL = "equatorial-surface"
+_CANONICAL_INITIAL_POLAR_SIDE = "positive"
+_CANONICAL_RADIAL_TURNINGS = 1
+_CANONICAL_POLAR_TURNINGS = 1
+_CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL = 0
+_CANONICAL_AZIMUTH_WINDING = 0
 
 
 class UnsupportedWitness(ValueError):
@@ -47,7 +57,7 @@ class UnsupportedWitness(ValueError):
 
 @dataclass(frozen=True)
 class SurfaceWitness:
-    """Certified independent observables and margins for one surface terminal."""
+    """Certified canonical identity, observables, and margins for one surface ray."""
 
     precision_digits: int
     terminal: str
@@ -114,6 +124,24 @@ def _validate_precision_digits(precision_digits: object) -> None:
 
 def _validate_surface_witness(witness: SurfaceWitness) -> None:
     _validate_precision_digits(witness.precision_digits)
+    discrete_identity = (
+        (witness.terminal, _CANONICAL_TERMINAL),
+        (witness.initial_polar_side, _CANONICAL_INITIAL_POLAR_SIDE),
+        (witness.radial_turnings, _CANONICAL_RADIAL_TURNINGS),
+        (witness.polar_turnings, _CANONICAL_POLAR_TURNINGS),
+        (
+            witness.equatorial_crossings_before_terminal,
+            _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL,
+        ),
+        (witness.azimuth_winding, _CANONICAL_AZIMUTH_WINDING),
+    )
+    if any(
+        type(actual) is not type(expected) or actual != expected
+        for actual, expected in discrete_identity
+    ):
+        raise UnsupportedWitness(
+            "witness does not match the canonical discrete path identity"
+        )
     continuous_fields = (
         witness.source_radius_m,
         witness.source_azimuth_rad,
@@ -684,11 +712,13 @@ def _compute_canonical_surface_witness(
     )
     return SurfaceWitness(
         precision_digits=precision_digits,
-        terminal="equatorial-surface",
-        initial_polar_side="positive",
-        radial_turnings=1,
-        polar_turnings=1,
-        equatorial_crossings_before_terminal=0,
+        terminal=_CANONICAL_TERMINAL,
+        initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
+        radial_turnings=_CANONICAL_RADIAL_TURNINGS,
+        polar_turnings=_CANONICAL_POLAR_TURNINGS,
+        equatorial_crossings_before_terminal=(
+            _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL
+        ),
         azimuth_winding=azimuth_winding,
         source_radius_m=source_radius,
         source_azimuth_rad=source_azimuth,
@@ -757,17 +787,6 @@ def build_precision_certificate() -> PrecisionCertificate:
         "radial_turning_derivative",
         "polar_turning_derivative",
     )
-    discrete_fields = (
-        "terminal",
-        "initial_polar_side",
-        "radial_turnings",
-        "polar_turnings",
-        "equatorial_crossings_before_terminal",
-        "azimuth_winding",
-    )
-    for field in discrete_fields:
-        if getattr(low, field) != getattr(high, field):
-            raise AssertionError(f"precision doubling changed discrete field {field}")
     with mp.workdps(HIGH_PRECISION_DIGITS):
         normalized_deltas = tuple(
             abs(getattr(low, field) - getattr(high, field))
