@@ -216,7 +216,7 @@ impl SampleInspection {
     /// Returns the binary32 evidence from the fresh full Kerr-Schild retrace.
     ///
     /// This is deliberately separate from [`Self::published_texel`], which may include a
-    /// conservative accelerator, shadow refinement, and `Rgba16Float` rounding.
+    /// shadow refinement and `Rgba16Float` rounding.
     #[must_use]
     pub const fn fresh_retrace(self) -> SampleRetrace {
         self.fresh_retrace

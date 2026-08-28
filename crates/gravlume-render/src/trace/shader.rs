@@ -5,7 +5,7 @@ const KERR_SCHILD_DYNAMICS: &str = include_str!("../shaders/kerr_schild_dynamics
 const GEODESIC_EVENTS: &str = include_str!("../shaders/geodesic_events.wgsl");
 const GEODESIC_INTEGRATION: &str = include_str!("../shaders/geodesic_integration.wgsl");
 const LENSING_PREVIEW: &str = include_str!("../shaders/lensing_preview.wgsl");
-const GEODESIC_ACCELERATION: &str = include_str!("../shaders/geodesic_acceleration.wgsl");
+const ANALYTIC_SKY_PREVIEW: &str = include_str!("../shaders/analytic_sky_preview.wgsl");
 const SHADOW_COVERAGE: &str = include_str!("../shaders/shadow_coverage.wgsl");
 const SURFACE_TRANSPORT: &str = include_str!("../shaders/surface_transport.wgsl");
 const BOLOMETRIC_SURFACE_PREVIEW: &str = include_str!("../shaders/bolometric_surface_preview.wgsl");
@@ -21,8 +21,6 @@ const SURFACE_TRACE_CAPTURE: &str = include_str!("../shaders/surface_trace_captu
 #[cfg(test)]
 const SURFACE_FOOTPRINT_CAPTURE: &str = include_str!("../shaders/surface_footprint_capture.wgsl");
 #[cfg(test)]
-const ACCELERATED_TRACE_CAPTURE: &str = include_str!("../shaders/accelerated_trace_capture.wgsl");
-#[cfg(test)]
 const INITIAL_RAY_CAPTURE: &str = include_str!("../shaders/initial_ray_capture.wgsl");
 #[cfg(test)]
 const INVARIANT_GATE_CAPTURE: &str = include_str!("../shaders/invariant_gate_capture.wgsl");
@@ -36,8 +34,8 @@ const TRACE_CORE: [&str; 4] = [
     GEODESIC_INTEGRATION,
 ];
 
-pub(super) fn accelerated_scene() -> String {
-    assemble(&[LENSING_PREVIEW, GEODESIC_ACCELERATION])
+pub(super) fn analytic_sky_scene() -> String {
+    assemble(&[LENSING_PREVIEW, ANALYTIC_SKY_PREVIEW])
 }
 
 pub(super) fn bolometric_surface_scene() -> String {
@@ -85,7 +83,7 @@ pub(super) fn blackbody_sample_inspection() -> String {
 }
 
 pub(super) fn shadow_coverage() -> String {
-    assemble(&[LENSING_PREVIEW, GEODESIC_ACCELERATION, SHADOW_COVERAGE])
+    assemble(&[LENSING_PREVIEW, SHADOW_COVERAGE])
 }
 
 #[cfg(test)]
@@ -134,16 +132,6 @@ pub(super) fn blackbody_surface_footprint_capture() -> String {
         SURFACE_TRANSPORT,
         BLACKBODY_SURFACE_PREVIEW,
         SURFACE_FOOTPRINT_CAPTURE,
-    ])
-}
-
-#[cfg(test)]
-pub(super) fn accelerated_capture() -> String {
-    assemble(&[
-        LENSING_PREVIEW,
-        TRACE_CAPTURE,
-        GEODESIC_ACCELERATION,
-        ACCELERATED_TRACE_CAPTURE,
     ])
 }
 

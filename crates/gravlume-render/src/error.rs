@@ -162,7 +162,7 @@ impl From<&ResizeError> for DeviceEvent {
 
 /// Captures every wgpu error category while a resource candidate is constructed.
 ///
-/// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Device.html#method.push_error_scope>
+/// Source: <https://docs.rs/wgpu/30.0.1/wgpu/struct.Device.html#method.push_error_scope>
 pub struct GpuErrorScopes {
     internal: wgpu::ErrorScopeGuard,
     out_of_memory: wgpu::ErrorScopeGuard,

@@ -1,23 +1,23 @@
 // Versioned three-band blackbody transport. Log2 fractions preserve scale until the complete
 // radiance product is known. The vec4 storage stride is uniformly 16 bytes on every backend.
 
-const BLACKBODY_LUT_LAST_INDEX: u32 = 4096u;
 const BLACKBODY_LUT_INTERVALS_PER_OCTAVE: f32 = 128.0;
 const BLACKBODY_LUT_MIN_LOG2_TEMPERATURE: f32 = -8.0;
 
-@group(0) @binding(8)
-var<storage, read> blackbody_log2_fraction_lut: array<vec4<f32>, 4097>;
+@group(0) @binding(7)
+var<storage, read> blackbody_log2_fraction_lut: array<vec4<f32>>;
 
 fn blackbody_band_log2_fractions(temperature_kelvin: f32) -> vec3<f32> {
     if temperature_kelvin <= 0.0 || !finite_scalar(temperature_kelvin) {
         return vec3<f32>(1.0);
     }
+    let last_index = arrayLength(&blackbody_log2_fraction_lut) - 1u;
     let coordinate = (log2(temperature_kelvin) - BLACKBODY_LUT_MIN_LOG2_TEMPERATURE)
         * BLACKBODY_LUT_INTERVALS_PER_OCTAVE;
-    if coordinate < 0.0 || coordinate > f32(BLACKBODY_LUT_LAST_INDEX) {
+    if coordinate < 0.0 || coordinate > f32(last_index) {
         return vec3<f32>(1.0);
     }
-    let lower_index = min(u32(floor(coordinate)), BLACKBODY_LUT_LAST_INDEX - 1u);
+    let lower_index = min(u32(floor(coordinate)), last_index - 1u);
     let weight = coordinate - f32(lower_index);
     let lower = blackbody_log2_fraction_lut[lower_index];
     let upper = blackbody_log2_fraction_lut[lower_index + 1u];

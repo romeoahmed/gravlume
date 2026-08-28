@@ -252,9 +252,8 @@ WGSL 的内存模型采用 Vulkan memory model；所有 synchronization built-in
 的 uniform control flow。[WGSL memory model](https://www.w3.org/TR/WGSL/#memory-model)
 [WGSL synchronization built-ins](https://www.w3.org/TR/WGSL/#barrier-builtin-functions) 因而它们只能在
 **同一 workgroup** 内发布对应 address space 的写入；二者都不是跨 workgroup 或全 dispatch
-barrier。当前 [`geodesic_acceleration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_acceleration.wgsl)
-的两次 `workgroupBarrier()` 用于共享
-`var<workgroup>` stencil，且所有 invocation 都会到达，属于规范覆盖的用法。
+barrier。历史 escape-map shader 的两次 `workgroupBarrier()` 曾用于共享 `var<workgroup>` stencil，
+且所有 invocation 都会到达，属于规范覆盖的用法；该 shader 已因 observable 合同不完整而删除。
 
 WGSL storage atomic 的 ordering 是 `Relaxed`：只对同一 atomic memory location 的 atomic
 operations 给出 ordering，不会给 payload 的 non-atomic store 或另一 atomic location 建立发布关系。

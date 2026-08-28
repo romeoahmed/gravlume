@@ -172,7 +172,8 @@ physics；不得为让默认图更漂亮而改变这一合同。
 四份 canonical artifact 位于 [`fixtures/v3/`](../crates/gravlume-reference/fixtures/v3/)。几何
 expected 来自 strict reference convergence；transfer identity、Planck normalization、band integral
 与 cancellation-sensitive limit 由 80 位独立计算生成。CPU regular/strict 均须接受 artifact；GPU
-比较最终 `RGBA16F` scene-linear bands，不能经过 tone mapping。
+先比较 structured `f32` scene-linear bands 的完整物理结果，再验证最终 `RGBA16F` representation；两者
+都不能经过 tone mapping。
 
 ## 4. Reference Policy
 
@@ -266,18 +267,19 @@ singularity → horizon → emitter → escape bit order 保存，ambiguity 独�
 sticky state，只在已提交 endpoint 离开 band 后置位。Equatorial crossing 属于 branch observable，
 不因 scene 未安装 surface 而停止计数；arming 只控制 crossing 能否成为 surface terminal。
 
-| observable                                            |                                             v1/v2 gate |
-| ----------------------------------------------------- | -----------------------------------------------------: |
-| regular termination / branch                          |                               exact reference equality |
-| regular escape/source angular error                   | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
-| regular travel-time absolute error                    |                                               `1e-3 M` |
-| recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift |                                            each `0.05` |
-| Frequency Ratio relative error                        |                                                 `2e-3` |
-| surface event position                                |                                               `5e-3 M` |
-| bolometric surface `RGBA16F` relative error           |                                                 `2e-3` |
-| final spectral surface band relative error            |                                                 `4e-3` |
-| numerical failure on regular matrix                   |                                                    `0` |
-| stale history after generation/resize/cut             |                                   `0` accepted samples |
+| observable                                                   |                                             v1/v2 gate |
+| ------------------------------------------------------------ | -----------------------------------------------------: |
+| regular termination / branch                                 |                               exact reference equality |
+| regular escape/source angular error                          | ≤ `0.35` pixel footprint；本 viewport 为 `3.82e-4 rad` |
+| regular travel-time absolute error                           |                                               `1e-3 M` |
+| recorded normalized null/$E$/$L_z$/$\mathcal Q$ drift        |                                            each `0.05` |
+| Frequency Ratio relative error                               |                                                 `2e-3` |
+| surface event position                                       |                                               `5e-3 M` |
+| bolometric surface normal `RGBA16F` channel relative error    |                                                 `2e-3` |
+| structured `f32` spectral surface band relative error        |                                                 `4e-3` |
+| final spectral normal `RGBA16F` band relative error          |                                                 `4e-3` |
+| numerical failure on regular matrix                          |                                                    `0` |
+| stale history after generation/resize/cut                    |                                   `0` accepted samples |
 
 GPU universal path 动态积分六个 canonical spatial variables，并把 per-ray $E=-p_t$ 作为构造上
 不变的常量；coordinate time 用同一 RK stages 的相对 increment 累计，因此共同平移 observer
@@ -298,9 +300,16 @@ event residual，而不是只比较 cubic polynomial residual。
 几何 transport 合并，只有完整 radiance 的 exponent 已知后才物化线性值并交给 `RGBA16F`
 rounding；不得先把微小 fraction 截断为零。相对 80 位 Planck oracle，全部 midpoint 重建 fraction 的
 absolute error 必须不超过
-`3e-6`；当 expected fraction 至少为 `1e-6` 时 relative error 不超过 `2e-3`。最终 spectral fixture
-同时包含 geometry/transport 与 FP16 rounding，因此使用上表 `4e-3` gate，而不是把 LUT 单项预算
-误作总误差。
+`3e-6`；当 expected fraction 至少为 `1e-6` 时 relative error 不超过 `2e-3`。四个 v3 spectral
+fixture 的完整三 band 物理 agreement 由 structured `f32` inspection 承担；它包含
+geometry/transport，但不把 texture representation 当作 oracle。
+
+最终 `RGBA16F` fixture 还包含 binary16 rounding。只有 reference expected magnitude 至少为 binary16
+最小 normal `2^-14` 时，上表 `4e-3` relative gate 才是跨 backend 合同。低于该 floor 时，[WebGPU
+texel-copy 规则](https://www.w3.org/TR/webgpu/#texel-copies)允许 subnormal 保留或替换为任一 signed
+zero，因此 portable representation gate 接受满足 `4e-3` 的非零值或 `±0`；同一样本的 structured
+`f32` inspection 仍须通过完整物理 gate。这不放宽 LUT、transport 或 solver 预算，也不把 LUT 单项
+预算误作最终总误差。Scientific capture metadata 原子发布 normal-channel budgets 与该 floor。
 
 surface-footprint GPU capture 是 test-only 证据路径：中心与真实 `±0.25 pixel` 四邻域必须全部为
 无歧义 surface terminal，且完整 branch key exact equality，才输出 source chart
@@ -313,7 +322,12 @@ profile，每个 profile 对最多 24 个分层 surface pixel 要求 CPU/GPU ter
 equatorial crossings 与 signed winding exact equality。该 matrix 不改变上表连续预算，也不把尚未通过
 同预算的非 canonical source/time 样本登记为连续 agreement evidence。
 
-presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过 travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入常规测试。
+未来 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须
+通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition
+signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过
+travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、
+near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入
+常规测试。
 
 ## 6. Fixture envelope
 

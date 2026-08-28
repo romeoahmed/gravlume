@@ -11,8 +11,8 @@
 编码并提交一张完整 candidate。该 workload 随 `surface-observable-v1` 取代旧 sky accelerator
 workload，因此两者的绝对时间不能串成同一历史序列。
 
-benchmark 复用 renderer 自己的 `GpuTimings`：当前 surface plan 只测一条 trace pass；具
-escape-map 的 sky plan 才累加两条 pass。resolved GPU duration 通过 Criterion
+benchmark 复用 renderer 自己的 `GpuTimings`，以一对 timestamp 包围 production trace pass。
+resolved GPU duration 通过 Criterion
 `Bencher::iter_custom` 返回。命令编码、queue submit、等待和 readback 不计入该 duration，因此
 这个指标用于比较 kernel throughput，不代表 resize-to-publish 或点击到像素的端到端延迟。
 
@@ -26,7 +26,7 @@ Criterion 明确把 `iter_custom` 定义为由被测 workload 自行提供总 `D
 
 ## 2. 为什么不保留第二套 profiler
 
-production 已有 plan-sized query set、单 readback buffer、明确 submission 生命周期的 `GpuTimings`：surface trace 使用两个 tick，sky escape-map + trace 使用四个 tick。
+production 已有固定一对 query、单 readback buffer 和明确 submission 生命周期的 `GpuTimings`。
 永久 benchmark 再引入 `wgpu-profiler` 会复制 query ownership、frame lifecycle 和错误面；而
 一个 compute pass 的 descriptor 只能安装一组 timestamp writes。当前 benchmark 不需要
 scope tree、动态 query pool 或多帧 profiler，因此直接复用 production abstraction 更小，

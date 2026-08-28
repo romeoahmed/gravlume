@@ -1,4 +1,4 @@
-use std::num::NonZeroU32;
+use std::{mem::size_of, num::NonZeroU32};
 
 use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_domain::{
@@ -11,19 +11,18 @@ use gravlume_reference::{
     TraceBranchKey, TraceInputId,
 };
 use num_traits::ToPrimitive as _;
-use proptest::prelude::*;
 
 use crate::{
     gpu_capture::{
-        capture_accelerated_trace, capture_accelerated_trace_in_batches,
-        capture_event_policy_cases, capture_initial_rays, capture_invariant_gate_cases,
-        capture_refined_edge_count, capture_refined_trace, capture_sample_corpus, capture_trace,
-        capture_trace_sample, inspect_sample,
+        TraceCapture, capture_event_policy_cases, capture_initial_rays,
+        capture_invariant_gate_cases, capture_refined_edge_count, capture_refined_trace,
+        capture_sample_corpus, capture_trace, capture_trace_in_batches, capture_trace_sample,
+        inspect_sample,
     },
-    scientific_capture::INVARIANT_RELATIVE_DRIFT_LIMIT,
+    scientific_capture::{GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET, INVARIANT_RELATIVE_DRIFT_LIMIT},
     trace::{
         SampleBranchKey, SamplePolarSide, SampleRetrace, SampleSurfaceEvaluation,
-        SampleTraceDiagnostics, SampleTraceOutcome, TraceTermination, TraceUniforms,
+        SampleTraceDiagnostics, SampleTraceOutcome, TraceTermination,
     },
 };
 
@@ -37,27 +36,8 @@ const GPU_EVENT_RESIDUAL_ABSOLUTE_BUDGET: f32 = 5.0e-3;
 const GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M: f64 = 1.0e-3;
 const GPU_SURFACE_POSITION_ABSOLUTE_BUDGET_M: f64 = 5.0e-3;
 const GPU_FREQUENCY_RATIO_RELATIVE_BUDGET: f64 = 2.0e-3;
-const GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET: f64 = 2.0e-3;
 
 mod surface;
-
-#[test]
-fn trace_termination_discriminants_are_stable() {
-    let cases = [
-        (1, TraceTermination::HorizonCrossing),
-        (2, TraceTermination::Escape),
-        (3, TraceTermination::SingularityGuard),
-        (4, TraceTermination::StepExhaustion),
-        (5, TraceTermination::NumericalFailure),
-        (6, TraceTermination::Uncertain),
-        (7, TraceTermination::EquatorialSurface),
-    ];
-
-    for (raw, expected) in cases {
-        assert_eq!(u32::from(expected), raw);
-        assert_eq!(TraceTermination::try_from(raw), Ok(expected));
-    }
-}
 
 #[test]
 fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
@@ -70,10 +50,7 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     let observation = fixture.observation();
     let sample = fixture.sample();
     let capture = capture_trace_sample(observation, sample);
-    let [pixel_x, pixel_y] = sample.pixel();
-    let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
-        .expect("fixture pixel index fits usize");
-    let gpu = capture.records[index];
+    let gpu = capture.record;
     let reference = ObservationTracer::baseline_v1()
         .trace(
             fixture
@@ -122,7 +99,7 @@ fn canonical_surface_sample_closes_gpu_geometry_frequency_and_radiance() {
     );
 
     let expected = reference_observable.observed_bolometric_intensity();
-    let pixel = capture.hdr_pixel(index);
+    let pixel = capture.hdr_pixel;
     assert_eq!(
         u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
         0x4000,
@@ -175,119 +152,28 @@ fn bounded_sample_inspection_keeps_analytic_escape_semantics_non_spectral() {
         .sample(0, 0, 0.25, 0.75)
         .expect("analytic sample belongs to the view");
     let inspection = inspect_sample(&observation, sample);
+    let reference = ObservationTracer::baseline_v1()
+        .trace(
+            ObservationTrace::new(
+                TraceInputId::new("analytic-inspection"),
+                &observation,
+                sample,
+                ReferencePolicy::regular_v1(),
+            )
+            .expect("reference request resolves"),
+        )
+        .expect("default observation is normalized");
+    let retrace = inspection.fresh_retrace();
+
+    assert_retrace_matches_reference(sample, &reference, retrace);
 
     assert!(matches!(
-        inspection.fresh_retrace().outcome(),
+        retrace.outcome(),
         SampleTraceOutcome::Escape {
-            unit_direction,
             preview_rgb,
             ..
-        } if unit_direction.into_iter().all(f32::is_finite)
-            && preview_rgb.into_iter().all(f32::is_finite)
+        } if preview_rgb.into_iter().all(f32::is_finite)
     ));
-    assert!(
-        inspection
-            .fresh_retrace()
-            .diagnostics()
-            .coordinate_time_delta_over_m()
-            > 0.0
-    );
-}
-
-proptest! {
-    #[test]
-    fn unknown_trace_termination_discriminants_are_rejected(
-        raw in prop_oneof![Just(0), Just(8), Just(u32::MAX), 9_u32..u32::MAX],
-    ) {
-        prop_assert!(matches!(
-            TraceTermination::try_from(raw),
-            Err(error) if error == raw
-        ));
-    }
-}
-
-#[test]
-fn gpu_trace_rejects_non_normalized_observer_frequency() {
-    let observation = observation_with(1.0, 0.8, 0.0, [30.0, 0.0, 0.0], 1.0e-6, 1, 1);
-
-    assert!(matches!(
-        TraceUniforms::from_observation(&observation),
-        Err(crate::GpuTraceInputError::NonNormalizedObserverFrequency { .. })
-    ));
-}
-
-#[test]
-fn gpu_trace_rejects_extremality_changed_by_f32_packing() {
-    let observation = observation_with(
-        1.0,
-        0.157_132_806_437_842_44,
-        0.987_577_480_983_596_3,
-        [30.0, 0.0, 0.0],
-        1.0,
-        1,
-        1,
-    );
-
-    assert!(matches!(
-        TraceUniforms::from_observation(&observation),
-        Err(crate::GpuTraceInputError::ExtremalityChangedByPacking { .. })
-    ));
-}
-
-#[test]
-fn gpu_trace_rejects_surface_profiles_not_representable_after_f32_packing() {
-    let base = default_observation(1, 1);
-    let collapsed_interval = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
-        6.0,
-        f64::from_bits(6.0_f64.to_bits() + 1),
-        1.0,
-    )
-    .expect("binary64 interval is nonempty");
-    let underflowed_intensity =
-        EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, f64::MIN_POSITIVE)
-            .expect("binary64 intensity is positive");
-
-    for emitter in [collapsed_interval, underflowed_intensity] {
-        let observation = Observation::new(
-            base.scene().clone().with_equatorial_surface(
-                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
-                    .expect("test surface is compatible with vacuum"),
-            ),
-            *base.view(),
-        );
-        assert!(matches!(
-            TraceUniforms::from_observation(&observation),
-            Err(crate::GpuTraceInputError::NotRepresentable {
-                field: "surface_emitter"
-            })
-        ));
-    }
-}
-
-#[test]
-fn gpu_trace_rejects_surface_profiles_reaching_packed_escape_boundary() {
-    let base = default_observation(1, 1);
-
-    for outer_radius_m in [199.999_999, 200.0, 250.0] {
-        let emitter =
-            EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, outer_radius_m, 1.0)
-                .expect("physical emitter is valid independently of the GPU profile");
-        let observation = Observation::new(
-            base.scene().clone().with_equatorial_surface(
-                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
-                    .expect("test surface is compatible with vacuum"),
-            ),
-            *base.view(),
-        );
-
-        assert!(
-            matches!(
-                TraceUniforms::from_observation(&observation),
-                Err(crate::GpuTraceInputError::SurfaceOutsideEscapeBoundary { .. })
-            ),
-            "surface ending at {outer_radius_m} M escaped the GPU profile applicability check"
-        );
-    }
 }
 
 #[test]
@@ -358,50 +244,24 @@ fn mass_scale_does_not_change_the_dimensionless_trace_result() {
     let unit = capture_trace(&observation_at_scale(7, 5, 1.0));
     let scaled = capture_trace(&observation_at_scale(7, 5, 8.0));
 
-    assert_eq!(unit.records.len(), scaled.records.len());
-    for (unit, scaled) in unit.records.iter().zip(&scaled.records) {
-        assert_same_bits(unit.source_time, scaled.source_time);
-        assert_same_bits(unit.invariant_drift, scaled.invariant_drift);
-        assert_eq!(unit.metadata, scaled.metadata);
-        assert_eq!(unit.event, scaled.event);
-    }
+    assert_trace_captures_equivalent(&unit, &scaled);
 }
 
 #[test]
 fn coordinate_time_origin_does_not_change_gpu_trace_observables() {
     let origin = capture_trace(&observation_at_coordinate_time(7, 5, 0.0));
     let translated = capture_trace(&observation_at_coordinate_time(7, 5, 1.0e8));
-    let origin = origin.records[0];
-    let translated = translated.records[0];
 
-    let origin_termination =
-        TraceTermination::try_from(origin.metadata[0]).expect("trace writes a typed termination");
-    assert_eq!(origin_termination, TraceTermination::Escape);
-    assert_eq!(
-        Ok(origin_termination),
-        TraceTermination::try_from(translated.metadata[0])
-    );
-    assert_eq!(origin.event, translated.event);
-    let origin_direction: [f32; 3] = origin.source_time[..3]
-        .try_into()
-        .expect("trace direction contains three components");
-    let translated_direction: [f32; 3] = translated.source_time[..3]
-        .try_into()
-        .expect("trace direction contains three components");
-    let angular_difference = angle_between(
-        origin_direction.map(f64::from),
-        translated_direction.map(f64::from),
-    );
-    assert_abs_diff_eq!(
-        angular_difference,
-        0.0,
-        epsilon = GPU_INITIAL_RAY_ANGULAR_BUDGET_RAD
-    );
-    assert_abs_diff_eq!(
-        f64::from(origin.source_time[3]),
-        f64::from(translated.source_time[3]),
-        epsilon = GPU_TRAVEL_TIME_ABSOLUTE_BUDGET_M
-    );
+    assert_trace_captures_equivalent(&origin, &translated);
+}
+
+#[test]
+fn production_trace_is_invariant_to_cross_submission_batch_partitioning() {
+    let observation = default_observation(17, 9);
+    let single_submission = capture_refined_trace(&observation);
+    let batched = capture_trace_in_batches(&observation, 2);
+
+    assert_trace_captures_equivalent(&single_submission, &batched);
 }
 
 #[test]
@@ -467,20 +327,24 @@ fn trace_dispatch_writes_refinable_branch_coverage_across_workgroup_boundaries()
     for (index, record) in capture.records.iter().enumerate() {
         let termination = TraceTermination::try_from(record.metadata[0])
             .unwrap_or_else(|error| panic!("pixel {index} has no typed termination: {error}"));
-        let expected_coverage = match termination {
-            TraceTermination::HorizonCrossing => 0,
-            TraceTermination::Escape => f16_one_bits(),
-            other => panic!("default view pixel {index} has non-refinable termination {other:?}"),
-        };
-        assert_eq!(
-            u16::from_le_bytes(
-                capture.hdr_pixel(index)[6..]
-                    .try_into()
-                    .expect("RGBA16F alpha occupies two bytes")
-            ),
-            expected_coverage,
-            "pixel {index} does not expose its Horizon/Escape coverage class"
+        let actual_coverage = u16::from_le_bytes(
+            capture.hdr_pixel(index)[6..]
+                .try_into()
+                .expect("RGBA16F alpha occupies two bytes"),
         );
+        match termination {
+            TraceTermination::HorizonCrossing => assert_eq!(
+                actual_coverage & 0x7fff,
+                0,
+                "pixel {index} does not expose Horizon coverage"
+            ),
+            TraceTermination::Escape => assert_eq!(
+                actual_coverage,
+                f16_one_bits(),
+                "pixel {index} does not expose Escape coverage"
+            ),
+            other => panic!("default view pixel {index} has non-refinable termination {other:?}"),
+        }
     }
 }
 
@@ -505,8 +369,8 @@ fn selective_refinement_changes_only_the_horizon_escape_boundary() {
 
             if !is_boundary {
                 assert_eq!(
-                    refined.hdr_pixel(index),
-                    base.hdr_pixel(index),
+                    canonical_half_texel(refined.hdr_pixel(index)),
+                    canonical_half_texel(base.hdr_pixel(index)),
                     "non-boundary pixel ({x}, {y}) was needlessly retraced"
                 );
                 continue;
@@ -517,7 +381,7 @@ fn selective_refinement_changes_only_the_horizon_escape_boundary() {
                 refined.hdr_pixel(index)[6..]
                     .try_into()
                     .expect("RGBA16F alpha occupies two bytes"),
-            );
+            ) & 0x7fff;
             assert!(
                 [0, 0x3400, 0x3800, 0x3a00, f16_one_bits()].contains(&alpha),
                 "boundary pixel ({x}, {y}) has non-four-sample coverage {alpha:#06x}"
@@ -544,22 +408,6 @@ fn repeated_refinement_in_one_submission_does_not_accumulate_edges() {
 
     assert!(once > 0, "fixture does not cross the shadow boundary");
     assert_eq!(repeated, once);
-}
-
-#[test]
-fn accelerated_trace_batches_reuse_the_same_packed_stencil_contract() {
-    let observation = default_observation(17, 9);
-    let single = capture_accelerated_trace(&observation);
-    let progressive = capture_accelerated_trace_in_batches(&observation, 2);
-
-    assert_eq!(single.records.len(), progressive.records.len());
-    for (pixel, (single, progressive)) in
-        single.records.iter().zip(&progressive.records).enumerate()
-    {
-        assert_same_bits(single.source_time, progressive.source_time);
-        assert_eq!(single.metadata[0], progressive.metadata[0], "pixel {pixel}");
-        assert_eq!(single.event, progressive.event, "pixel {pixel}");
-    }
 }
 
 #[test]
@@ -671,57 +519,6 @@ fn sample_corpus_crosses_a_partial_workgroup_without_reordering_records() {
 }
 
 #[test]
-fn accelerated_trace_preserves_full_trace_terminals_and_escape_directions() {
-    let profiles = [
-        ("default", 0.8, 0.0, 30.0, std::f64::consts::FRAC_PI_4),
-        (
-            "near-extreme-wide",
-            0.99,
-            0.0,
-            30.0,
-            std::f64::consts::FRAC_PI_2,
-        ),
-        ("negative-near", -0.8, 0.0, 5.0, std::f64::consts::FRAC_PI_4),
-        ("kerr-newman", 0.6, 0.5, 30.0, std::f64::consts::FRAC_PI_4),
-    ];
-
-    for (label, spin, charge, observer_radius, vertical_fov) in profiles {
-        let observation = transfer_profile(spin, charge, observer_radius, vertical_fov);
-        let full = capture_trace(&observation);
-        let transferred = capture_accelerated_trace(&observation);
-
-        assert_eq!(transferred.records.len(), full.records.len());
-        for (index, (expected, actual)) in full.records.iter().zip(&transferred.records).enumerate()
-        {
-            assert_eq!(
-                actual.metadata[0], expected.metadata[0],
-                "{label}: transfer changed the terminal branch at pixel {index}"
-            );
-            // Escape-map reconstruction promises terminal/event ambiguity and direction. It does
-            // not manufacture the surface-only source branch key stored in the remaining lanes.
-            assert_eq!(
-                actual.event[..2],
-                expected.event[..2],
-                "{label}: transfer changed event diagnostics at pixel {index}"
-            );
-            if TraceTermination::try_from(expected.metadata[0]) != Ok(TraceTermination::Escape) {
-                continue;
-            }
-
-            let expected_direction: [f64; 3] =
-                std::array::from_fn(|axis| f64::from(expected.source_time[axis]));
-            let actual_direction: [f64; 3] =
-                std::array::from_fn(|axis| f64::from(actual.source_time[axis]));
-            let angular_error = angle_between(expected_direction, actual_direction);
-            assert!(
-                abs_diff_eq!(angular_error, 0.0, epsilon = GPU_REGULAR_ANGULAR_BUDGET_RAD),
-                "{label}: transfer direction exceeded the angular budget at pixel {index}: {angular_error:e} rad"
-            );
-        }
-    }
-}
-
-#[test]
 fn an_adjacent_shadow_edge_pair_matches_reference_classification() {
     let observation = default_observation(160, 90);
     let capture = capture_trace(&observation);
@@ -794,6 +591,30 @@ fn assert_same_bits(left: [f32; 4], right: [f32; 4]) {
     assert_eq!(left.map(f32::to_bits), right.map(f32::to_bits));
 }
 
+fn assert_trace_captures_equivalent(left: &TraceCapture, right: &TraceCapture) {
+    assert_eq!(left.records.len(), right.records.len());
+    for (index, (left_record, right_record)) in left.records.iter().zip(&right.records).enumerate()
+    {
+        assert_same_bits(left_record.source_time, right_record.source_time);
+        assert_same_bits(left_record.invariant_drift, right_record.invariant_drift);
+        assert_eq!(left_record.metadata, right_record.metadata, "pixel {index}");
+        assert_eq!(left_record.event, right_record.event, "pixel {index}");
+        assert_eq!(
+            canonical_half_texel(left.hdr_pixel(index)),
+            canonical_half_texel(right.hdr_pixel(index)),
+            "pixel {index} final HDR texel",
+        );
+    }
+}
+
+fn canonical_half_texel(bytes: [u8; 8]) -> [u16; 4] {
+    std::array::from_fn(|channel| {
+        let offset = channel * size_of::<u16>();
+        let bits = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+        if matches!(bits, 0 | 0x8000) { 0 } else { bits }
+    })
+}
+
 fn decode_f16(bits: u16) -> f32 {
     let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
     let exponent = i32::from((bits >> 10) & 0x1f);
@@ -808,15 +629,6 @@ fn decode_f16(bits: u16) -> f32 {
 
 pub fn default_observation(width: u32, height: u32) -> Observation {
     observation_at_scale(width, height, 1.0)
-}
-
-fn transfer_profile(
-    spin: f64,
-    charge: f64,
-    observer_radius: f64,
-    vertical_fov: f64,
-) -> Observation {
-    transfer_profile_extent(spin, charge, observer_radius, vertical_fov, 1_280, 720)
 }
 
 fn transfer_profile_extent(

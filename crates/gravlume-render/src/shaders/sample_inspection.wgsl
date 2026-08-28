@@ -26,7 +26,7 @@ struct SampleInspectionRecord {
 @group(0) @binding(3)
 var<storage, read_write> inspection_records: array<SampleInspectionRecord>;
 
-@group(0) @binding(9)
+@group(0) @binding(8)
 var<storage, read> inspection_requests: array<SampleInspectionRequest>;
 
 fn encode_inspected_sample(sample: GeometricSample, value: vec4<f32>) -> SampleInspectionRecord {

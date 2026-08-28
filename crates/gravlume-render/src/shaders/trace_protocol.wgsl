@@ -1,5 +1,5 @@
-// Exact Cartesian Kerr-Schild null-geodesic solver. Appearance and conservative accelerators are
-// composed as separate WGSL fragments so every rejected fast path returns here unchanged.
+// Cartesian Kerr-Schild null-geodesic solver. Appearance and optional shadow refinement are
+// composed as separate WGSL fragments so scientific fields stay independent of display work.
 
 struct TraceUniforms {
     // (mass, spin, charge, Kerr-Schild branch sign)

@@ -2,16 +2,14 @@ use std::f64::consts::{LN_2, PI};
 
 use gravlume_domain::VISIBLE_BOXCAR_BANDS_V1;
 
-const BLACKBODY_LUT_ENTRY_COUNT: usize = 4_097;
-pub const BLACKBODY_LUT_BYTE_SIZE: u64 = 65_552;
+const BLACKBODY_LUT_ENTRY_COUNT: u32 = 4_097;
+const BLACKBODY_LUT_ENTRY_BYTES: u64 = 16;
 const BLACKBODY_LUT_MIN_LOG2_TEMPERATURE: f64 = -8.0;
-const BLACKBODY_LUT_MAX_LOG2_TEMPERATURE: f64 = 24.0;
 const BLACKBODY_LUT_INTERVALS_PER_OCTAVE: f64 = 128.0;
 
 const SECOND_RADIATION_CONSTANT_M_K: f64 = 0.014_387_768_775_039_337;
 const PLANCK_INTEGRAL: f64 = PI * PI * PI * PI / 15.0;
 const HIGH_FREQUENCY_LOG_THRESHOLD: f64 = 50.0;
-const BLACKBODY_LUT_LAST_INDEX: u32 = 4_096;
 const INTEGRATION_BREAKS: [f64; 7] = [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 50.0];
 const GAUSS_NODES: [f64; 8] = [
     0.095_012_509_837_637_44,
@@ -34,10 +32,10 @@ const GAUSS_WEIGHTS: [f64; 8] = [
     0.027_152_459_411_754_096,
 ];
 
-const _: () = assert!(BLACKBODY_LUT_ENTRY_COUNT * size_of::<[f32; 4]>() == 65_552);
+const _: () = assert!(size_of::<[f32; 4]>() == 16);
 
 pub fn blackbody_log2_fraction_lut() -> Vec<[f32; 4]> {
-    (0..=BLACKBODY_LUT_LAST_INDEX)
+    (0..BLACKBODY_LUT_ENTRY_COUNT)
         .map(|index| {
             let log2_temperature = BLACKBODY_LUT_MIN_LOG2_TEMPERATURE
                 + f64::from(index) / BLACKBODY_LUT_INTERVALS_PER_OCTAVE;
@@ -50,6 +48,10 @@ pub fn blackbody_log2_fraction_lut() -> Vec<[f32; 4]> {
             ]
         })
         .collect()
+}
+
+pub fn blackbody_lut_byte_size() -> u64 {
+    u64::from(BLACKBODY_LUT_ENTRY_COUNT) * BLACKBODY_LUT_ENTRY_BYTES
 }
 
 #[expect(
@@ -66,7 +68,8 @@ pub fn minimum_temperature_kelvin() -> f64 {
 }
 
 pub fn maximum_temperature_kelvin() -> f64 {
-    BLACKBODY_LUT_MAX_LOG2_TEMPERATURE.exp2()
+    let last_index = f64::from(BLACKBODY_LUT_ENTRY_COUNT - 1);
+    (BLACKBODY_LUT_MIN_LOG2_TEMPERATURE + last_index / BLACKBODY_LUT_INTERVALS_PER_OCTAVE).exp2()
 }
 
 fn blackbody_band_log2_fractions(temperature_kelvin: f64) -> [f64; 3] {
@@ -139,14 +142,27 @@ fn planck_kernel(x: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of_val;
+
     use approx::assert_abs_diff_eq;
 
-    use super::{blackbody_band_log2_fractions, blackbody_log2_fraction_lut};
+    use super::{
+        BLACKBODY_LUT_ENTRY_COUNT, blackbody_band_log2_fractions, blackbody_log2_fraction_lut,
+        blackbody_lut_byte_size,
+    };
 
     #[test]
-    fn every_lut_entry_is_a_finite_non_positive_logarithm_with_zero_padding() {
+    fn lut_has_the_declared_abi_and_valid_entries() {
         let lut = blackbody_log2_fraction_lut();
 
+        assert_eq!(
+            lut.len(),
+            usize::try_from(BLACKBODY_LUT_ENTRY_COUNT).expect("LUT entry count fits usize")
+        );
+        assert_eq!(
+            u64::try_from(size_of_val(lut.as_slice())).expect("LUT byte size fits u64"),
+            blackbody_lut_byte_size()
+        );
         assert!(lut.iter().all(|[red, green, blue, padding]| {
             [*red, *green, *blue]
                 .into_iter()

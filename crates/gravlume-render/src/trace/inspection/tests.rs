@@ -5,10 +5,10 @@ use proptest::prelude::*;
 
 use super::{
     SampleBranchKey, SampleInspection, SampleInspectionCompletion, SampleInspectionError,
-    SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide, SampleRetrace,
-    SampleTraceOutcome,
+    SampleInspectionRequestError, SampleInspectionTicket, SamplePolarSide, SampleTraceOutcome,
     protocol::{
-        INSPECTION_RECORD_BYTES, TraceTermination, decode_branch_key, decode_corpus_readback,
+        INSPECTION_READBACK_BYTES, INSPECTION_RECORD_BYTES, TraceTermination, decode_branch_key,
+        decode_corpus_readback, decode_readback,
     },
     slot::{PendingInspection, SampleInspectionSlot},
 };
@@ -73,21 +73,6 @@ fn fixture_extent(fixture: &gravlume_reference::SurfaceObservationFixture) -> Re
         fixture.observation().view().height().get(),
     )
     .expect("fixture extent is nonzero")
-}
-
-#[test]
-fn corpus_decoder_requires_one_exact_record_per_sample() {
-    let fixture = surface_fixture();
-    let samples = [fixture.sample()];
-
-    for byte_count in [INSPECTION_RECORD_BYTES - 1, INSPECTION_RECORD_BYTES + 1] {
-        let readback =
-            vec![0; usize::try_from(byte_count).expect("inspection readback size fits usize")];
-        assert!(matches!(
-            decode_corpus_readback(&readback, None, &samples),
-            Err(SampleInspectionError::InvalidReadback)
-        ));
-    }
 }
 
 fn branch_counter() -> impl Strategy<Value = u32> {
@@ -209,7 +194,7 @@ fn cancelled_request_drains_before_the_fixed_slot_is_reused() {
 }
 
 #[test]
-fn completion_binds_ticket_and_fixed_retrace_method() {
+fn completion_binds_ticket_and_separates_published_texel_from_fresh_retrace() {
     const PUBLISHED_TEXEL: [u16; 4] = [0x3c00, 0x4000, 0x4200, 0x3c00];
 
     let fixture = surface_fixture();
@@ -253,10 +238,6 @@ fn completion_binds_ticket_and_fixed_retrace_method() {
     assert_eq!(request.generation(), 11);
     assert_eq!(request.extent(), [extent.width(), extent.height()]);
     assert_eq!(request.sample(), fixture.sample());
-    assert_eq!(
-        SampleRetrace::METHOD_ID,
-        "gpu-ks-rk4-v2/full-kerr-schild-retrace/wgsl-binary32"
-    );
     assert!(matches!(
         inspection.fresh_retrace().outcome(),
         SampleTraceOutcome::EquatorialSurface { .. }
@@ -364,6 +345,38 @@ fn write_published_texel(
 }
 
 proptest! {
+    #[test]
+    fn production_decoder_rejects_incorrect_lengths_around_the_abi_boundary(
+        length in (0_usize..=208).prop_filter(
+            "the exact production ABI length is decoded by lifecycle tests",
+            |length| *length != usize::try_from(INSPECTION_READBACK_BYTES)
+                .expect("inspection readback bytes fit usize"),
+        ),
+    ) {
+        let fixture = surface_fixture();
+        let extent = fixture_extent(&fixture);
+        let ticket = SampleInspectionTicket::new(1, extent, fixture.sample());
+        prop_assert!(matches!(
+            decode_readback(&vec![0; length], None, ticket),
+            Err(SampleInspectionError::InvalidReadback)
+        ));
+    }
+
+    #[test]
+    fn corpus_decoder_rejects_incorrect_lengths_around_the_record_boundary(
+        length in (0_usize..=192).prop_filter(
+            "the exact corpus record length is exercised by GPU corpus tests",
+            |length| *length != usize::try_from(INSPECTION_RECORD_BYTES)
+                .expect("inspection record bytes fit usize"),
+        ),
+    ) {
+        let fixture = surface_fixture();
+        prop_assert!(matches!(
+            decode_corpus_readback(&vec![0; length], None, &[fixture.sample()]),
+            Err(SampleInspectionError::InvalidReadback)
+        ));
+    }
+
     #[test]
     fn branch_decoder_preserves_arbitrary_committed_values(
         radial_turnings in branch_counter(),

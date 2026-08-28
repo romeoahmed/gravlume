@@ -2,52 +2,16 @@ use std::sync::mpsc::{self, TryRecvError};
 
 use num_traits::ToPrimitive as _;
 
-const MAXIMUM_QUERY_COUNT: usize = 4;
+const QUERY_COUNT: u32 = 2;
 
-#[derive(Clone, Copy)]
-enum TimingLayout {
-    TraceOnly,
-    EscapeMapAndTrace,
-}
-
-impl TimingLayout {
-    const fn for_escape_map(has_escape_map: bool) -> Self {
-        if has_escape_map {
-            Self::EscapeMapAndTrace
-        } else {
-            Self::TraceOnly
-        }
-    }
-
-    const fn query_count(self) -> u32 {
-        match self {
-            Self::TraceOnly => 2,
-            Self::EscapeMapAndTrace => 4,
-        }
-    }
-
-    fn query_bytes(self) -> u64 {
-        u64::from(self.query_count()) * u64::from(wgpu::QUERY_SIZE)
-    }
-
-    const fn trace_indices(self) -> [u32; 2] {
-        match self {
-            Self::TraceOnly => [0, 1],
-            Self::EscapeMapAndTrace => [2, 3],
-        }
-    }
+fn query_bytes() -> u64 {
+    u64::from(QUERY_COUNT) * u64::from(wgpu::QUERY_SIZE)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct QueryTicks {
-    values: [u64; MAXIMUM_QUERY_COUNT],
-    count: usize,
-}
-
-impl QueryTicks {
-    fn as_slice(&self) -> &[u64] {
-        &self.values[..self.count]
-    }
+    beginning: u64,
+    end: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -57,14 +21,8 @@ pub struct TimingSample {
 
 impl TimingSample {
     fn from_ticks(ticks: QueryTicks, timestamp_period_ns: f32) -> Self {
+        let elapsed_ticks = ticks.end.saturating_sub(ticks.beginning);
         let milliseconds_per_tick = f64::from(timestamp_period_ns) / 1_000_000.0;
-        let elapsed_ticks = ticks
-            .as_slice()
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| pair[1].saturating_sub(pair[0]))
-            .fold(0, u64::saturating_add);
         Self {
             compute_ms: elapsed_ticks.to_f64().unwrap_or(f64::INFINITY) * milliseconds_per_tick,
         }
@@ -75,20 +33,17 @@ impl TimingSample {
     }
 }
 
-fn decode_query_ticks(bytes: &[u8]) -> Option<QueryTicks> {
+const fn decode_query_ticks(bytes: &[u8]) -> Option<QueryTicks> {
     let (encoded_ticks, []) = bytes.as_chunks::<{ size_of::<u64>() }>() else {
         return None;
     };
-    let count = encoded_ticks.len();
-    if !matches!(count, 2 | 4) {
+    let [beginning, end] = encoded_ticks else {
         return None;
-    }
-
-    let mut values = [0; MAXIMUM_QUERY_COUNT];
-    for (tick, encoded) in values.iter_mut().zip(encoded_ticks) {
-        *tick = u64::from_le_bytes(*encoded);
-    }
-    Some(QueryTicks { values, count })
+    };
+    Some(QueryTicks {
+        beginning: u64::from_le_bytes(*beginning),
+        end: u64::from_le_bytes(*end),
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -113,7 +68,6 @@ struct PendingReadback<C> {
 }
 
 pub struct GpuTimings<C> {
-    layout: TimingLayout,
     query_set: wgpu::QuerySet,
     resolve_buffer: wgpu::Buffer,
     readback_buffer: wgpu::Buffer,
@@ -121,27 +75,25 @@ pub struct GpuTimings<C> {
 }
 
 impl<C> GpuTimings<C> {
-    pub(crate) fn new(device: &wgpu::Device, has_escape_map: bool) -> Self {
-        let layout = TimingLayout::for_escape_map(has_escape_map);
+    pub(crate) fn new(device: &wgpu::Device) -> Self {
         let query_set = device.create_query_set(&wgpu::QuerySetDescriptor {
-            label: Some("frame pass timestamps"),
+            label: Some("frame trace timestamps"),
             ty: wgpu::QueryType::Timestamp,
-            count: layout.query_count(),
+            count: QUERY_COUNT,
         });
         let resolve_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame timestamp resolve buffer"),
-            size: layout.query_bytes(),
+            size: query_bytes(),
             usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let readback_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame timestamp readback buffer"),
-            size: layout.query_bytes(),
+            size: query_bytes(),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         Self {
-            layout,
             query_set,
             resolve_buffer,
             readback_buffer,
@@ -153,23 +105,11 @@ impl<C> GpuTimings<C> {
         self.pending.is_none()
     }
 
-    pub(crate) const fn escape_map_writes(&self) -> Option<wgpu::ComputePassTimestampWrites<'_>> {
-        match self.layout {
-            TimingLayout::TraceOnly => None,
-            TimingLayout::EscapeMapAndTrace => Some(wgpu::ComputePassTimestampWrites {
-                query_set: &self.query_set,
-                beginning_of_pass_write_index: Some(0),
-                end_of_pass_write_index: Some(1),
-            }),
-        }
-    }
-
     pub(crate) const fn trace_writes(&self) -> wgpu::ComputePassTimestampWrites<'_> {
-        let [beginning, end] = self.layout.trace_indices();
         wgpu::ComputePassTimestampWrites {
             query_set: &self.query_set,
-            beginning_of_pass_write_index: Some(beginning),
-            end_of_pass_write_index: Some(end),
+            beginning_of_pass_write_index: Some(0),
+            end_of_pass_write_index: Some(1),
         }
     }
 
@@ -181,24 +121,19 @@ impl<C> GpuTimings<C> {
         if self.pending.is_some() {
             return Err(TimingError::ReadbackAlreadyPending);
         }
-        encoder.resolve_query_set(
-            &self.query_set,
-            0..self.layout.query_count(),
-            &self.resolve_buffer,
-            0,
-        );
+        encoder.resolve_query_set(&self.query_set, 0..QUERY_COUNT, &self.resolve_buffer, 0);
         encoder.copy_buffer_to_buffer(
             &self.resolve_buffer,
             0,
             &self.readback_buffer,
             0,
-            self.layout.query_bytes(),
+            query_bytes(),
         );
 
         let (sender, receiver) = mpsc::channel();
         // Scheduling map on the producing encoder makes copy completion and mapping one ordered
         // submission lifecycle. The callback is driven by `Device::poll` after queue submission.
-        // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
+        // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
         encoder.map_buffer_on_submit(
             &self.readback_buffer,
             wgpu::MapMode::Read,
@@ -226,26 +161,21 @@ impl<C> GpuTimings<C> {
         let Some(pending) = self.pending.take() else {
             return Ok(None);
         };
+        // Only a successful callback grants a mapped range that must later be unmapped.
+        // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async
         match pending.receiver.try_recv() {
             Ok(Ok(())) => {
                 let ticks = self.read_ticks();
                 self.readback_buffer.unmap();
-                let ticks = ticks?;
-                let sample = TimingSample::from_ticks(ticks, timestamp_period_ns);
+                let sample = TimingSample::from_ticks(ticks?, timestamp_period_ns);
                 Ok(Some((pending.context, sample)))
             }
-            Ok(Err(error)) => {
-                self.readback_buffer.unmap();
-                Err(error.into())
-            }
+            Ok(Err(error)) => Err(error.into()),
             Err(TryRecvError::Empty) => {
                 self.pending = Some(pending);
                 Ok(None)
             }
-            Err(TryRecvError::Disconnected) => {
-                self.readback_buffer.unmap();
-                Err(TimingError::CallbackDisconnected)
-            }
+            Err(TryRecvError::Disconnected) => Err(TimingError::CallbackDisconnected),
         }
     }
 
@@ -263,106 +193,121 @@ impl<C> GpuTimings<C> {
 
 #[cfg(test)]
 mod tests {
-    use approx::assert_abs_diff_eq;
+    use std::sync::mpsc;
+
+    use approx::relative_eq;
     use num_traits::ToPrimitive as _;
     use proptest::prelude::*;
 
-    use super::{GpuTimings, QueryTicks, TimingSample};
+    use super::{GpuTimings, PendingReadback, QueryTicks, TimingError, TimingSample, query_bytes};
+    use crate::error::GpuErrorScopes;
 
     proptest! {
         #[test]
-        fn timestamp_encoding_roundtrips(
-            ticks in any::<[u64; 4]>(),
-            count in prop_oneof![Just(2_usize), Just(4_usize)],
-        ) {
-            let bytes: Vec<u8> = ticks[..count]
-                .iter()
-                .copied()
-                .flat_map(u64::to_le_bytes)
-                .collect();
-            let mut expected = [0; 4];
-            expected[..count].copy_from_slice(&ticks[..count]);
+        fn trace_timestamp_pair_roundtrips(ticks in any::<[u64; 2]>()) {
+            let bytes: Vec<u8> = ticks.into_iter().flat_map(u64::to_le_bytes).collect();
             prop_assert_eq!(
                 super::decode_query_ticks(&bytes),
-                Some(QueryTicks { values: expected, count })
+                Some(QueryTicks { beginning: ticks[0], end: ticks[1] })
             );
         }
 
         #[test]
-        fn timestamp_decoder_rejects_unsupported_byte_counts(
-            length in prop_oneof![0_usize..16, 17_usize..32, 33_usize..=64],
+        fn timestamp_decoder_rejects_incorrect_lengths_around_the_pair_boundary(
+            length in (0_usize..=64).prop_filter(
+                "the valid timestamp-pair byte count is tested separately",
+                |length| *length != usize::try_from(query_bytes()).expect("query bytes fit usize"),
+            ),
         ) {
             prop_assert_eq!(super::decode_query_ticks(&vec![0; length]), None);
+        }
+
+        #[test]
+        fn trace_duration_is_saturating_and_nonnegative(
+            beginning: u64,
+            end: u64,
+            timestamp_period_ns in f32::MIN_POSITIVE..=1_000_000.0_f32,
+        ) {
+            let actual = TimingSample::from_ticks(
+                QueryTicks { beginning, end },
+                timestamp_period_ns,
+            ).compute_ms();
+            let expected = end
+                .saturating_sub(beginning)
+                .to_f64()
+                .expect("u64 converts to finite f64")
+                * f64::from(timestamp_period_ns)
+                / 1_000_000.0;
+
+            prop_assert!(actual.is_finite());
+            prop_assert!(actual >= 0.0);
+            prop_assert!(relative_eq!(
+                actual,
+                expected,
+                epsilon = f64::EPSILON,
+                max_relative = 4.0 * f64::EPSILON,
+            ));
         }
     }
 
     #[test]
-    fn timestamp_duration_combines_passes_and_saturates() {
-        let ordinary = TimingSample::from_ticks(
-            QueryTicks {
-                values: [10, 15, 20, 27],
-                count: 4,
-            },
-            1_000.0,
-        );
-        assert_abs_diff_eq!(ordinary.compute_ms(), 0.012, epsilon = f64::EPSILON);
+    fn map_failure_does_not_emit_a_secondary_unmap_validation_error() {
+        let gpu = crate::test_device::native_gpu();
+        let mut timings = GpuTimings::new(&gpu.device);
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(Err(wgpu::BufferAsyncError))
+            .expect("synthetic map completion is delivered");
+        timings.pending = Some(PendingReadback {
+            receiver,
+            context: 17_u64,
+        });
+        let scopes = GpuErrorScopes::push(&gpu.device);
 
-        let saturated = TimingSample::from_ticks(
-            QueryTicks {
-                values: [0, u64::MAX, 0, u64::MAX],
-                count: 4,
-            },
-            1.0,
-        );
-        let expected = u64::MAX.to_f64().expect("u64 converts to finite f64") / 1_000_000.0;
-        assert_abs_diff_eq!(
-            saturated.compute_ms(),
-            expected,
-            epsilon = expected * f64::EPSILON
+        assert!(matches!(
+            timings.poll(&gpu.device, gpu.queue.get_timestamp_period()),
+            Err(TimingError::Map(_))
+        ));
+        let secondary_error = pollster::block_on(scopes.finish());
+        assert!(
+            secondary_error.is_ok(),
+            "the typed map failure must be the only reported error: {secondary_error:?}"
         );
     }
 
     #[test]
     fn one_shot_readback_completes_after_submission_goes_idle() {
         let gpu = crate::test_device::native_gpu();
-        for has_escape_map in [false, true] {
-            let mut timings = GpuTimings::new(&gpu.device, has_escape_map);
-            let mut encoder = gpu
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("one-shot timestamp encoder"),
-                });
-            if let Some(timestamp_writes) = timings.escape_map_writes() {
-                let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("one-shot timestamp escape-map pass"),
-                    timestamp_writes: Some(timestamp_writes),
-                });
-            }
-            {
-                let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("one-shot timestamp trace pass"),
-                    timestamp_writes: Some(timings.trace_writes()),
-                });
-            }
-            timings
-                .encode_readback(&mut encoder, 17_u64)
-                .expect("timestamp readback is available");
-            let submission = gpu.queue.submit([encoder.finish()]);
-            gpu.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: Some(submission),
-                    timeout: None,
-                })
-                .expect("timestamp submission completes");
-
-            let (context, sample) = timings
-                .poll(&gpu.device, gpu.queue.get_timestamp_period())
-                .expect("timestamp readback succeeds")
-                .expect("timestamp readback completed after its submission");
-
-            assert_eq!(context, 17);
-            assert!(sample.compute_ms().is_finite());
-            assert!(!timings.has_pending_readback());
+        let mut timings = GpuTimings::new(&gpu.device);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("one-shot timestamp encoder"),
+            });
+        {
+            let _pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("one-shot timestamp trace pass"),
+                timestamp_writes: Some(timings.trace_writes()),
+            });
         }
+        timings
+            .encode_readback(&mut encoder, 17_u64)
+            .expect("timestamp readback is available");
+        let submission = gpu.queue.submit([encoder.finish()]);
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("timestamp submission completes");
+
+        let (context, sample) = timings
+            .poll(&gpu.device, gpu.queue.get_timestamp_period())
+            .expect("timestamp readback succeeds")
+            .expect("timestamp readback completed after its submission");
+
+        assert_eq!(context, 17);
+        assert!(sample.compute_ms().is_finite());
+        assert!(!timings.has_pending_readback());
     }
 }

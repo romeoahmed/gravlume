@@ -7,7 +7,7 @@ pub const BASELINE_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
 /// Buffer limits remain at the WebGPU baseline because production tracing does not require a
 /// viewport-sized storage buffer. Requesting adapter maxima would turn hardware capability into an
 /// allocation policy.
-/// Source: <https://docs.rs/wgpu/30.0.0/wgpu/struct.Limits.html#method.using_resolution>
+/// Source: <https://docs.rs/wgpu/30.0.1/wgpu/struct.Limits.html#method.using_resolution>
 pub fn required_device_limits(adapter: wgpu::Limits) -> wgpu::Limits {
     wgpu::Limits::default()
         .using_resolution(adapter.clone())

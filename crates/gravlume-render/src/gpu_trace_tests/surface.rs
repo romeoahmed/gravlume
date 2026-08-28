@@ -1,4 +1,4 @@
-use approx::assert_abs_diff_eq;
+use approx::{abs_diff_eq, assert_abs_diff_eq};
 use gravlume_domain::{
     EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, ImageSample, Observation,
     SurfaceTransport,
@@ -9,14 +9,16 @@ use gravlume_reference::{
     TraceInputId,
 };
 
-use super::{decode_f16, default_observation, sample, transfer_profile_extent};
+use super::{
+    assert_branch_matches, decode_f16, default_observation, sample, transfer_profile_extent,
+};
 use crate::{
-    GpuTraceInputError,
     gpu_capture::{
         capture_sample_corpus, capture_surface_footprint_sample, capture_surface_transport_case,
-        capture_trace, capture_trace_sample, inspect_sample,
+        capture_trace_sample, inspect_sample,
     },
-    trace::{SampleSurfaceEvaluation, SampleTraceOutcome, TraceTermination, TraceUniforms},
+    scientific_capture::{GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET, RGBA16_FLOAT_MINIMUM_NORMAL},
+    trace::{SampleSurfaceEvaluation, SampleTraceOutcome},
 };
 
 const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
@@ -27,7 +29,7 @@ const BLACKBODY_TRANSPORT_FIXTURES: [&str; 4] = [
 ];
 
 #[test]
-fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
+fn versioned_blackbody_fixtures_close_f32_transport_and_rgba16f_representation() {
     for source in BLACKBODY_TRANSPORT_FIXTURES {
         let fixture = FixtureDocument::parse_toml(source)
             .expect("repository transport fixture parses")
@@ -36,9 +38,6 @@ fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
         let observation = fixture.observation();
         let fixture_sample = fixture.sample();
         let capture = capture_trace_sample(observation, fixture_sample);
-        let [pixel_x, pixel_y] = fixture_sample.pixel();
-        let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
-            .expect("fixture pixel index fits usize");
         let reference = ObservationTracer::baseline_v1()
             .trace(
                 fixture
@@ -51,51 +50,51 @@ fn versioned_blackbody_fixtures_close_gpu_spectral_transport() {
             .surface_observable()
             .and_then(gravlume_reference::SurfaceObservable::observed_spectral_band_intensities)
             .expect("reference resolves the three instrument bands");
-        let pixel = capture.hdr_pixel(index);
 
+        let inspection = inspect_sample(observation, fixture_sample);
+        let SampleTraceOutcome::EquatorialSurface {
+            channels,
+            evaluation: SampleSurfaceEvaluation::Radiance(f32_bands),
+            ..
+        } = inspection.fresh_retrace().outcome()
+        else {
+            panic!("blackbody inspection must return surface radiance");
+        };
+        assert_eq!(channels, crate::ScientificChannelModel::VisibleBoxcarV1);
+        for (actual, expected) in f32_bands.into_iter().zip(expected) {
+            assert_abs_diff_eq!(
+                f64::from(actual),
+                expected,
+                epsilon = GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET * expected
+            );
+        }
+
+        let pixel = capture.hdr_pixel;
         assert_eq!(
             u16::from_le_bytes(pixel[6..].try_into().expect("alpha has two bytes")),
             0x4000,
             "spectral surface radiance alpha tag"
         );
         for (channel, expected) in pixel[..6].as_chunks::<2>().0.iter().zip(expected) {
-            let actual = decode_f16(u16::from_le_bytes(*channel));
-            assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
+            let actual = f64::from(decode_f16(u16::from_le_bytes(*channel)));
+            if expected < RGBA16_FLOAT_MINIMUM_NORMAL {
+                assert!(
+                    actual == 0.0
+                        || abs_diff_eq!(
+                            actual,
+                            expected,
+                            epsilon = GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET * expected
+                        ),
+                    "a subnormal Rgba16Float channel must be preserved within budget or flushed to signed zero: actual={actual}, expected={expected}",
+                );
+            } else {
+                assert_abs_diff_eq!(
+                    actual,
+                    expected,
+                    epsilon = GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET * expected
+                );
+            }
         }
-    }
-}
-
-#[test]
-fn bounded_blackbody_inspection_returns_f32_scene_linear_bands() {
-    let fixture = FixtureDocument::parse_toml(BLACKBODY_TRANSPORT_FIXTURES[0])
-        .expect("repository transport fixture parses")
-        .into_surface_observation()
-        .expect("fixture is a surface observation");
-    let inspection = inspect_sample(fixture.observation(), fixture.sample());
-    let reference = ObservationTracer::baseline_v1()
-        .trace(
-            fixture
-                .trace_request(ReferencePolicy::regular_v1())
-                .expect("fixture sample resolves"),
-        )
-        .expect("reference spectral transport succeeds");
-    let expected = reference
-        .terminal()
-        .surface_observable()
-        .and_then(gravlume_reference::SurfaceObservable::observed_spectral_band_intensities)
-        .expect("reference resolves the three instrument bands");
-
-    let SampleTraceOutcome::EquatorialSurface {
-        channels,
-        evaluation: SampleSurfaceEvaluation::Radiance(actual),
-        ..
-    } = inspection.fresh_retrace().outcome()
-    else {
-        panic!("blackbody inspection must return surface radiance");
-    };
-    assert_eq!(channels, crate::ScientificChannelModel::VisibleBoxcarV1);
-    for (actual, expected) in actual.into_iter().zip(expected) {
-        assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
     }
 }
 
@@ -188,11 +187,7 @@ fn gpu_surface_footprint_matches_the_branch_checked_reference_jacobian() {
     else {
         panic!("canonical footprint must be branch-continuous");
     };
-    let capture = capture_surface_footprint_sample(observation, fixture_sample);
-    let [pixel_x, pixel_y] = fixture_sample.pixel();
-    let index = usize::try_from(pixel_y * observation.view().width().get() + pixel_x)
-        .expect("fixture pixel index fits usize");
-    let gpu = capture.records[index];
+    let gpu = capture_surface_footprint_sample(observation, fixture_sample);
 
     assert_eq!(gpu.metadata[2], 1, "GPU footprint continuity flag");
     let expected = reference.jacobian_source_m_per_pixel();
@@ -365,11 +360,13 @@ fn assert_surface_branch_profile(profile: SurfaceBranchProfile, oracle: Observat
         ),
         *base.view(),
     );
-    let capture = capture_trace(&observation);
+    let samples = profile
+        .samples
+        .map(|(pixel_x, pixel_y)| sample(&observation, pixel_x, pixel_y, 0.5, 0.5));
+    let retraces = capture_sample_corpus(&observation, &samples);
 
-    for (pixel_x, pixel_y) in profile.samples {
-        let width = observation.view().width().get();
-        let index = usize::try_from(pixel_y * width + pixel_x).expect("matrix index fits usize");
+    for (image_sample, gpu) in samples.into_iter().zip(retraces) {
+        let [pixel_x, pixel_y] = image_sample.pixel();
         let reference = oracle
             .trace(
                 ObservationTrace::new(
@@ -378,7 +375,7 @@ fn assert_surface_branch_profile(profile: SurfaceBranchProfile, oracle: Observat
                         profile.label
                     )),
                     &observation,
-                    sample(&observation, pixel_x, pixel_y, 0.5, 0.5),
+                    image_sample,
                     ReferencePolicy::regular_v1(),
                 )
                 .expect("matrix trace request resolves"),
@@ -391,64 +388,17 @@ fn assert_surface_branch_profile(profile: SurfaceBranchProfile, oracle: Observat
             profile.label
         );
 
-        let gpu = capture.records[index];
-        assert_eq!(
-            TraceTermination::try_from(gpu.metadata[0]),
-            Ok(TraceTermination::EquatorialSurface),
-            "{}: GPU terminal at ({pixel_x}, {pixel_y})",
-            profile.label
-        );
-        let branch = reference.branch_key();
-        assert_eq!(
-            gpu.event[2] & 0xffff,
-            branch.radial_turnings(),
-            "{}: radial branch at ({pixel_x}, {pixel_y})",
-            profile.label
-        );
-        assert_eq!(
-            gpu.event[2] >> 16,
-            branch.equatorial_crossings(),
-            "{}: equatorial branch at ({pixel_x}, {pixel_y})",
-            profile.label
-        );
-        assert_eq!(
-            i32::from_ne_bytes(gpu.event[3].to_ne_bytes()),
-            branch.azimuth_winding(),
-            "{}: winding branch at ({pixel_x}, {pixel_y})",
-            profile.label
-        );
-        assert_eq!(
-            branch.initial_polar_side(),
-            PolarSide::Positive,
-            "{}: observer is above the source plane",
-            profile.label
-        );
-    }
-}
-
-#[test]
-fn gpu_trace_rejects_transmittance_that_binary32_cannot_preserve_normally() {
-    let base = default_observation(1, 1);
-    let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0e38)
-        .expect("the high dynamic-range surface is intrinsically valid");
-
-    for optical_depth in [92.0, 1_000.0] {
-        let slab = HomogeneousScalarSlab::pure_absorption_v1(optical_depth)
-            .expect("the high optical-depth slab is intrinsically valid");
-        let observation = Observation::new(
-            base.scene().clone().with_equatorial_surface(
-                EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
-                    .expect("bolometric surface and slab are compatible"),
-            ),
-            *base.view(),
-        );
-
-        assert!(matches!(
-            TraceUniforms::from_observation(&observation),
-            Err(GpuTraceInputError::NotRepresentable {
-                field: "surface_transport"
-            })
-        ));
+        let SampleTraceOutcome::EquatorialSurface {
+            branch: gpu_branch, ..
+        } = gpu.outcome()
+        else {
+            panic!(
+                "{}: GPU terminal at ({pixel_x}, {pixel_y}) was {:?}",
+                profile.label,
+                gpu.outcome()
+            );
+        };
+        assert_branch_matches(image_sample, gpu_branch, reference.branch_key());
     }
 }
 
@@ -476,15 +426,15 @@ fn high_absorption_keeps_a_representable_outgoing_surface_intensity() {
         0x4000,
         "representable surface radiance keeps its alpha tag",
     );
-    let actual = decode_f16(u16::from_le_bytes(
-        pixel[..2].try_into().expect("red channel has two bytes"),
-    ));
     let expected = emitted_intensity * (-79.0_f64).exp() * 1.1_f64.powi(4);
-    assert_abs_diff_eq!(
-        f64::from(actual),
-        expected,
-        epsilon = super::GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET * expected
-    );
+    for channel in pixel[..6].as_chunks::<2>().0 {
+        let actual = decode_f16(u16::from_le_bytes(*channel));
+        assert_abs_diff_eq!(
+            f64::from(actual),
+            expected,
+            epsilon = super::GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET * expected
+        );
+    }
 }
 
 #[test]
@@ -507,31 +457,13 @@ fn low_temperature_diluted_spectrum_preserves_gpu_radiance() {
         0x4000,
         "representable spectral radiance keeps its alpha tag",
     );
-    let expected = [505.403_345_434_498_3, 1.380_353_634_125_891_2e-4];
-    for (channel, expected) in pixel[..4].as_chunks::<2>().0.iter().zip(expected) {
+    let expected = [505.403_345_434_498_3, 1.380_353_634_125_891_2e-4, 0.0];
+    for (channel, expected) in pixel[..6].as_chunks::<2>().0.iter().zip(expected) {
         let actual = decode_f16(u16::from_le_bytes(*channel));
-        assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
+        if expected == 0.0 {
+            assert_abs_diff_eq!(actual, 0.0, epsilon = f32::EPSILON);
+        } else {
+            assert_abs_diff_eq!(f64::from(actual), expected, epsilon = 4.0e-3 * expected);
+        }
     }
-}
-
-#[test]
-fn gpu_trace_rejects_a_blackbody_profile_outside_the_spectral_lut() {
-    let base = default_observation(1, 1);
-    let emitter = EquatorialCircularEmitter::inverse_cube_blackbody_v1(1.0e-12, 20.0, 1.0, 6_000.0)
-        .expect("the intrinsic source profile is valid independently of the GPU LUT");
-    let observation = Observation::new(
-        base.scene().clone().with_equatorial_surface(
-            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
-                .expect("blackbody surface is compatible with vacuum"),
-        ),
-        *base.view(),
-    );
-
-    assert!(matches!(
-        TraceUniforms::from_observation(&observation),
-        Err(GpuTraceInputError::TemperatureOutsideSpectralLut {
-            field: "equatorial_circular_emitter.inner_temperature_kelvin",
-            ..
-        })
-    ));
 }

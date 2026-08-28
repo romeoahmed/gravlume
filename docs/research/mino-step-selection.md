@@ -77,8 +77,8 @@ finite/turning/reciprocal-constraint 与 winding gates，任何不确定性从�
 
 因此继续寻找一个“最佳 fixed factor”只是在移动未证明边界。高分辨率测试是真实、最小、
 mutation-sensitive 的反例；production numerical-Mino WGSL、pipeline constants、benchmark
-variants 和专用测试均已删除。通用 Cartesian KS 仍是基线，interval Bernstein capture 仍是
-已证明支持域内的保守 shortcut。
+variants 和专用测试均已删除。通用 Cartesian KS 仍是基线；interval Bernstein capture 后续因没有
+产生 travel-time observable 而与 escape map 一并撤出 production，历史 A/B 不再构成当前路径授权。
 
 ## 4. 下一条数学路线
 

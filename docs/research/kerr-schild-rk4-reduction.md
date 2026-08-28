@@ -2,7 +2,7 @@
 
 本文保存 outgoing Cartesian KS/RK4 的代数约化、实验顺序和准入证据，不定义当前 solver 或 tolerance；连续方程、验收预算与当前实现分别以[数学物理](../physics.md)、[验证合同](../validation.md)和 [GPU 证据](../gpu-renderer.md)为准。
 
-**状态：主要代数约化与事件定位已采用；step policy 仍实验。** 研究基线为 `a5048a0490b0fd05d19fd40857886824179ecb07`。production 随后采用 contracted null-gradient、compact geometry、discriminant-root `Sigma`、共享 reciprocal、六维 dynamic phase、全域 Cartesian Carter invariant、单调 Hermite event localization 与 Kerr–Newman interval capture；新的 step controller 仍未获授权。
+**状态：主要代数约化与事件定位已采用；step policy 仍实验。** 研究基线为 `a5048a0490b0fd05d19fd40857886824179ecb07`。production 随后采用 contracted null-gradient、compact geometry、discriminant-root `Sigma`、共享 reciprocal、六维 dynamic phase、全域 Cartesian Carter invariant 与单调 Hermite event localization；新的 step controller 仍未获授权。Kerr–Newman interval capture 的证书实验保留在本文，但该 shortcut 已因缺失 travel-time observable 撤出 production。
 
 ## 结论
 
@@ -26,10 +26,9 @@
 5. 真正的 Sundman 变换会把 RHS 改成 \(dy/ds=\chi(y)F(y)\)，每个 RK stage 都要计算
    \(\chi\)。它没有“必然更快或更准”的定理；当前 `h = c r` 已经是合法 variable-step
    RK4。Sundman 不应先于精确代数约化、event Hermite 与已有 RHS-count telemetry。
-6. interval Bernstein capture 已进入 production。neutral Kerr–Newman radial potential 仍是
-   同一个 quartic family，只多出 \(-q_e^2[(b-a)^2+\eta]\) 常数项；production 只在严格亚极端、
-   远离 axis/near-extreme 且 outward-rounded Bernstein coefficients 全部严格为正时接受，否则
-   执行完整 KS。
+6. interval Bernstein capture 的 quartic 与 outward-rounding 证书成立，但旧 fast path 只直接分类
+   Horizon，没有计算合同要求的 travel-time integral，因此不能仅凭 branch/direction gate 获准；当前
+   production 对这些 ray 也执行完整 KS。
 7. WGSL 允许浮点重关联，`fma` 也不保证真正 fused。代数恒等不意味着 binary32 bit identity；
    正确性以 observable contract 为准。数学约化全部合入后只运行一次 production aggregate
    benchmark 作为结果确认；benchmark 不作为代数恒等式、结构缩减或保守证书的准入门槛。
@@ -40,7 +39,7 @@
 
 | 已有结论                                                                                                                  | 本文处理方式                                            |
 | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| outgoing KS、8×8、endpoint reuse、committed-only singularity、global escape-direction map、interval radial capture 已采用 | 作为 baseline，不重新证明性能数字                       |
+| outgoing KS、8×8、endpoint reuse 与 committed-only singularity 已采用；map/interval 已撤出                     | 保留历史证据，不把旧性能数字当当前授权                  |
 | numerical reciprocal-Mino fixed-step 因 terminal travel-time 反例被拒绝                                                   | 不恢复，不再扫描 fixed Mino factor                      |
 | pure-Kerr elliptic/Carlson terminal solver 是独立高收益路线                                                               | 不实现 special functions；只定义它与 KS fallback 的边界 |
 | wavefront/subgroup 需要 active-ratio 证据                                                                                 | 不引入 backend-specific queue 或 subgroup 假设          |
@@ -627,7 +626,7 @@ conditioning、compiler register count、GPU speed 或 full-trajectory correctne
 | RΣ  | R1–R4 cumulative                      | exact continuum；已采用    | final aggregate GPU + invalidation→publish         | 只在全部完成后确认一次结果                    |
 | E1  | (16)–(19)，原 step 不变               | fourth-order guard；已采用 | finite-step event residual、direction、travel time | 单调/derivative 不确定时 chord fallback       |
 | S1  | E1 + (21)                             | heuristic                  | total RHS、step quantiles、observable max          | oracle-supported envelope；端到端稳定改善     |
-| C1  | (24) 的 KN interval capture           | strict certificate；已采用 | KN full-KS branch/direction equivalence            | unsupported/near-extreme 保守 fallback        |
+| C1  | (24) 的 KN interval capture           | strict certificate；已撤出 | 历史 branch/direction 通过，但未证明 travel time    | 缺失完整 terminal observable                  |
 | M1  | pairwise RK combine/显式 `fma`        | WGSL permits variation     | only paired GPU A/B                                | 不成为 correctness dependency；跨复测稳定才留 |
 
 R1–R4 的准入依据是 exact identity、定义域、状态/依赖图缩减和 observable contract，而不是单项
@@ -679,11 +678,11 @@ UI 与 publication 的整帧 wall latency。
 - `PathSampler` 未来需要 ordered checkpoints，不能由 6D terminal fast path 伪造；
 - `DiagnosticCapture` 保留现有记录语义；若内部不再动态积分 \(p_t\)，energy drift 应明确写为构造上
   exact zero，而不是删除字段或改变 record ABI；
-- interval capture、未来 elliptic terminal solver 与任意 heuristic 都只返回
+- 历史 interval capture、未来 elliptic terminal solver 与任意 heuristic 都只能返回
   `accepted terminal` 或 machine-readable `fallback`，fallback 从 validated camera initial state
   重跑完整 outgoing KS，不保存半条未证明 continuation state。
 
-R1–R4、E1 与 C1 已完成。下一步只有在独立误差模型明确时才做 S1；M1 与 Sundman 仍低优先。
+R1–R4 与 E1 已进入 production；C1 只完成了证书实验，未满足完整 observable 准入。下一步只有在独立误差模型明确时才做 S1；M1 与 Sundman 仍低优先。
 完整 elliptic solver 仍可能给出更大的 pure-Kerr terminal 加速，但它与这条通用 KS 基线互补，
 不是删除 fallback 的理由。最终 benchmark 只确认累计 production 结果，不再驱动逐行代数选择。
 

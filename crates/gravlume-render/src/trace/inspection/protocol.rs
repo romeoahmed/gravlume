@@ -27,7 +27,18 @@ const _: () = {
 };
 
 const KNOWN_NUMERICAL_FLAGS: u32 = 1 | 2 | 4;
-const KNOWN_EVENT_CANDIDATES: u32 = 1 | 2 | 4 | 8;
+const EVENT_CANDIDATE_SINGULARITY: u32 = 1;
+const EVENT_CANDIDATE_HORIZON: u32 = 2;
+const EVENT_CANDIDATE_SURFACE: u32 = 4;
+const EVENT_CANDIDATE_ESCAPE: u32 = 8;
+const KNOWN_EVENT_CANDIDATES: u32 = EVENT_CANDIDATE_SINGULARITY
+    | EVENT_CANDIDATE_HORIZON
+    | EVENT_CANDIDATE_SURFACE
+    | EVENT_CANDIDATE_ESCAPE;
+// WGSL `normalize` inherits the error of `x / sqrt(dot(x, x))`. This protocol sanity tolerance is
+// deliberately loose relative to the named GPU corpus while still rejecting scaled or zero data.
+// Source: https://www.w3.org/TR/WGSL/#floating-point-accuracy
+const ESCAPE_DIRECTION_NORM_SQUARED_TOLERANCE: f64 = 1.0e-4;
 
 const HORIZON_TAG: u32 = 0.0_f32.to_bits();
 const ANALYTIC_ESCAPE_TAG: u32 = 1.0_f32.to_bits();
@@ -139,6 +150,12 @@ pub(super) fn decode_readback(
     channel_model: Option<ScientificChannelModel>,
     ticket: SampleInspectionTicket,
 ) -> Result<SampleInspection, SampleInspectionError> {
+    if bytes.len()
+        != usize::try_from(INSPECTION_READBACK_BYTES)
+            .map_err(|_| SampleInspectionError::InvalidReadback)?
+    {
+        return Err(SampleInspectionError::InvalidReadback);
+    }
     let record_bytes = bytes
         .get(..size_of::<GpuInspectionRecord>())
         .ok_or(SampleInspectionError::InvalidReadback)?;
@@ -204,6 +221,20 @@ fn decode_retrace(
             field: "non-finite value",
         });
     }
+    if raw.source_time[3] < 0.0 {
+        return Err(SampleInspectionError::InvalidRecord {
+            field: "coordinate time delta",
+        });
+    }
+    if raw
+        .maximum_invariant_drift
+        .into_iter()
+        .any(|value| value < 0.0)
+    {
+        return Err(SampleInspectionError::InvalidRecord {
+            field: "invariant drift",
+        });
+    }
     if raw.event_diagnostics[1..] != [0.0; 3] {
         return Err(SampleInspectionError::InvalidRecord {
             field: "event diagnostics",
@@ -224,6 +255,7 @@ fn decode_retrace(
             field: "event candidates",
         });
     }
+    validate_terminal_diagnostics(termination, numerical_flags, event_candidates)?;
 
     let outcome = decode_outcome(
         termination,
@@ -244,6 +276,37 @@ fn decode_retrace(
             maximum_invariant_drift: raw.maximum_invariant_drift,
         },
     })
+}
+
+const fn validate_terminal_diagnostics(
+    termination: TraceTermination,
+    numerical_flags: u32,
+    event_candidates: u32,
+) -> Result<(), SampleInspectionError> {
+    let valid = match termination {
+        TraceTermination::HorizonCrossing => {
+            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_HORIZON
+        }
+        TraceTermination::Escape => {
+            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_ESCAPE
+        }
+        TraceTermination::SingularityGuard => {
+            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_SINGULARITY
+        }
+        TraceTermination::StepExhaustion => numerical_flags == 0 && event_candidates == 0,
+        TraceTermination::NumericalFailure => numerical_flags != 0 && event_candidates == 0,
+        TraceTermination::Uncertain => numerical_flags == 0 && event_candidates != 0,
+        TraceTermination::EquatorialSurface => {
+            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_SURFACE
+        }
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(SampleInspectionError::InvalidRecord {
+            field: "termination diagnostics",
+        })
+    }
 }
 
 pub(super) fn decode_branch_key(
@@ -302,9 +365,20 @@ fn decode_outcome(
         }
         TraceTermination::Escape => {
             require_scene_tag(tag, ANALYTIC_ESCAPE_TAG)?;
+            let direction = [source_x, source_y, source_z];
+            let norm_squared = direction
+                .into_iter()
+                .map(f64::from)
+                .map(|component| component * component)
+                .sum::<f64>();
+            if (norm_squared - 1.0).abs() > ESCAPE_DIRECTION_NORM_SQUARED_TOLERANCE {
+                return Err(SampleInspectionError::InvalidRecord {
+                    field: "escape direction",
+                });
+            }
             Ok(SampleTraceOutcome::Escape {
                 branch: require_branch(branch)?,
-                unit_direction: [source_x, source_y, source_z],
+                unit_direction: direction,
                 preview_rgb: rgb,
             })
         }
@@ -380,5 +454,193 @@ const fn require_scene_tag(actual: u32, expected: u32) -> Result<(), SampleInspe
         Err(SampleInspectionError::InvalidRecord {
             field: "termination/scene tag",
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use num_traits::ToPrimitive as _;
+    use proptest::prelude::*;
+
+    use super::{
+        ANALYTIC_ESCAPE_TAG, EVENT_CANDIDATE_ESCAPE, EVENT_CANDIDATE_HORIZON,
+        EVENT_CANDIDATE_SINGULARITY, EVENT_CANDIDATE_SURFACE, GpuInspectionRecord,
+        KNOWN_EVENT_CANDIDATES, KNOWN_NUMERICAL_FLAGS, SampleInspectionError, SampleTraceOutcome,
+        TraceTermination, decode_retrace, validate_terminal_diagnostics,
+    };
+
+    fn escape_record(direction: [f32; 3]) -> GpuInspectionRecord {
+        GpuInspectionRecord {
+            metadata: [
+                u32::from(TraceTermination::Escape),
+                0,
+                1,
+                EVENT_CANDIDATE_ESCAPE,
+            ],
+            branch_key: [0, 0, 0, 1],
+            source_time: [direction[0], direction[1], direction[2], 1.0],
+            scene_value: [0.25, 0.5, 0.75, f32::from_bits(ANALYTIC_ESCAPE_TAG)],
+            event_diagnostics: [0.0; 4],
+            maximum_invariant_drift: [0.0; 4],
+        }
+    }
+
+    #[test]
+    fn trace_termination_discriminants_are_stable() {
+        let cases = [
+            (1, TraceTermination::HorizonCrossing),
+            (2, TraceTermination::Escape),
+            (3, TraceTermination::SingularityGuard),
+            (4, TraceTermination::StepExhaustion),
+            (5, TraceTermination::NumericalFailure),
+            (6, TraceTermination::Uncertain),
+            (7, TraceTermination::EquatorialSurface),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(u32::from(expected), raw);
+            assert_eq!(TraceTermination::try_from(raw), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn terminal_diagnostics_match_the_shader_producer_table() {
+        let terminations = [
+            TraceTermination::HorizonCrossing,
+            TraceTermination::Escape,
+            TraceTermination::SingularityGuard,
+            TraceTermination::StepExhaustion,
+            TraceTermination::NumericalFailure,
+            TraceTermination::Uncertain,
+            TraceTermination::EquatorialSurface,
+        ];
+
+        for termination in terminations {
+            for numerical_flags in 0..=KNOWN_NUMERICAL_FLAGS {
+                for event_candidates in 0..=KNOWN_EVENT_CANDIDATES {
+                    let expected = match termination {
+                        TraceTermination::HorizonCrossing => {
+                            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_HORIZON
+                        }
+                        TraceTermination::Escape => {
+                            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_ESCAPE
+                        }
+                        TraceTermination::SingularityGuard => {
+                            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_SINGULARITY
+                        }
+                        TraceTermination::StepExhaustion => {
+                            numerical_flags == 0 && event_candidates == 0
+                        }
+                        TraceTermination::NumericalFailure => {
+                            numerical_flags != 0 && event_candidates == 0
+                        }
+                        TraceTermination::Uncertain => {
+                            numerical_flags == 0 && event_candidates != 0
+                        }
+                        TraceTermination::EquatorialSurface => {
+                            numerical_flags == 0 && event_candidates == EVENT_CANDIDATE_SURFACE
+                        }
+                    };
+                    assert_eq!(
+                        validate_terminal_diagnostics(
+                            termination,
+                            numerical_flags,
+                            event_candidates,
+                        )
+                        .is_ok(),
+                        expected,
+                        "{termination:?}, flags={numerical_flags}, candidates={event_candidates}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn retrace_decoder_rejects_impossible_escape_diagnostics() {
+        for (numerical_flags, event_candidates) in [
+            (1, EVENT_CANDIDATE_ESCAPE),
+            (0, 0),
+            (0, EVENT_CANDIDATE_HORIZON),
+        ] {
+            let mut record = escape_record([1.0, 0.0, 0.0]);
+            record.metadata[1] = numerical_flags;
+            record.metadata[3] = event_candidates;
+            assert!(matches!(
+                decode_retrace(record, None, [0.5; 2]),
+                Err(SampleInspectionError::InvalidRecord {
+                    field: "termination diagnostics"
+                })
+            ));
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn unknown_trace_termination_discriminants_are_rejected(
+            raw in prop_oneof![Just(0), Just(8), Just(u32::MAX), 9_u32..u32::MAX],
+        ) {
+            prop_assert!(matches!(
+                TraceTermination::try_from(raw),
+                Err(error) if error == raw
+            ));
+        }
+
+        #[test]
+        fn escape_decoder_accepts_direction_but_rejects_its_arbitrary_scale(
+            components in prop::array::uniform3(-1.0_f64..=1.0),
+            scale in prop_oneof![0.0_f32..=0.9, 1.1_f32..=4.0],
+        ) {
+            let norm = components.into_iter().map(|value| value * value).sum::<f64>().sqrt();
+            prop_assume!(norm >= 0.25);
+            let direction = components.map(|value| {
+                (value / norm)
+                    .to_f32()
+                    .expect("a normalized component is representable in binary32")
+            });
+            let decoded = decode_retrace(escape_record(direction), None, [0.5; 2])
+                .expect("a binary32-normalized direction satisfies the protocol");
+            prop_assert!(
+                matches!(decoded.outcome, SampleTraceOutcome::Escape { .. }),
+                "a normalized direction must decode as Escape",
+            );
+
+            let scaled = direction.map(|component| component * scale);
+            prop_assert!(
+                matches!(
+                    decode_retrace(escape_record(scaled), None, [0.5; 2]),
+                    Err(SampleInspectionError::InvalidRecord { field: "escape direction" })
+                ),
+                "an arbitrarily scaled direction must be rejected",
+            );
+        }
+
+        #[test]
+        fn retrace_decoder_rejects_negative_accumulated_diagnostics(
+            negative in -1.0e10_f32..=-f32::MIN_POSITIVE,
+            drift_index in 0_usize..4,
+        ) {
+            let mut negative_time = escape_record([1.0, 0.0, 0.0]);
+            negative_time.source_time[3] = negative;
+            prop_assert!(
+                matches!(
+                    decode_retrace(negative_time, None, [0.5; 2]),
+                    Err(SampleInspectionError::InvalidRecord {
+                        field: "coordinate time delta"
+                    })
+                ),
+                "negative accumulated time must be rejected",
+            );
+
+            let mut negative_drift = escape_record([1.0, 0.0, 0.0]);
+            negative_drift.maximum_invariant_drift[drift_index] = negative;
+            prop_assert!(
+                matches!(
+                    decode_retrace(negative_drift, None, [0.5; 2]),
+                    Err(SampleInspectionError::InvalidRecord { field: "invariant drift" })
+                ),
+                "negative maximum drift must be rejected",
+            );
+        }
     }
 }

@@ -18,7 +18,7 @@ use crate::{
     capabilities::{BASELINE_FEATURES, check_baseline_adapter, required_device_limits},
     extent::RenderExtent,
     timing::GpuTimings,
-    trace::{TileRegion, TracePipeline, TraceTarget, TraceTimestampWrites},
+    trace::{TileRegion, TracePipeline, TraceTarget},
 };
 
 const BENCHMARK_WIDTH: u32 = 1_280;
@@ -75,7 +75,7 @@ impl TraceGpuBenchmark {
         let trace = TracePipeline::new(&device, &observation)?;
         let target = trace.create_target(&device, extent);
         let tiles = TileRegion::all(extent);
-        let timings = GpuTimings::new(&device, trace.has_escape_map());
+        let timings = GpuTimings::new(&device);
 
         Ok(Self {
             device,
@@ -119,10 +119,7 @@ impl TraceGpuBenchmark {
             &mut encoder,
             &self.target,
             self.tiles,
-            TraceTimestampWrites::new(
-                self.timings.escape_map_writes(),
-                Some(self.timings.trace_writes()),
-            ),
+            Some(self.timings.trace_writes()),
         );
         self.timings.encode_readback(&mut encoder, ())?;
         let submission = self.queue.submit([encoder.finish()]);

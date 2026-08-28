@@ -112,7 +112,7 @@ fn refine_shadow_edges(@builtin(global_invocation_id) global_id: vec3<u32>) {
     var scene_linear = vec3<f32>(0.0);
     var escape_samples = 0u;
     for (var sample_index = 0u; sample_index < SHADOW_SAMPLE_COUNT; sample_index += 1u) {
-        let result = trace_pixel_with_radial_capture_at(
+        let result = trace_pixel_at(
             pixel,
             extent,
             SHADOW_SAMPLE_OFFSETS[sample_index],
