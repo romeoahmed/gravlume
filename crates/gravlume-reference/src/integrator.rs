@@ -242,3 +242,81 @@ fn weighted_derivative(
         .map(|(stage, weight)| weight * stage[component])
         .sum()
 }
+
+#[cfg(test)]
+mod tests {
+    use approx::abs_diff_eq;
+    use proptest::prelude::*;
+
+    use super::{
+        DenseOutput, FIFTH_ORDER_WEIGHTS, STAGES, STATE_COMPONENTS, dense_derivative,
+        weighted_state,
+    };
+
+    fn state() -> impl Strategy<Value = [f64; STATE_COMPONENTS]> {
+        prop::array::uniform8(-1.0e3_f64..=1.0e3)
+    }
+
+    fn stages() -> impl Strategy<Value = [[f64; STATE_COMPONENTS]; STAGES]> {
+        prop::array::uniform7(state())
+    }
+
+    fn dense_slope(
+        stages: &[[f64; STATE_COMPONENTS]; STAGES],
+        component: usize,
+        theta: f64,
+    ) -> f64 {
+        dense_derivative(
+            stages,
+            component,
+            [1.0, 2.0 * theta, 3.0 * theta * theta, 4.0 * theta.powi(3)],
+        )
+    }
+
+    proptest! {
+        #[test]
+        fn dense_output_preserves_endpoint_values_and_derivatives(
+            start in state(),
+            stages in stages(),
+            step in -10.0_f64..=10.0,
+        ) {
+            let dense = DenseOutput { start, step, stages };
+            let expected_end = weighted_state(start, step, &stages, FIFTH_ORDER_WEIGHTS);
+            let start_value = dense.evaluate(0.0);
+            let end_value = dense.evaluate(1.0);
+
+            for component in 0..STATE_COMPONENTS {
+                let stage_scale = stages
+                    .iter()
+                    .map(|stage| stage[component].abs())
+                    .sum::<f64>()
+                    .max(1.0);
+                let value_scale = step
+                    .abs()
+                    .mul_add(stage_scale, start[component].abs())
+                    .max(1.0);
+
+                prop_assert!(abs_diff_eq!(
+                    start_value[component],
+                    start[component],
+                    epsilon = 64.0 * f64::EPSILON * value_scale
+                ));
+                prop_assert!(abs_diff_eq!(
+                    end_value[component],
+                    expected_end[component],
+                    epsilon = 256.0 * f64::EPSILON * value_scale
+                ));
+                prop_assert!(abs_diff_eq!(
+                    dense_slope(&stages, component, 0.0),
+                    stages[0][component],
+                    epsilon = 64.0 * f64::EPSILON * stage_scale
+                ));
+                prop_assert!(abs_diff_eq!(
+                    dense_slope(&stages, component, 1.0),
+                    stages[STAGES - 1][component],
+                    epsilon = 256.0 * f64::EPSILON * stage_scale
+                ));
+            }
+        }
+    }
+}

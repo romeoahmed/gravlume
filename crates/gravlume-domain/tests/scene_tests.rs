@@ -66,7 +66,7 @@ fn invalid_scene_reports_stable_codes_and_field_paths() {
 }
 
 #[test]
-fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
+fn stationary_observer_is_stable_outside_and_rejected_inside_the_stationary_limit() {
     let spin = 0.8_f64;
     let radius = 2.0_f64 + 1.0e-8;
     let x = radius.mul_add(radius, spin * spin).sqrt();
@@ -84,6 +84,28 @@ fn observer_gram_residual_is_term_normalized_near_the_stationary_limit() {
         0.0,
         epsilon = 2.0e-12
     );
+
+    let ergoregion_radius = 1.8_f64;
+    let ergoregion_x = ergoregion_radius
+        .mul_add(ergoregion_radius, spin * spin)
+        .sqrt();
+    let report = PhysicalScene::new(PhysicalSceneInput::new(
+        1.0,
+        spin,
+        0.0,
+        KerrSchildChart::Ingoing,
+        StationaryObserverInput::new(
+            [0.0, ergoregion_x, 0.0, 0.0],
+            [0.0; 4],
+            [0.0, 0.0, 1.0],
+            1.0,
+        ),
+    ))
+    .expect_err("g_tt >= 0 cannot support a stationary observer");
+    assert!(report.issues().iter().any(|issue| {
+        issue.code() == ValidationIssueCode::NonStationaryObserver
+            && issue.field_path() == "physical_scene.observer.event_txyz_m"
+    }));
 }
 
 fn image_sample() -> impl Strategy<Value = (u32, u32, u32, u32, f64, f64)> {
@@ -258,7 +280,7 @@ proptest! {
     }
 
     #[test]
-    fn image_samples_produce_future_directed_null_rays(
+    fn image_samples_follow_the_view_mapping_and_produce_future_directed_null_rays(
         (width, height, x, y, offset_x, offset_y) in image_sample(),
     ) {
         let view = PerspectiveView::new(
@@ -275,6 +297,27 @@ proptest! {
         let ray = observation
             .initial_ray(sample)
             .expect("sample remains valid for the observation view");
+
+        let width_f64 = f64::from(width);
+        let height_f64 = f64::from(height);
+        let normalized_x = 2.0 * (f64::from(x) + offset_x) / width_f64 - 1.0;
+        let normalized_y = 1.0 - 2.0 * (f64::from(y) + offset_y) / height_f64;
+        let tangent_half_fov = (FRAC_PI_4 * 0.5).tan();
+        let sight_x = width_f64 / height_f64 * tangent_half_fov * normalized_x;
+        let sight_y = tangent_half_fov * normalized_y;
+        let normalization = 1.0_f64.hypot(sight_x.hypot(sight_y)).recip();
+        let frame = observation.scene().observer_frame();
+        let right = frame.image_right_txyz();
+        let up = frame.image_up_txyz();
+        let arrival = frame.arrival_direction_txyz();
+        let expected_sight: [f64; 4] = std::array::from_fn(|component| {
+            normalization
+                * (sight_x * right[component] + sight_y * up[component] - arrival[component])
+        });
+
+        for (actual, expected) in ray.sight_direction_txyz().into_iter().zip(expected_sight) {
+            prop_assert!(abs_diff_eq!(actual, expected, epsilon = 2.0e-12));
+        }
 
         prop_assert!(abs_diff_eq!(
             ray.normalized_null_residual(),

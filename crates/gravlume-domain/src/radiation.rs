@@ -238,3 +238,24 @@ enum EmissionInput {
     ConstantSource(f64),
     Integrated(f64),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::VISIBLE_BOXCAR_BANDS_V1;
+
+    #[test]
+    fn visible_boxcar_v1_preserves_its_versioned_channel_order() {
+        assert_eq!(
+            VISIBLE_BOXCAR_BANDS_V1.map(|band| (
+                band.name(),
+                band.lower_wavelength_nm(),
+                band.upper_wavelength_nm(),
+            )),
+            [
+                ("red", 600.0, 700.0),
+                ("green", 500.0, 600.0),
+                ("blue", 400.0, 500.0),
+            ]
+        );
+    }
+}

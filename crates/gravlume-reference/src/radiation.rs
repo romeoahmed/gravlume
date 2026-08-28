@@ -196,8 +196,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::{
-        VISIBLE_BOXCAR_BANDS_V1, blackbody_band_intensities, integrate_planck_kernel,
-        transport_bolometric_intensity,
+        blackbody_band_intensities, integrate_planck_kernel, transport_bolometric_intensity,
     };
 
     fn lut_log2_temperature() -> impl Strategy<Value = f64> {
@@ -218,22 +217,6 @@ mod tests {
         let actual = integrate_planck_kernel(0.0, 80.0);
 
         assert_abs_diff_eq!(actual, expected, epsilon = 4.0e-14);
-    }
-
-    #[test]
-    fn visible_boxcar_v1_preserves_its_versioned_channel_order() {
-        assert_eq!(
-            VISIBLE_BOXCAR_BANDS_V1.map(|band| (
-                band.name(),
-                band.lower_wavelength_nm(),
-                band.upper_wavelength_nm(),
-            )),
-            [
-                ("red", 600.0, 700.0),
-                ("green", 500.0, 600.0),
-                ("blue", 400.0, 500.0),
-            ]
-        );
     }
 
     #[test]

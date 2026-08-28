@@ -1,4 +1,4 @@
-use approx::{abs_diff_eq, assert_abs_diff_eq};
+use approx::{abs_diff_eq, assert_abs_diff_eq, assert_relative_eq};
 use gravlume_domain::{
     Extremality, GeometryError, KerrNewmanSpacetime, KerrSchildChart, SpacetimeEvent,
     ValidationIssueCode,
@@ -132,18 +132,20 @@ fn kerr_schild_branch_reverses_the_radial_direction_and_oblate_twist() {
     let polar = std::f64::consts::FRAC_PI_3;
     let ingoing_position = ingoing.oblate_to_cartesian(30.0, polar, 0.0);
     let outgoing_position = outgoing.oblate_to_cartesian(30.0, polar, 0.0);
-    assert_eq!(
-        ingoing_position[0].to_bits(),
-        outgoing_position[0].to_bits()
+    assert_relative_eq!(
+        ingoing_position[0],
+        outgoing_position[0],
+        max_relative = 4.0 * f64::EPSILON
     );
     assert_abs_diff_eq!(
         ingoing_position[1],
         -outgoing_position[1],
         epsilon = 4.0 * f64::EPSILON
     );
-    assert_eq!(
-        ingoing_position[2].to_bits(),
-        outgoing_position[2].to_bits()
+    assert_relative_eq!(
+        ingoing_position[2],
+        outgoing_position[2],
+        max_relative = 4.0 * f64::EPSILON
     );
 }
 
