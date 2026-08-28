@@ -4,9 +4,9 @@
 
 **状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的 trajectory/f32 Gate C/D 随后被高分辨率反例否决。本文只封闭 Kerr–Newman chart convention 与 pure-Kerr Mino state 的局部零步 seam；trajectory 与 step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式误写成整个积分器的证明。
 
-可复现的 SymPy 证明脚本为
-[verify_kerr_schild_mino_map.py](scripts/verify_kerr_schild_mino_map.py)。它是 docs 下的研究工具，
-不构成 runtime/build 依赖；同一脚本同时保留 legacy RED witness 与 corrected GREEN
+可复现的 SymPy 证明实现为
+[`kerr_schild_map.py`](scripts/src/gravlume_research/checks/kerr_schild_map.py)。它是 docs 下的研究工具，
+不构成 runtime/build 依赖；同一检查同时保留 legacy RED witness 与 corrected GREEN
 proof，避免只留下临时目录中不可复现的证据。
 
 ## 结论
@@ -312,28 +312,27 @@ turning point 的 sign 是显式 branch state，不能用 `signum(0)` 永久锁�
 
 ## 5. 可复算验证
 
-脚本固定 SymPy 1.14.0、seed `0x4B534D53`、180 位十进制精度与 \(10^{-80}\)
-boundary normalized-residual gate。它不导入项目代码，而是独立构造 corrected metric、
+检查使用 lock 解析的 SymPy、180 位十进制精度与 \(10^{-80}\) boundary normalized-residual
+gate。它不导入项目代码，而是独立构造 corrected metric、
 legacy metric、标准 BL metric 与 Jacobians。
 
 符号恒等式保持 exact `Rational`，按表达式类别显式使用 `Poly`、`cancel` 或
 `trigsimp`，不调用启发式 `simplify()`；near-boundary 数值检查把 exact substitutions
-直接传给 `evalf`，避免先替换再数值化造成精度损失。固定 seed 的随机量由
-`getrandbits(64)` 直接构造 exact dyadic `Rational`，不经过 binary64 或十进制格式化。
-这遵循 SymPy 的
+直接传给 `evalf`，避免先替换再数值化造成精度损失。Near-axis、near-horizon 与
+near-extremality 使用具名 exact `Rational`/radical case，不依赖随机序列或 binary64
+中间值。这遵循 SymPy 的
 [programmatic best practices](https://docs.sympy.org/latest/explanation/best-practices.html)
-与 [`evalf(subs=...)` 建议](https://docs.sympy.org/latest/modules/evalf.html)，以及 Python
-[`Random.getrandbits`](https://docs.python.org/3.10/library/random.html#random.Random.getrandbits)
-的整数采样合同。
+与 [`evalf(subs=...)` 建议](https://docs.sympy.org/latest/modules/evalf.html)。依赖版本与完整
+执行 gate 见[统一 Python 研究工具链](python-research-tooling.md)。
 
 运行命令：
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B docs/research/scripts/verify_kerr_schild_mino_map.py
+  gravlume-research kerr-schild-map
 ```
 
-2026-08-25 的完整摘要输出：
+2026-08-28 的完整摘要输出：
 
 ```text
 python=3.14.7
@@ -345,10 +344,10 @@ symbolic.affine_mino=PASS
 symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing
 symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch=4*M*a*r*u/(a**2*(1 - u) + r**2)
 symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591
-boundary.seed=0x4B534D53 precision_digits=180
-boundary.near_axis=PASS u=1.4142218e-70 abs_delta=15.913868 M2_minus_a2=0.29217704 metric=2.6069814e-551 duality=0 mino=9.9448448e-557
-boundary.near_horizon=PASS u=0.52044339 abs_delta=2.4109578e-60 M2_minus_a2=0.44105218 metric=1.6757030e-490 duality=0 mino=9.9879684e-498
-boundary.near_extremality=PASS u=0.75735800 abs_delta=3.5419486e-80 M2_minus_a2=2.3820161e-60 metric=1.2364506e-470 duality=0 mino=1.1515344e-479
+boundary.precision_digits=180
+boundary.near_axis=PASS u=1.5000000e-70 abs_delta=15.562500 M2_minus_a2=0.43750000 metric=6.5174535e-552 duality=0 mino=9.9448448e-557
+boundary.near_horizon=PASS u=0.50000000 abs_delta=1.9843135e-60 M2_minus_a2=0.43750000 metric=2.6182860e-492 duality=0 mino=2.4969921e-498
+boundary.near_extremality=PASS u=0.75000000 abs_delta=5.1961524e-80 M2_minus_a2=3.0000000e-60 metric=1.5455632e-471 duality=0 mino=2.3030687e-479
 RESULT=PASS
 ```
 

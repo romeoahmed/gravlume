@@ -47,7 +47,7 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
 #[test]
 fn canonical_surface_matches_the_independent_bl_mino_witness() {
     // Generated at 120/180 decimal digits by the independent separated-chart
-    // witness in docs/research/scripts/verify_bl_mino_surface_witness.py.
+    // witness documented in docs/research/high-precision-bl-mino-witness.md.
     const SOURCE_RADIUS_M: f64 = 19.650_678_984_603_292;
     const SOURCE_AZIMUTH_RAD: f64 = 3.087_156_262_423_669;
     const FREQUENCY_RATIO: f64 = 0.953_264_138_194_622_9;
@@ -108,7 +108,7 @@ fn canonical_surface_matches_the_independent_bl_mino_witness() {
 #[test]
 fn source_edge_pair_matches_the_independent_bl_mino_witness() {
     // Generated at 120/180 decimal digits by the independent separated-chart
-    // witness in docs/research/scripts/verify_bl_mino_surface_witness.py.
+    // witness documented in docs/research/high-precision-bl-mino-witness.md.
     let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
         .expect("repository surface fixture parses")
         .into_surface_observation()

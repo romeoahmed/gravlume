@@ -19,14 +19,14 @@ Hamilton–Jacobi separability 与第四常数来自 [Carter 1968](https://doi.o
 
 ## 2. 与 Cartesian KS reference 的独立性
 
-可复算实现为 [`verify_bl_mino_surface_witness.py`](scripts/verify_bl_mino_surface_witness.py)。它：
+可复算实现为 [`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py)。它：
 
 - 不导入 `gravlume-domain`、`gravlume-reference` 或 renderer；
 - 不读取 Rust reference outcome、GPU record、texture 或 fixture expected；
 - 从 `M=1,a=0.8,q_e=0`、observer oblate event、stationary observer、target/up、viewport/FOV 与 pixel/subpixel 十进制输入重新构造 KS metric、Observer Frame 和 camera covector；
 - 用 one-form invariance 独立转到 BL covector，再形成 $E=-p_t$、$b=L_z/E$ 与 $\eta=\mathcal Q/E^2$；
 - 在 separated BL/Mino graph 中求 terminal；只在最后把 endpoint observable 转回 ingoing KS chart；
-- 用 mpmath 1.3 arbitrary precision、precision doubling 和等价 evaluation 自己给出误差证据。
+- 用 mpmath arbitrary precision、precision doubling 和等价 evaluation 自己给出误差证据。
 
 Observer Frame 的 image-right complement 虽可从不同 coordinate seed 构造，但在给定 $u$、sight、up 与 orientation 后只有一个一维正向解；因此脚本不共享 Rust 的浮点 Gram–Schmidt 中间值。
 
@@ -242,16 +242,17 @@ CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B docs/research/scripts/verify_bl_mino_surface_witness.py
+  gravlume-research bl-mino-surface
 ```
 
 Research module 行为测试：
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B -m unittest discover -s docs/research/scripts \
-  -p 'test_bl_mino_surface_witness.py'
+  pytest docs/research/scripts/tests/test_bl_mino.py
 ```
+
+依赖解析、升级、完整测试与 lint 命令见[统一 Python 研究工具链](python-research-tooling.md)。
 
 对应 Rust consumer test：
 
@@ -272,5 +273,5 @@ cargo test -p gravlume-render --lib --locked \
 - [Carter, *Global Structure of the Kerr Family of Gravitational Fields* (1968)](https://doi.org/10.1103/PhysRev.174.1559)：Hamilton–Jacobi separability、第四常数与 quadratures；
 - [Mino, *Perturbative Approach to an Orbital Evolution around a Supermassive Black Hole* (2003)](https://doi.org/10.1103/PhysRevD.67.084027)：Mino parameter；
 - [Gralla & Lupsasca, *Null geodesics of the Kerr exterior* (2020)](https://doi.org/10.1103/PhysRevD.101.044032)：real root topology、turning segments 与 Kerr null-geodesic integrals；
-- [mpmath 1.3 precision management](https://mpmath.org/doc/1.3.0/general.html#precision-management)、[quadrature](https://mpmath.org/doc/1.3.0/calculus/integration.html)、[root finding](https://mpmath.org/doc/1.3.0/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/1.3.0/calculus/polynomials.html)与[finite/comparison utilities](https://mpmath.org/doc/1.3.0/general.html)：arbitrary-precision context、quadrature、root 与认证边界；
+- [mpmath precision management](https://mpmath.org/doc/1.3.0/general.html#precision-management)、[quadrature](https://mpmath.org/doc/1.3.0/calculus/integration.html)、[root finding](https://mpmath.org/doc/1.3.0/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/1.3.0/calculus/polynomials.html)与[finite/comparison utilities](https://mpmath.org/doc/1.3.0/general.html)：arbitrary-precision context、quadrature、root 与认证边界；
 - [Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.given)：research boundary 的生成式性质测试与反例缩减。

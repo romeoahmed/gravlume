@@ -44,7 +44,7 @@
 | [`crates/gravlume-native-display`](../crates/gravlume-native-display/) | 原生 display-state 的窄安全边界                                      |
 | [`crates/gravlume-render`](../crates/gravlume-render/)                | wgpu/WGSL trace、publication、inspection、capture、display 与 timing |
 | [`crates/gravlume-desktop`](../crates/gravlume-desktop/)              | winit/egui 组合根、输入、调度与用户可见状态                          |
-| [`docs/research/scripts`](research/scripts/)                           | 锁定的符号/高精度研究工具；不进入 Cargo runtime dependency closure   |
+| [`docs/research/scripts`](research/scripts/)                           | [锁定的 Python 研究工具](research/python-research-tooling.md)；不进入 Cargo runtime dependency closure |
 
 模块边界与文件所有权的细节见[架构合同](architecture.md#依赖方向)和[Renderer modules](architecture.md#renderer-modules)，这里不维护第二份接口清单。
 

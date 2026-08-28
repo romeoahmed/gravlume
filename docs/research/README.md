@@ -18,12 +18,11 @@
 | [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | canonical/edge pair 已采用    | `(640,13/14/16)` 独立约束 branch、Escape/source/transfer/phase；其余 corpus 仍开放             |
 | [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |
+| [Python 研究工具链](python-research-tooling.md)                           | 当前方法                    | Python 3.14、uv lock、统一 CLI、pytest/Hypothesis 与 Ruff                                      |
 
 ## 可复算脚本
 
-[`scripts/`](scripts/) 使用锁定的 uv/SymPy/Hypothesis 环境复核符号恒等式、binary32 interval、chart seam 与数值模型。脚本只生成研究证据，不进入 Cargo runtime dependency closure。
-
-运行方式和精度假设必须写在对应记录中；脚本通过只证明它声明的命题，不自动授权 production 支持域。
+[`scripts/`](scripts/) 使用[统一 Python 研究工具链](python-research-tooling.md)复核符号恒等式、binary32 interval、chart seam 与数值模型。脚本只生成研究证据，不进入 Cargo runtime dependency closure；脚本通过只证明它声明的命题，不自动授权 production 支持域。
 
 ## 记录格式
 

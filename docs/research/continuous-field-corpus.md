@@ -64,7 +64,7 @@ Direct 与 highly bent Kerr rays 形成不同 image sequence，并有不同 rota
 
 ### 3.2 已采用的 canonical 与 outer-edge pair witness
 
-[`verify_bl_mino_surface_witness.py`](scripts/verify_bl_mino_surface_witness.py) 从规范十进制输入独立重建
+[`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 从规范十进制输入独立重建
 canonical observer、frame 与 Photon Momentum，不导入 domain/reference crate，也不读取 CPU/GPU trace
 输出。它在 BL chart 中形成 $E,L_z,\mathcal Q$，按 Mino-separated potentials 与已分类 turning
 segments 求 event 顺序与 observable；KS coordinate-time/azimuth shift 同时使用 quadrature 与闭式
@@ -162,4 +162,4 @@ near-axis/near-extreme root degeneracy。每层都先保存 discrete identity，
 - [Bardeen, Press & Teukolsky (1972)](https://adsabs.harvard.edu/pdf/1972ApJ...178..347B)、[Cunningham (1975)](https://adsabs.harvard.edu/pdf/1975ApJ...202..788C)与 [Younsi, Wu & Fuerst (2012)](https://doi.org/10.1051/0004-6361/201219599)：Kerr circular emitter、disk transfer 与 covariant intensity/frequency transfer；
 - [WGSL specification](https://www.w3.org/TR/WGSL/)：host-shareable layout、runtime array、compute memory model 与 floating-point contract；
 - [WebGPU specification](https://www.w3.org/TR/webgpu/)：device limits、usage scopes、copy、mapping 与 device timeline；
-- [mpmath 1.3 documentation](https://mpmath.org/doc/1.3.0/)：arbitrary-precision context、quadrature、root finding 与 precision-doubling 复算基础。
+- [mpmath documentation](https://mpmath.org/doc/1.3.0/)：arbitrary-precision context、quadrature、root finding 与 precision-doubling 复算基础；依赖解析见[统一 Python 研究工具链](python-research-tooling.md)。

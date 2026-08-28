@@ -6,14 +6,13 @@ bands and the cancellation-sensitive homogeneous-slab limits. This is a
 research/validation tool, not a runtime dependency.
 """
 
-from __future__ import annotations
-
 import math
-import struct
 
 import mpmath as mp
 import sympy as sp
-from sympy_checks import require_equal
+
+from .._binary32 import round_binary32
+from .._sympy import require_equal
 
 ORACLE_PRECISION_DIGITS = 80
 SECOND_RADIATION_CONSTANT_M_K_DECIMAL = "0.014387768775039337"
@@ -128,10 +127,6 @@ def planck_band_fraction_fast(
     return (planck_tail(lower_x) - planck_tail(upper_x)) / (mp.pi**4 / 15)
 
 
-def binary32(value: mp.mpf | float) -> float:
-    return struct.unpack("<f", struct.pack("<f", float(value)))[0]
-
-
 def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
     minimum_log2 = mp.mpf(-8)
     intervals_per_octave = mp.mpf(128)
@@ -140,8 +135,10 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
         temperature = mp.power(2, minimum_log2 + index / intervals_per_octave)
         grid.append(
             tuple(
-                binary32(
-                    mp.log(planck_band_fraction_fast(temperature, lower, upper), 2)
+                round_binary32(
+                    float(
+                        mp.log(planck_band_fraction_fast(temperature, lower, upper), 2)
+                    )
                 )
                 for _, lower, upper in BANDS_NM
             )
@@ -272,7 +269,7 @@ def print_surface_transport_fixture_oracles() -> None:
         )
 
 
-def main() -> None:
+def run() -> None:
     with mp.workdps(ORACLE_PRECISION_DIGITS):
         verify_blackbody_redshift_identity()
         verify_homogeneous_slab_identities()
@@ -299,7 +296,3 @@ def main() -> None:
             print(f"{temperature},{values}")
         print_surface_transport_fixture_oracles()
         print("RESULT=PASS")
-
-
-if __name__ == "__main__":
-    main()

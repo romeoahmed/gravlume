@@ -6,10 +6,9 @@ invariant, and cubic Hermite event interpolation.  Every identity is exact;
 the script does not model binary32 rounding or GPU execution time.
 """
 
-from __future__ import annotations
-
 import sympy as sp
-from sympy_checks import require_equal, require_matrix_equal
+
+from .._sympy import require_equal, require_matrix_equal
 
 
 def verify_sigma_identity() -> None:
@@ -346,7 +345,7 @@ def verify_cubic_hermite_event_interpolant() -> None:
     )
 
 
-def main() -> None:
+def run() -> None:
     verify_sigma_identity()
     verify_geometry_gradients()
     verify_factorization()
@@ -364,7 +363,3 @@ def main() -> None:
     print("Kerr-Newman radial quartic: PASS")
     print("Cubic Hermite event order: PASS")
     print("RESULT=PASS")
-
-
-if __name__ == "__main__":
-    main()

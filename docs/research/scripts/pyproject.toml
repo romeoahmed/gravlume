@@ -1,12 +1,46 @@
+[build-system]
+requires = ["uv_build>=0.12.7,<0.13"]
+build-backend = "uv_build"
+
 [project]
-name = "gravlume-research-checks"
-version = "0.0.0"
-requires-python = ">=3.10"
+name = "gravlume-research"
+version = "0.1.0"
+description = "Independent symbolic and numerical checks for Gravlume"
+requires-python = ">=3.14"
 dependencies = [
-    "hypothesis==6.165.6",
-    "mpmath==1.3.0",
-    "sympy==1.14.0",
+    "mpmath",
+    "numpy",
+    "sympy",
+]
+
+[project.scripts]
+gravlume-research = "gravlume_research.cli:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis",
+    "pytest",
+    "ruff",
 ]
 
 [tool.uv]
-package = false
+prerelease = "disallow"
+
+[tool.pytest.ini_options]
+addopts = ["--strict-config", "--strict-markers"]
+filterwarnings = ["error"]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 88
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["B", "C4", "E4", "E7", "E9", "F", "I", "NPY", "PERF", "PIE", "PT", "RUF", "SIM", "UP"]
+
+[tool.ruff.lint.flake8-pytest-style]
+parametrize-values-type = "tuple"
+
+[tool.ruff.format]
+docstring-code-format = true

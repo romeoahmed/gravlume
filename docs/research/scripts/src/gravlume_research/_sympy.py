@@ -1,18 +1,16 @@
-"""Explicit proof contracts shared by the repository's SymPy tools.
+"""Explicit proof contracts shared by Gravlume's SymPy checks.
 
 The reducers deliberately follow SymPy's programmatic best practices: exact
 quantities stay symbolic, transformations are targeted, and numerical
 substitutions are passed directly to ``evalf``.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping, Sequence
 
 import sympy as sp
 
-ExpressionReducer = Callable[[sp.Expr], sp.Expr]
-Substitutions = Mapping[sp.Symbol, sp.Expr]
+type ExpressionReducer = Callable[[sp.Expr], sp.Expr]
+type Substitutions = Mapping[sp.Symbol, sp.Expr]
 
 
 def rational_form(expression: sp.Expr) -> sp.Expr:

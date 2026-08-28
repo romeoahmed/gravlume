@@ -13,41 +13,26 @@ that seam remains covered by the supported-domain fallback and CPU/GPU oracle
 matrix. This is a research/validation tool, not a runtime dependency.
 """
 
-from __future__ import annotations
-
 import math
-import struct
 from dataclasses import dataclass
 from decimal import Decimal, localcontext
 from fractions import Fraction
 
 import sympy as sp
-from hypothesis import example, given, settings
-from hypothesis import strategies as st
-from sympy_checks import require_polynomial_equal
 
-PRIMITIVE_EXAMPLES = 20_000
-BERNSTEIN_EXAMPLES = 5_000
-MIN_NORMAL_F32 = 2.0**-126
-MAX_FINITE_F32 = float.fromhex("0x1.fffffep+127")
-MIN_SUBNORMAL_F32 = float.fromhex("0x1p-149")
-ExactScalar = sp.Expr | Fraction
-ExactCoefficients = tuple[ExactScalar, ExactScalar, ExactScalar, ExactScalar]
+from .._binary32 import (
+    MAX_FINITE,
+    MIN_NORMAL,
+    MIN_SUBNORMAL,
+    binary32_from_bits,
+    next_down,
+    next_up,
+    round_binary32,
+)
+from .._sympy import require_polynomial_equal
 
-FINITE_F32 = st.floats(
-    allow_infinity=False,
-    allow_nan=False,
-    allow_subnormal=True,
-    width=32,
-)
-BOUNDED_F32 = st.floats(
-    min_value=-8.0,
-    max_value=8.0,
-    allow_infinity=False,
-    allow_nan=False,
-    allow_subnormal=True,
-    width=32,
-)
+type ExactScalar = sp.Expr | Fraction
+type ExactCoefficients = tuple[ExactScalar, ExactScalar, ExactScalar, ExactScalar]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -58,17 +43,6 @@ class BernsteinSample:
     constant: float
     lower: float
     width: float
-
-
-BERNSTEIN_SAMPLES = st.builds(
-    BernsteinSample,
-    leading=BOUNDED_F32,
-    quadratic=BOUNDED_F32,
-    linear=BOUNDED_F32,
-    constant=BOUNDED_F32,
-    lower=BOUNDED_F32,
-    width=BOUNDED_F32,
-)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -197,67 +171,28 @@ def verify_bernstein_transform(model: KerrRadialModel) -> None:
     )
 
 
-def f32(value: float) -> float:
-    try:
-        return struct.unpack("<f", struct.pack("<f", value))[0]
-    except OverflowError:
-        return math.copysign(math.inf, value)
-
-
-def f32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", f32(value)))[0]
-
-
-def f32_from_bits(bits: int) -> float:
-    return struct.unpack("<f", struct.pack("<I", bits))[0]
-
-
-def next_down_f32(value: float) -> float:
-    value = f32(value)
-    if math.isnan(value) or value == -math.inf:
-        return value
-    if value == math.inf:
-        return MAX_FINITE_F32
-    if value == 0.0:
-        return -f32_from_bits(1)
-    bits = f32_bits(value)
-    return f32_from_bits(bits + 1 if value < 0.0 else bits - 1)
-
-
-def next_up_f32(value: float) -> float:
-    value = f32(value)
-    if math.isnan(value) or value == math.inf:
-        return value
-    if value == -math.inf:
-        return -MAX_FINITE_F32
-    if value == 0.0:
-        return f32_from_bits(1)
-    bits = f32_bits(value)
-    return f32_from_bits(bits - 1 if value < 0.0 else bits + 1)
-
-
 def ftz_safe_lower(value: float) -> float:
     """Widen a lower bound across implementations that may flush subnormals."""
 
-    if not math.isfinite(value) or abs(value) >= MIN_NORMAL_F32:
+    if not math.isfinite(value) or abs(value) >= MIN_NORMAL:
         return value
-    return -MIN_NORMAL_F32 if value <= 0.0 else 0.0
+    return -MIN_NORMAL if value <= 0.0 else 0.0
 
 
 def ftz_safe_upper(value: float) -> float:
     """Widen an upper bound across implementations that may flush subnormals."""
 
-    if not math.isfinite(value) or abs(value) >= MIN_NORMAL_F32:
+    if not math.isfinite(value) or abs(value) >= MIN_NORMAL:
         return value
-    return MIN_NORMAL_F32 if value >= 0.0 else 0.0
+    return MIN_NORMAL if value >= 0.0 else 0.0
 
 
 def outward_lower(value: float) -> float:
-    return ftz_safe_lower(next_down_f32(f32(value)))
+    return ftz_safe_lower(next_down(round_binary32(value)))
 
 
 def outward_upper(value: float) -> float:
-    return ftz_safe_upper(next_up_f32(f32(value)))
+    return ftz_safe_upper(next_up(round_binary32(value)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,7 +206,7 @@ class IntervalF32:
 
     @classmethod
     def point(cls, value: float) -> IntervalF32:
-        packed = f32(value)
+        packed = round_binary32(value)
         if not math.isfinite(packed):
             raise ValueError("an interval input must be finite")
         return cls(packed, packed)
@@ -325,17 +260,7 @@ def interval_contains(interval: IntervalF32, exact: Fraction) -> bool:
     return lower_ok and upper_ok
 
 
-@settings(
-    deadline=None,
-    derandomize=True,
-    max_examples=PRIMITIVE_EXAMPLES,
-)
-@example(left=0.0, right=-0.0)
-@example(left=MIN_SUBNORMAL_F32, right=-MIN_SUBNORMAL_F32)
-@example(left=MIN_NORMAL_F32, right=-next_down_f32(MIN_NORMAL_F32))
-@example(left=MAX_FINITE_F32, right=-MAX_FINITE_F32)
-@given(left=FINITE_F32, right=FINITE_F32)
-def verify_interval_primitives(left: float, right: float) -> None:
+def check_interval_primitives(left: float, right: float) -> None:
     left_interval = IntervalF32.point(left)
     right_interval = IntervalF32.point(right)
     exact_left = exact_fraction(left)
@@ -395,26 +320,10 @@ def interval_bernstein_coefficients(
     )
 
 
-@settings(
-    deadline=None,
-    derandomize=True,
-    max_examples=BERNSTEIN_EXAMPLES,
-)
-@example(
-    sample=BernsteinSample(
-        leading=0.0,
-        quadratic=MIN_SUBNORMAL_F32,
-        linear=-MIN_SUBNORMAL_F32,
-        constant=MIN_NORMAL_F32,
-        lower=0.0,
-        width=0.0,
-    )
-)
-@given(sample=BERNSTEIN_SAMPLES)
-def verify_interval_bernstein(sample: BernsteinSample) -> None:
-    leading_value = f32(abs(sample.leading) + MIN_SUBNORMAL_F32)
+def check_interval_bernstein(sample: BernsteinSample) -> None:
+    leading_value = round_binary32(abs(sample.leading) + MIN_SUBNORMAL)
     lower_value = abs(sample.lower)
-    width_value = f32(abs(sample.width) + f32(0.001))
+    width_value = round_binary32(abs(sample.width) + round_binary32(0.001))
     intervals = interval_bernstein_coefficients(
         (
             IntervalF32.point(leading_value),
@@ -448,7 +357,7 @@ def verify_interval_bernstein(sample: BernsteinSample) -> None:
 def verify_packed_horizon_bounds() -> None:
     witnessed_nearest_rounding_failure = False
     for spin_bits in (0x0000_0000, 0x3F00_0000, 0x3F4C_CCCD, 0x3F7D_70A4, 0x3F7F_FFFF):
-        spin = f32_from_bits(spin_bits)
+        spin = binary32_from_bits(spin_bits)
         with localcontext() as context:
             context.prec = 100
             spin_fraction = Fraction(spin)
@@ -456,9 +365,9 @@ def verify_packed_horizon_bounds() -> None:
                 spin_fraction.denominator
             )
             exact = Decimal(1) + (Decimal(1) - spin_decimal * spin_decimal).sqrt()
-        nearest = f32(float(exact))
-        lower = next_down_f32(nearest)
-        upper = next_up_f32(nearest)
+        nearest = round_binary32(float(exact))
+        lower = next_down(nearest)
+        upper = next_up(nearest)
         lower_fraction = Fraction(lower)
         upper_fraction = Fraction(upper)
         lower_exact = Decimal(lower_fraction.numerator) / Decimal(
@@ -548,23 +457,34 @@ def verify_segment_removal_witness() -> None:
         )
 
 
-def main() -> None:
+def run() -> None:
     model = build_radial_model()
     verify_normalized_form(model)
     verify_bernstein_transform(model)
-    verify_interval_primitives()
-    verify_interval_bernstein()
+    for left, right in (
+        (0.0, -0.0),
+        (MIN_SUBNORMAL, -MIN_SUBNORMAL),
+        (MIN_NORMAL, -next_down(MIN_NORMAL)),
+        (MAX_FINITE, -MAX_FINITE),
+    ):
+        check_interval_primitives(left, right)
+    check_interval_bernstein(
+        BernsteinSample(
+            leading=0.0,
+            quadratic=MIN_SUBNORMAL,
+            linear=-MIN_SUBNORMAL,
+            constant=MIN_NORMAL,
+            lower=0.0,
+            width=0.0,
+        )
+    )
     verify_packed_horizon_bounds()
     verify_precondition_mutations(model)
     verify_segment_removal_witness()
     print(
         "PASS_INTERVAL_MODEL: exact Kerr quartic, quartic-to-Bernstein "
-        "identity, Hypothesis-generated strict-evaluator f32 intervals "
-        f"({PRIMITIVE_EXAMPLES} primitive and {BERNSTEIN_EXAMPLES} Bernstein "
-        "examples), packed-horizon seam, and mutation witnesses; physical-input "
+        "identity, deterministic strict-evaluator f32 boundaries, packed-horizon "
+        "seam, and mutation witnesses; Hypothesis covers the wider generated "
+        "domain; physical-input "
         "enclosure remains a separate CPU/GPU oracle gate"
     )
-
-
-if __name__ == "__main__":
-    main()

@@ -37,14 +37,14 @@
 一手资料核对阶段没有修改 production；其后的 reconstruction 候选实验及 benchmark 单列在第 5.6 节，
 最终没有保留候选代码。后续落地状态以本节证据表和第 2.3 节矩阵为准，不从最初的建议语气推断当前能力。
 
-配套的 80 位 SymPy/mpmath 复算脚本是
-[`verify_scalar_transport.py`](scripts/verify_scalar_transport.py)。它验证 invariant/blackbody
+配套的 80 位 SymPy/mpmath 复算实现是
+[`scalar_transport.py`](scripts/src/gravlume_research/checks/scalar_transport.py)。它验证 invariant/blackbody
 恒等式、slab 极限与 partition、Planck normalization、binary64 thin-limit cancellation 与
 4097-entry LUT 的 midpoint 误差，并生成 v3 expected 的独立 oracle；运行方式为：
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B docs/research/scripts/verify_scalar_transport.py
+  gravlume-research scalar-transport
 ```
 
 高精度物理常数以十进制 source 保存，并在 `workdps(80)` 生效后才构造为 `mpf`；否则
@@ -56,9 +56,10 @@ v3 fixture 的 spectral expected，geometry、bolometric、输入与 tolerance �
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B -m unittest discover -s docs/research/scripts \
-  -p 'test_scalar_transport.py'
+  pytest docs/research/scripts/tests/test_scalar_transport.py
 ```
+
+依赖解析、升级、完整测试与 lint 命令见[统一 Python 研究工具链](python-research-tooling.md)。
 
 修正只更新同一 `surface-transport-v1` 物理 profile 的高精度 spectral expected；schema、
 profile meaning、输入与 tolerance 均未改变，符合[验证合同的 oracle 勘误条件](../validation.md#6-fixture-envelope)。
