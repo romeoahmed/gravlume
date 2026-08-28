@@ -64,6 +64,20 @@ fn fixture_envelope_is_strict_and_size_bounded() {
 }
 
 #[test]
+fn fixture_decimal_fields_reject_non_finite_values_and_negative_zero() {
+    for source in ["NaN", "inf", "+inf", "-inf", "-0", "-0.0", "-0e0"] {
+        let mutated = set_field(SCATTER_B6, &["spacetime", "mass_m"], decimal(source));
+        assert!(
+            matches!(
+                FixtureDocument::parse_toml(&mutated),
+                Err(FixtureError::Toml(_))
+            ),
+            "accepted {source}"
+        );
+    }
+}
+
+#[test]
 fn transport_fixture_requires_a_strict_canonical_artifact() {
     let with_unknown = set_field(
         BLACKBODY_VACUUM,

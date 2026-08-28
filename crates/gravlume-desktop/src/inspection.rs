@@ -40,7 +40,14 @@ impl InspectionStatus {
         completion: SampleInspectionCompletion,
         current_generation: u64,
     ) -> bool {
-        if !completion_is_current(self, completion.ticket().generation(), current_generation) {
+        let ticket_generation = completion.ticket().generation();
+        let is_current = matches!(
+            self,
+            Self::Pending(ticket)
+                if ticket.generation() == ticket_generation
+                    && ticket_generation == current_generation
+        );
+        if !is_current {
             return false;
         }
         *self = Self::Finished(completion);
@@ -56,19 +63,6 @@ impl InspectionStatus {
         }
         changed
     }
-}
-
-const fn completion_is_current(
-    status: &InspectionStatus,
-    ticket_generation: u64,
-    current_generation: u64,
-) -> bool {
-    matches!(
-        status,
-        InspectionStatus::Pending(ticket)
-            if ticket.generation() == ticket_generation
-                && ticket_generation == current_generation
-    )
 }
 
 pub fn cursor_pixel(
@@ -106,7 +100,7 @@ mod tests {
     use proptest::prelude::*;
     use winit::dpi::{PhysicalPosition, PhysicalSize};
 
-    use super::{InspectionStatus, completion_is_current, cursor_pixel};
+    use super::{InspectionStatus, cursor_pixel};
 
     #[test]
     fn current_publication_settles_a_viewport_wait() {
@@ -131,17 +125,6 @@ mod tests {
             mismatched_publication,
             InspectionStatus::ViewportChanging
         ));
-    }
-
-    #[test]
-    fn completion_is_rejected_without_a_pending_ticket() {
-        assert!(!completion_is_current(
-            &InspectionStatus::ViewportChanging,
-            9,
-            9
-        ));
-        assert!(!completion_is_current(&InspectionStatus::Idle, 8, 9));
-        assert!(!completion_is_current(&InspectionStatus::Idle, 9, 9));
     }
 
     fn position_inside_physical_pixel()

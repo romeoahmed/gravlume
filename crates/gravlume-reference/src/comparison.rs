@@ -337,7 +337,11 @@ mod tests {
             let comparison = ReferenceComparison::baseline_v1(&baseline, &candidate)
                 .expect("policy roles and input identity match");
 
-            assert!(!comparison.is_accepted(), "accepted {terminal:?}");
+            assert_eq!(
+                comparison.issues(),
+                &[ComparisonIssue::UnsuccessfulTermination],
+                "unexpected issues for {terminal:?}"
+            );
         }
     }
 
