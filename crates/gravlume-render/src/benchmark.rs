@@ -1,4 +1,4 @@
-//! Minimal Criterion seam for the current production trace pipeline.
+//! Criterion seam for one versioned production trace workload.
 //!
 //! The benchmark deliberately reuses the renderer's trace and timestamp implementations. Historical
 //! A/B variants and their validation artifacts live in `docs/research`; they are not permanent
@@ -23,6 +23,8 @@ use crate::{
 
 const BENCHMARK_WIDTH: u32 = 1_280;
 const BENCHMARK_HEIGHT: u32 = 720;
+const WORKLOAD_ID: &str = "full_ks_rk4_v2_bolometric_v1_1280x720";
+const WORKLOAD_PIXELS: u64 = BENCHMARK_WIDTH as u64 * BENCHMARK_HEIGHT as u64;
 
 #[derive(Debug, thiserror::Error)]
 enum TraceBenchmarkError {
@@ -59,10 +61,7 @@ struct TraceGpuBenchmark {
 }
 
 impl TraceGpuBenchmark {
-    const NAME: &str = "production_1280x720";
-    const PIXELS: u64 = BENCHMARK_WIDTH as u64 * BENCHMARK_HEIGHT as u64;
-
-    /// Creates the fixed production benchmark workload and reusable GPU resources.
+    /// Creates the versioned benchmark workload and reusable GPU resources.
     ///
     /// # Errors
     ///
@@ -147,11 +146,7 @@ impl TraceGpuBenchmark {
 pub fn register(criterion: &mut Criterion) {
     let mut trace = TraceGpuBenchmark::new()
         .unwrap_or_else(|error| panic!("failed to create trace GPU benchmark: {error}"));
-    let adapter = trace.adapter_info();
-    eprintln!(
-        "trace GPU benchmark adapter: {} ({:?}, {:?})",
-        adapter.name, adapter.backend, adapter.device_type
-    );
+    report_identity(trace.adapter_info());
 
     let mut group = criterion.benchmark_group("trace_gpu");
     group
@@ -160,8 +155,8 @@ pub fn register(criterion: &mut Criterion) {
         .measurement_time(Duration::from_secs(15))
         .sampling_mode(SamplingMode::Flat)
         .noise_threshold(0.05)
-        .throughput(Throughput::Elements(TraceGpuBenchmark::PIXELS));
-    group.bench_function(TraceGpuBenchmark::NAME, |bencher| {
+        .throughput(Throughput::Elements(WORKLOAD_PIXELS));
+    group.bench_function(WORKLOAD_ID, |bencher| {
         bencher.iter_custom(|iterations| {
             trace
                 .measure_gpu(iterations)
@@ -169,6 +164,13 @@ pub fn register(criterion: &mut Criterion) {
         });
     });
     group.finish();
+}
+
+fn report_identity(adapter: &wgpu::AdapterInfo) {
+    eprintln!(
+        "trace GPU benchmark: workload={WORKLOAD_ID}; extent={BENCHMARK_WIDTH}x{BENCHMARK_HEIGHT}; adapter={}; device_type={:?}; backend={:?}; driver={}; driver_info={}",
+        adapter.name, adapter.device_type, adapter.backend, adapter.driver, adapter.driver_info
+    );
 }
 
 fn benchmark_extent(limits: &wgpu::Limits) -> Result<RenderExtent, TraceBenchmarkError> {
