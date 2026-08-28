@@ -5,7 +5,8 @@
 **状态：已拒绝。** 数值 reciprocal-Mino RK4 candidate 已从 production 删除。它曾在低分辨率矩阵和本机 GPU timing 上表现很好，但更高分辨率独立 reference 暴露出超过正式 observable budget 的 terminal phase error。本文保留这些证据，避免把一次失败误写成“从未有价值”，也避免再次把局部 gate 当成全域证明。
 
 坐标/physical-spin 的 exact seam 见 [KS–BL/Mino seam](kerr-schild-mino-map.md)；RK4/Hermite
-局部阶数的可复现脚本为 [verify_mino_step_model.py](scripts/verify_mino_step_model.py)。
+局部阶数的可复现实现为
+[`mino_step.py`](scripts/src/gravlume_research/checks/mino_step.py)。
 
 ## 1. 候选为何有吸引力
 
@@ -44,10 +45,10 @@ terminal observable 逐点单调：最后一步相位、turning branch、event l
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B docs/research/scripts/verify_mino_step_model.py
+  gravlume-research mino-step
 ```
 
-该脚本只证明局部数值模型，不证明 supported domain 或完整 renderer correctness。
+该检查只证明局部数值模型，不证明 supported domain 或完整 renderer correctness；环境与完整 gate 见[统一 Python 研究工具链](python-research-tooling.md)。
 
 ## 2. 曾经通过的证据
 

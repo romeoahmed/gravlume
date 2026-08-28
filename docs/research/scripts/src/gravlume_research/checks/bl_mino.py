@@ -28,8 +28,6 @@ Primary mathematical sources:
   https://docs.python.org/3.10/library/stdtypes.html#boolean-type-bool
 """
 
-from __future__ import annotations
-
 import platform
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -144,25 +142,14 @@ class SourceEdgePairWitness:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class PrecisionCertificate:
-    """Precision-doubling evidence for the canonical witness."""
+class PrecisionCertificate[Witness]:
+    """Precision-doubling evidence for one named witness."""
 
     low_precision_digits: int
     high_precision_digits: int
     required_stable_digits: int
     maximum_normalized_delta: mp.mpf
-    witness: SurfaceWitness
-
-
-@dataclass(frozen=True, slots=True, kw_only=True)
-class SourceEdgePairPrecisionCertificate:
-    """Precision-doubling evidence for the fixed outside/inside source-edge pair."""
-
-    low_precision_digits: int
-    high_precision_digits: int
-    required_stable_digits: int
-    maximum_normalized_delta: mp.mpf
-    witness: SourceEdgePairWitness
+    witness: Witness
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -445,12 +432,17 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
         raise UnsupportedWitnessError(
             "escape witness contains a non-real or non-finite value"
         )
-    if witness.first_equatorial_crossing_radius_m <= SURFACE_OUTER_RADIUS_M:
-        raise UnsupportedWitnessError(
-            "escape witness does not cross outside the outer source edge"
-        )
     if witness.escape_radius_m != ESCAPE_RADIUS_M:
         raise UnsupportedWitnessError("escape witness uses the wrong terminal radius")
+    if not (
+        SURFACE_OUTER_RADIUS_M
+        < witness.first_equatorial_crossing_radius_m
+        < witness.escape_radius_m
+    ):
+        raise UnsupportedWitnessError(
+            "escape witness first crossing is not ordered between the outer "
+            "source edge and escape terminal"
+        )
     positive_fields = (
         witness.travel_time_m,
         witness.escape_before_next_crossing_mino_margin,
@@ -472,7 +464,9 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
             component**2 for component in witness.escape_direction_xyz
         )
         if abs(direction_norm_squared - 1) >= residual_limit:
-            raise UnsupportedWitnessError("escape traversal direction is not normalized")
+            raise UnsupportedWitnessError(
+                "escape traversal direction is not normalized"
+            )
         if (
             mp.fsum(
                 position * direction
@@ -491,12 +485,12 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
         cylindrical_squared = x**2 + y**2
         oblate_term = cylindrical_squared + z**2 - spin**2
         recovered_radius_squared = (
-            oblate_term
-            + mp.sqrt(oblate_term**2 + 4 * spin**2 * z**2)
+            oblate_term + mp.sqrt(oblate_term**2 + 4 * spin**2 * z**2)
         ) / 2
-        radius_residual = abs(
-            mp.sqrt(recovered_radius_squared) - witness.escape_radius_m
-        ) / witness.escape_radius_m
+        radius_residual = (
+            abs(mp.sqrt(recovered_radius_squared) - witness.escape_radius_m)
+            / witness.escape_radius_m
+        )
         if radius_residual >= residual_limit:
             raise UnsupportedWitnessError(
                 "escape position does not lie on the named oblate radius"
@@ -964,8 +958,11 @@ def _integrate_path_observables(
     radial: _RadialMotion,
     initial_mu: mp.mpf,
     terminal_radius: mp.mpf,
-    terminal_mu_magnitude: mp.mpf = mp.mpf(0),
+    terminal_mu_magnitude: mp.mpf | None = None,
 ) -> _PathObservables:
+    terminal_mu_magnitude = (
+        mp.mpf(0) if terminal_mu_magnitude is None else terminal_mu_magnitude
+    )
     spin = geometry.spin
     impact = radial.impact
 
@@ -1110,9 +1107,11 @@ def _escape_position_and_direction(
     )
 
     radial_velocity = -mp.sqrt(radial.potential(terminal_radius))
-    polar_potential = spin**2 * (
-        polar.turning_squared - terminal_mu**2
-    ) * (terminal_mu**2 - polar.negative_turning_squared)
+    polar_potential = (
+        spin**2
+        * (polar.turning_squared - terminal_mu**2)
+        * (terminal_mu**2 - polar.negative_turning_squared)
+    )
     mu_velocity = mp.sqrt(polar_potential)
     theta_velocity = -mu_velocity / sin_theta
     bl_azimuth_velocity = (
@@ -1121,8 +1120,7 @@ def _escape_position_and_direction(
         - spin
     )
     ks_azimuth_velocity = (
-        bl_azimuth_velocity
-        + spin / radial.delta(terminal_radius) * radial_velocity
+        bl_azimuth_velocity + spin / radial.delta(terminal_radius) * radial_velocity
     )
 
     x, y, _ = position
@@ -1248,9 +1246,7 @@ def _compute_source_edge_escape_witness(
         initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
         radial_turnings=_CANONICAL_RADIAL_TURNINGS,
         polar_turnings=_CANONICAL_POLAR_TURNINGS,
-        equatorial_crossings_before_terminal=(
-            _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS
-        ),
+        equatorial_crossings_before_terminal=(_SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS),
         azimuth_winding=path.azimuth_winding,
         first_equatorial_crossing_radius_m=first_crossing_radius,
         escape_radius_m=escape_radius,
@@ -1339,28 +1335,12 @@ def _compute_surface_witness(
     )
 
 
-def compute_canonical_surface_witness(
-    *, pixel_x: int, pixel_y: int, precision_digits: int
-) -> SurfaceWitness:
-    """Compute the named ordinary-region surface witness.
+def canonical_surface_witness(*, precision_digits: int) -> SurfaceWitness:
+    """Compute the single named ordinary-region surface witness."""
 
-    The external seam requires exact integer pixel coordinates, validates the
-    fixed viewport, and requires enough precision to exceed binary64.
-    """
-
-    if type(pixel_x) is not int or type(pixel_y) is not int:
-        raise UnsupportedWitnessError("sample coordinates must be integers")
-    if not 0 <= pixel_x < VIEWPORT_WIDTH or not 0 <= pixel_y < VIEWPORT_HEIGHT:
-        raise UnsupportedWitnessError(
-            "sample lies outside the canonical "
-            f"{VIEWPORT_WIDTH}x{VIEWPORT_HEIGHT} viewport"
-        )
-    if (pixel_x, pixel_y) != CANONICAL_PIXEL:
-        raise UnsupportedWitnessError(
-            "this first research slice certifies only canonical sample (640, 16)"
-        )
     _validate_precision_digits(precision_digits)
     with mp.workdps(precision_digits):
+        pixel_x, pixel_y = CANONICAL_PIXEL
         return _compute_surface_witness(
             pixel_x,
             pixel_y,
@@ -1368,9 +1348,7 @@ def compute_canonical_surface_witness(
         )
 
 
-def compute_source_edge_pair_witness(
-    *, precision_digits: int
-) -> SourceEdgePairWitness:
+def source_edge_pair_witness(*, precision_digits: int) -> SourceEdgePairWitness:
     """Compute the fixed adjacent outside/inside source-edge pair."""
 
     _validate_precision_digits(precision_digits)
@@ -1436,20 +1414,11 @@ def _certify_precision_doubling(
     return maximum_delta
 
 
-def build_precision_certificate() -> PrecisionCertificate:
+def _build_precision_certificate() -> PrecisionCertificate[SurfaceWitness]:
     """Recompute the canonical case at 120 and 180 digits and certify stability."""
 
-    pixel_x, pixel_y = CANONICAL_PIXEL
-    low = compute_canonical_surface_witness(
-        pixel_x=pixel_x,
-        pixel_y=pixel_y,
-        precision_digits=LOW_PRECISION_DIGITS,
-    )
-    high = compute_canonical_surface_witness(
-        pixel_x=pixel_x,
-        pixel_y=pixel_y,
-        precision_digits=HIGH_PRECISION_DIGITS,
-    )
+    low = canonical_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = canonical_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
     with mp.workdps(HIGH_PRECISION_DIGITS):
         maximum_delta = _certify_precision_doubling(
             (getattr(low, field), getattr(high, field))
@@ -1464,11 +1433,13 @@ def build_precision_certificate() -> PrecisionCertificate:
     )
 
 
-def build_source_edge_pair_precision_certificate() -> SourceEdgePairPrecisionCertificate:
+def _build_source_edge_pair_precision_certificate() -> PrecisionCertificate[
+    SourceEdgePairWitness
+]:
     """Recompute both edge cases at 120/180 digits and certify every observable."""
 
-    low = compute_source_edge_pair_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = compute_source_edge_pair_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    low = source_edge_pair_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = source_edge_pair_witness(precision_digits=HIGH_PRECISION_DIGITS)
     with mp.workdps(HIGH_PRECISION_DIGITS):
         value_pairs = [
             (getattr(low.outside, field), getattr(high.outside, field))
@@ -1493,7 +1464,7 @@ def build_source_edge_pair_precision_certificate() -> SourceEdgePairPrecisionCer
             for field in _SURFACE_PRECISION_FIELDS
         )
         maximum_delta = _certify_precision_doubling(value_pairs)
-    return SourceEdgePairPrecisionCertificate(
+    return PrecisionCertificate(
         low_precision_digits=LOW_PRECISION_DIGITS,
         high_precision_digits=HIGH_PRECISION_DIGITS,
         required_stable_digits=REQUIRED_STABLE_DIGITS,
@@ -1506,10 +1477,64 @@ def _scientific(value: mp.mpf, digits: int = 110) -> str:
     return mp.nstr(value, digits, strip_zeros=False)
 
 
-def main() -> None:
-    certificate = build_precision_certificate()
+def _print_path_identity(witness: SurfaceWitness | EscapeWitness) -> None:
+    print(f"terminal={witness.terminal}")
+    print(
+        "branch="
+        f"initial_polar_side:{witness.initial_polar_side},"
+        f"radial_turnings:{witness.radial_turnings},"
+        f"polar_turnings:{witness.polar_turnings},"
+        "equatorial_crossings_before_terminal:"
+        f"{witness.equatorial_crossings_before_terminal},"
+        f"azimuth_winding:{witness.azimuth_winding}"
+    )
+
+
+def _print_turning_and_residuals(witness: SurfaceWitness | EscapeWitness) -> None:
+    print(f"energy={_scientific(witness.energy)}")
+    print(f"impact_parameter={_scientific(witness.impact_parameter)}")
+    print(f"carter_parameter={_scientific(witness.carter_parameter)}")
+    print(
+        "radial_turning_derivative="
+        f"{_scientific(witness.radial_turning_derivative, 20)}"
+    )
+    print(
+        f"polar_turning_derivative={_scientific(witness.polar_turning_derivative, 20)}"
+    )
+    print(f"initial_null_residual={_scientific(witness.initial_null_residual, 12)}")
+    print(
+        f"mino_constraint_residual={_scientific(witness.mino_constraint_residual, 12)}"
+    )
+    print(
+        f"chart_primitive_residual={_scientific(witness.chart_primitive_residual, 12)}"
+    )
+
+
+def _print_surface_observables(
+    witness: SurfaceWitness,
+    *,
+    outer_edge_signed_margin: mp.mpf | None = None,
+) -> None:
+    print(f"source_radius_m={_scientific(witness.source_radius_m)}")
+    if outer_edge_signed_margin is not None:
+        print(f"outer_edge_signed_margin_m={_scientific(outer_edge_signed_margin)}")
+    print(f"source_azimuth_rad={_scientific(witness.source_azimuth_rad)}")
+    print(f"frequency_ratio={_scientific(witness.frequency_ratio)}")
+    print(f"travel_time_m={_scientific(witness.travel_time_m)}")
+    print(
+        "emitted_bolometric_intensity="
+        f"{_scientific(witness.emitted_bolometric_intensity)}"
+    )
+    print(
+        "observed_bolometric_intensity="
+        f"{_scientific(witness.observed_bolometric_intensity)}"
+    )
+
+
+def run() -> None:
+    certificate = _build_precision_certificate()
     witness = certificate.witness
-    edge_certificate = build_source_edge_pair_precision_certificate()
+    edge_certificate = _build_source_edge_pair_precision_certificate()
     edge = edge_certificate.witness
     with mp.workdps(edge_certificate.high_precision_digits):
         outside_edge_margin = (
@@ -1529,45 +1554,9 @@ def main() -> None:
         f"{_scientific(certificate.maximum_normalized_delta, 12)}"
     )
     print("case=kerr-exterior-observation-v1:640:16:0.5:0.5")
-    print(f"terminal={witness.terminal}")
-    print(
-        "branch="
-        f"initial_polar_side:{witness.initial_polar_side},"
-        f"radial_turnings:{witness.radial_turnings},"
-        f"polar_turnings:{witness.polar_turnings},"
-        "equatorial_crossings_before_terminal:"
-        f"{witness.equatorial_crossings_before_terminal},"
-        f"azimuth_winding:{witness.azimuth_winding}"
-    )
-    print(f"source_radius_m={_scientific(witness.source_radius_m)}")
-    print(f"source_azimuth_rad={_scientific(witness.source_azimuth_rad)}")
-    print(f"frequency_ratio={_scientific(witness.frequency_ratio)}")
-    print(f"travel_time_m={_scientific(witness.travel_time_m)}")
-    print(
-        "emitted_bolometric_intensity="
-        f"{_scientific(witness.emitted_bolometric_intensity)}"
-    )
-    print(
-        "observed_bolometric_intensity="
-        f"{_scientific(witness.observed_bolometric_intensity)}"
-    )
-    print(f"energy={_scientific(witness.energy)}")
-    print(f"impact_parameter={_scientific(witness.impact_parameter)}")
-    print(f"carter_parameter={_scientific(witness.carter_parameter)}")
-    print(
-        "radial_turning_derivative="
-        f"{_scientific(witness.radial_turning_derivative, 20)}"
-    )
-    print(
-        f"polar_turning_derivative={_scientific(witness.polar_turning_derivative, 20)}"
-    )
-    print(f"initial_null_residual={_scientific(witness.initial_null_residual, 12)}")
-    print(
-        f"mino_constraint_residual={_scientific(witness.mino_constraint_residual, 12)}"
-    )
-    print(
-        f"chart_primitive_residual={_scientific(witness.chart_primitive_residual, 12)}"
-    )
+    _print_path_identity(witness)
+    _print_surface_observables(witness)
+    _print_turning_and_residuals(witness)
     print(
         "source_edge_precision="
         f"{edge_certificate.low_precision_digits},"
@@ -1578,24 +1567,12 @@ def main() -> None:
     )
     outside = edge.outside
     print("case=kerr-exterior-observation-v1:640:13:0.5:0.5")
-    print(f"terminal={outside.terminal}")
-    print(
-        "branch="
-        f"initial_polar_side:{outside.initial_polar_side},"
-        f"radial_turnings:{outside.radial_turnings},"
-        f"polar_turnings:{outside.polar_turnings},"
-        "equatorial_crossings_before_terminal:"
-        f"{outside.equatorial_crossings_before_terminal},"
-        f"azimuth_winding:{outside.azimuth_winding}"
-    )
+    _print_path_identity(outside)
     print(
         "first_equatorial_crossing_radius_m="
         f"{_scientific(outside.first_equatorial_crossing_radius_m)}"
     )
-    print(
-        "outer_edge_signed_margin_m="
-        f"{_scientific(outside_edge_margin)}"
-    )
+    print(f"outer_edge_signed_margin_m={_scientific(outside_edge_margin)}")
     print(
         "escape_position_xyz_m="
         + ",".join(_scientific(value) for value in outside.escape_position_xyz_m)
@@ -1609,56 +1586,12 @@ def main() -> None:
         "escape_before_next_crossing_mino_margin="
         f"{_scientific(outside.escape_before_next_crossing_mino_margin)}"
     )
-    print(f"energy={_scientific(outside.energy)}")
-    print(f"impact_parameter={_scientific(outside.impact_parameter)}")
-    print(f"carter_parameter={_scientific(outside.carter_parameter)}")
-    print(
-        "radial_turning_derivative="
-        f"{_scientific(outside.radial_turning_derivative, 20)}"
-    )
-    print(
-        "polar_turning_derivative="
-        f"{_scientific(outside.polar_turning_derivative, 20)}"
-    )
-    print(
-        f"initial_null_residual={_scientific(outside.initial_null_residual, 12)}"
-    )
-    print(
-        f"mino_constraint_residual={_scientific(outside.mino_constraint_residual, 12)}"
-    )
-    print(
-        f"chart_primitive_residual={_scientific(outside.chart_primitive_residual, 12)}"
-    )
+    _print_turning_and_residuals(outside)
     inside = edge.inside
     print("case=kerr-exterior-observation-v1:640:14:0.5:0.5")
-    print(f"terminal={inside.terminal}")
-    print(
-        "branch="
-        f"initial_polar_side:{inside.initial_polar_side},"
-        f"radial_turnings:{inside.radial_turnings},"
-        f"polar_turnings:{inside.polar_turnings},"
-        "equatorial_crossings_before_terminal:"
-        f"{inside.equatorial_crossings_before_terminal},"
-        f"azimuth_winding:{inside.azimuth_winding}"
-    )
-    print(f"source_radius_m={_scientific(inside.source_radius_m)}")
-    print(
-        "outer_edge_signed_margin_m="
-        f"{_scientific(inside_edge_margin)}"
-    )
-    print(f"source_azimuth_rad={_scientific(inside.source_azimuth_rad)}")
-    print(f"frequency_ratio={_scientific(inside.frequency_ratio)}")
-    print(f"travel_time_m={_scientific(inside.travel_time_m)}")
-    print(
-        "emitted_bolometric_intensity="
-        f"{_scientific(inside.emitted_bolometric_intensity)}"
-    )
-    print(
-        "observed_bolometric_intensity="
-        f"{_scientific(inside.observed_bolometric_intensity)}"
+    _print_path_identity(inside)
+    _print_surface_observables(
+        inside,
+        outer_edge_signed_margin=inside_edge_margin,
     )
     print("RESULT=PASS")
-
-
-if __name__ == "__main__":
-    main()

@@ -569,9 +569,9 @@ native backend 维护不同 shader。项目是 native-only 不改变这个事实
 
 ## 8. 形式化验证
 
-使用仓库锁定的 `docs/research/scripts` uv 环境（SymPy `1.14.0`）建立 exact symbols，并用
+使用仓库锁定的 [Python 研究工具链](python-research-tooling.md)建立 exact symbols，并用
 radius constraint 消去一个平方变量。持久化的
-[`verify_kerr_schild_rhs_factorization.py`](scripts/verify_kerr_schild_rhs_factorization.py)
+[`kerr_schild_rhs.py`](scripts/src/gravlume_research/checks/kerr_schild_rhs.py)
 证明 \(\Sigma\)/gradient identities、ingoing/outgoing 两 branch 的 contracted null derivative、
 六维 Hamilton system、全域 Carter/Schwarzschild limit、Kerr–Newman radial quartic 和 Hermite
 order/monotonicity control polygon。结论不依赖临时绝对路径。
@@ -580,7 +580,7 @@ order/monotonicity control polygon。结论不依赖临时绝对路径。
 
 ```text
 uv run --isolated --project docs/research/scripts --locked \
-  python -B docs/research/scripts/verify_kerr_schild_rhs_factorization.py
+  gravlume-research kerr-schild-rhs
 ```
 
 持久化脚本预期输出：

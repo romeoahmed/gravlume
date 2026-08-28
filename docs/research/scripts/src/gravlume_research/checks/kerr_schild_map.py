@@ -5,15 +5,13 @@ both the legacy outgoing handedness defect and the corrected, physical-spin
 zero-step seam. Every failed identity raises and makes the process exit nonzero.
 """
 
-from __future__ import annotations
-
 import platform
-import random
 from dataclasses import dataclass
 from enum import Enum
 
 import sympy as sp
-from sympy_checks import (
+
+from .._sympy import (
     evaluate_real,
     maximum_relative_residual,
     rational_form,
@@ -23,10 +21,8 @@ from sympy_checks import (
     trigonometric_rational_form,
 )
 
-SEED = 0x4B534D53  # ASCII-ish "KSMS"
 PRECISION_DIGITS = 180
 BOUNDARY_TOLERANCE = sp.Rational(1, 10**80)
-RANDOM_FRACTION_BITS = 64
 
 
 class Chart(Enum):
@@ -44,6 +40,9 @@ class BoundaryCase:
     spin: sp.Expr
     radius: sp.Expr
     sin_theta_squared: sp.Expr
+    state_values: tuple[sp.Expr, ...]
+    energy: sp.Expr
+    carter: sp.Expr
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -474,45 +473,36 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
     )
 
 
-def random_rational(
-    rng: random.Random,
-    lower: sp.Rational,
-    upper: sp.Rational,
-) -> sp.Rational:
-    """Draw an exact dyadic rational without passing through binary64."""
+def build_boundary_cases() -> tuple[BoundaryCase, ...]:
+    """Return named exact points close to the three audited chart seams."""
 
-    unit = sp.Rational(rng.getrandbits(RANDOM_FRACTION_BITS), 2**RANDOM_FRACTION_BITS)
-    return lower + (upper - lower) * unit
-
-
-def build_boundary_cases(rng: random.Random) -> tuple[BoundaryCase, ...]:
     ten = sp.Integer(10)
-
-    axis_spin = random_rational(rng, sp.Rational(13, 20), sp.Rational(17, 20))
-    axis_radius = random_rational(rng, sp.Integer(3), sp.Integer(9))
-    axis_u = (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**70
-
-    horizon_spin = random_rational(
-        rng,
-        sp.Rational(13, 20),
-        sp.Rational(17, 20),
+    state_values = (
+        sp.Rational(1, 3),
+        sp.Rational(-2, 5),
+        sp.Rational(7, 6),
+        sp.Rational(-3, 4),
+        sp.Rational(5, 7),
+        sp.Rational(-4, 9),
+        sp.Rational(8, 11),
+        sp.Rational(-6, 13),
     )
+    energy = sp.Rational(6, 5)
+    carter = sp.Rational(7, 6)
+
+    axis_spin = sp.Rational(3, 4)
+    axis_radius = sp.Integer(5)
+    axis_u = sp.Rational(3, 2) / ten**70
+
+    horizon_spin = sp.Rational(3, 4)
     horizon_plus = 1 + sp.sqrt(1 - horizon_spin**2)
-    horizon_radius = (
-        horizon_plus
-        + (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**60
-    )
-    horizon_u = random_rational(rng, sp.Rational(1, 5), sp.Rational(4, 5))
+    horizon_radius = horizon_plus + sp.Rational(3, 2) / ten**60
+    horizon_u = sp.Rational(1, 2)
 
-    extremal_spin = (
-        1 - (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**60
-    )
+    extremal_spin = 1 - sp.Rational(3, 2) / ten**60
     extremal_plus = 1 + sp.sqrt(1 - extremal_spin**2)
-    extremal_radius = (
-        extremal_plus
-        + (1 + random_rational(rng, sp.Integer(0), sp.Integer(1))) / ten**50
-    )
-    extremal_u = random_rational(rng, sp.Rational(1, 5), sp.Rational(4, 5))
+    extremal_radius = extremal_plus + sp.Rational(3, 2) / ten**50
+    extremal_u = sp.Rational(3, 4)
 
     return (
         BoundaryCase(
@@ -520,18 +510,27 @@ def build_boundary_cases(rng: random.Random) -> tuple[BoundaryCase, ...]:
             spin=axis_spin,
             radius=axis_radius,
             sin_theta_squared=axis_u,
+            state_values=state_values,
+            energy=energy,
+            carter=carter,
         ),
         BoundaryCase(
             name="near_horizon",
             spin=horizon_spin,
             radius=horizon_radius,
             sin_theta_squared=horizon_u,
+            state_values=state_values,
+            energy=energy,
+            carter=carter,
         ),
         BoundaryCase(
             name="near_extremality",
             spin=extremal_spin,
             radius=extremal_radius,
             sin_theta_squared=extremal_u,
+            state_values=state_values,
+            energy=energy,
+            carter=carter,
         ),
     )
 
@@ -576,7 +575,6 @@ def evaluate_boundary_case(
     geometry: Geometry,
     mino: MinoSystem,
     probe: BoundaryProbe,
-    rng: random.Random,
     case: BoundaryCase,
 ) -> BoundaryResult:
     name = case.name
@@ -614,13 +612,9 @@ def evaluate_boundary_case(
         PRECISION_DIGITS,
     )
 
-    state_substitutions = dict(geometry_substitutions)
-    for symbol in probe.state_symbols:
-        state_substitutions[symbol] = random_rational(
-            rng,
-            sp.Integer(-2),
-            sp.Integer(2),
-        )
+    state_substitutions = geometry_substitutions | dict(
+        zip(probe.state_symbols, case.state_values, strict=True)
+    )
     duality_residual = maximum_relative_residual(
         probe.duality_left,
         probe.duality_right,
@@ -630,9 +624,9 @@ def evaluate_boundary_case(
 
     potential_substitutions = {
         **geometry_substitutions,
-        mino.energy: random_rational(rng, sp.Rational(4, 5), sp.Rational(9, 5)),
+        mino.energy: case.energy,
         mino.impact: sp.Integer(0),
-        mino.carter: random_rational(rng, sp.Rational(1, 2), sp.Integer(2)),
+        mino.carter: case.carter,
         mino.mu: sp.sqrt(1 - u_value),
     }
     radial_potential = mino.radial_potential.xreplace(potential_substitutions)
@@ -680,11 +674,10 @@ def verify_boundary_substitutions(
 ) -> dict[str, BoundaryResult]:
     """Stress outgoing expressions at defined points near three chart seams."""
 
-    rng = random.Random(SEED)
     probe = build_boundary_probe(geometry, mino)
     return {
-        case.name: evaluate_boundary_case(geometry, mino, probe, rng, case)
-        for case in build_boundary_cases(rng)
+        case.name: evaluate_boundary_case(geometry, mino, probe, case)
+        for case in build_boundary_cases()
     }
 
 
@@ -694,7 +687,7 @@ def short_scientific(value: sp.Expr) -> str:
     return str(value.evalf(8))
 
 
-def main() -> None:
+def run() -> None:
     geometry = build_geometry()
     verify_metric_pullback(geometry)
     mismatch = verify_legacy_same_spin_outgoing_mismatch(geometry)
@@ -712,7 +705,7 @@ def main() -> None:
     print("symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing")
     print(f"symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch={mismatch}")
     print("symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591")
-    print(f"boundary.seed=0x{SEED:08X} precision_digits={PRECISION_DIGITS}")
+    print(f"boundary.precision_digits={PRECISION_DIGITS}")
     for name, result in boundary_results.items():
         print(
             f"boundary.{name}=PASS "
@@ -724,7 +717,3 @@ def main() -> None:
             f"mino={short_scientific(result.mino_residual)}"
         )
     print("RESULT=PASS")
-
-
-if __name__ == "__main__":
-    main()

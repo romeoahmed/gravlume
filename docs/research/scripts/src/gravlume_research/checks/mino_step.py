@@ -1,11 +1,10 @@
 """Verify the order and cost model used to assess restricted Mino stepping."""
 
-from __future__ import annotations
-
 from math import factorial
 
 import sympy as sp
-from sympy_checks import require_equal, require_zero
+
+from .._sympy import require_equal, require_zero
 
 BASELINE_STEP_FACTOR = sp.Rational(3, 4)
 STEP_FACTORS = (
@@ -131,7 +130,7 @@ def print_factor_tradeoffs() -> None:
         print(f"{factor},{work},{truncation}")
 
 
-def main() -> None:
+def run() -> None:
     local_defect = verify_rk4_local_order()
     hermite_defect = verify_cubic_hermite_order()
     print("RK4 polynomial-core defect starts at step^5: PASS")
@@ -144,7 +143,3 @@ def main() -> None:
     )
     print_factor_tradeoffs()
     print("RESULT=PASS")
-
-
-if __name__ == "__main__":
-    main()
