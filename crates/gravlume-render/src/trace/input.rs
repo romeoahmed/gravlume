@@ -38,17 +38,15 @@ const _: () = {
 };
 
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-#[repr(C, align(16))]
+#[repr(C, align(8))]
 pub(super) struct TraceDispatch {
     pub(super) tile_origin: [u32; 2],
-    pub(super) workgroup_count: [u32; 2],
 }
 
 const _: () = {
-    assert!(std::mem::size_of::<TraceDispatch>() == 16);
-    assert!(std::mem::align_of::<TraceDispatch>() == 16);
+    assert!(std::mem::size_of::<TraceDispatch>() == 8);
+    assert!(std::mem::align_of::<TraceDispatch>() == 8);
     assert!(std::mem::offset_of!(TraceDispatch, tile_origin) == 0);
-    assert!(std::mem::offset_of!(TraceDispatch, workgroup_count) == 8);
 };
 
 impl TraceUniforms {

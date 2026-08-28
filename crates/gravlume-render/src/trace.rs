@@ -401,7 +401,6 @@ impl TracePipeline {
             label: Some("GPU trace dispatch"),
             contents: bytemuck::bytes_of(&TraceDispatch {
                 tile_origin: [0; 2],
-                workgroup_count: [0; 2],
             }),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -627,10 +626,8 @@ impl TracePipeline {
 
     fn set_tile_dispatch(&self, queue: &wgpu::Queue, tiles: TileRegion) {
         let [origin_x, origin_y] = tiles.origin();
-        let [workgroups_x, workgroups_y] = tiles.workgroups();
         let dispatch = TraceDispatch {
             tile_origin: [origin_x, origin_y],
-            workgroup_count: [workgroups_x, workgroups_y],
         };
         // Small queue writes are staged immediately and execute before the following submission.
         // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Queue.html#method.write_buffer

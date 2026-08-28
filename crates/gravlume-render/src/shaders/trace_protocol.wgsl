@@ -24,7 +24,6 @@ struct TraceUniforms {
 
 struct TraceDispatch {
     tile_origin: vec2<u32>,
-    workgroup_count: vec2<u32>,
 }
 
 struct Geometry {
