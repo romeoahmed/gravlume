@@ -13,7 +13,7 @@
 | SymPy | exact symbolic algebra、polynomial identity 与 expression equivalence |
 | mpmath | arbitrary-precision quadrature、root finding、precision doubling 与数值 oracle |
 | NumPy | IEEE 754 binary32 cast、`nextafter`、`uint32` view 与浮点错误处理 scope |
-| pytest | test collection、`parametrize`、`raises` 与显式 `approx` tolerance |
+| pytest | test collection 与显式 `approx` tolerance |
 | Hypothesis | `given` strategy、显式 boundary `example` 与可复现的生成式性质测试 |
 | Ruff | 面向 Python 3.14 的 lint、import ordering 与 format gate |
 

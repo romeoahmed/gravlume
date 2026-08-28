@@ -198,7 +198,9 @@ observed_bolometric_intensity=0.0227133377552830216082509940
 
 [`surface_observable_tests.rs`](../../crates/gravlume-reference/tests/surface_observable_tests.rs) 将上述 expectation 舍入到 binary64，并要求 `reference-regular-v1` 与 `reference-strict-v1` 同时满足 exact branch、Escape position/direction/time、surface source/frequency/time/intensity gates。Source Anchor 只应用[验证合同定义的二维 wrapped surface-distance gate](../validation.md#52-reference-agreement)，不把 radial/azimuth component tolerance 分开后同时放行。它不改变 v2 fixture 的 schema、profile、producer 字段或旧 expected。
 
-Research tests 保护公开的认证 seam：canonical deterministic oracle、固定 source-edge pair、非法 sample/precision、discrete identity、event margin、unit/outward direction 与 residual threshold。连续量使用显式 semantic gate；测试不冻结私有 record、辅助函数或生成格式。
+统一 CLI 直接复算固定 canonical/edge pair，并在构造证书时验证 precision、discrete identity、event
+margin、unit/outward direction 与 residual threshold。该模块不发布通用 scientific API；连续量使用显式
+semantic gate，验证不冻结私有 record、辅助函数或打印格式。
 
 Renderer 已有 canonical v2 的 fresh binary32 fields 与最终 `RGBA16F` gate；ordered corpus 也包含相邻 pair，并逐项比较 fresh binary32 terminal/branch/continuous fields。因此当前证据链是：
 
@@ -245,13 +247,6 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research bl-mino-surface
 ```
 
-Research module 行为测试：
-
-```text
-uv run --isolated --project docs/research/scripts --locked \
-  pytest docs/research/scripts/tests/test_bl_mino.py
-```
-
 依赖解析、升级、完整测试与 lint 命令见[统一 Python 研究工具链](python-research-tooling.md)。
 
 对应 Rust consumer test：
@@ -274,4 +269,3 @@ cargo test -p gravlume-render --lib --locked \
 - [Mino, *Perturbative Approach to an Orbital Evolution around a Supermassive Black Hole* (2003)](https://doi.org/10.1103/PhysRevD.67.084027)：Mino parameter；
 - [Gralla & Lupsasca, *Null geodesics of the Kerr exterior* (2020)](https://doi.org/10.1103/PhysRevD.101.044032)：real root topology、turning segments 与 Kerr null-geodesic integrals；
 - [mpmath precision management](https://mpmath.org/doc/1.3.0/general.html#precision-management)、[quadrature](https://mpmath.org/doc/1.3.0/calculus/integration.html)、[root finding](https://mpmath.org/doc/1.3.0/calculus/optimization.html)、[polynomial roots](https://mpmath.org/doc/1.3.0/calculus/polynomials.html)与[finite/comparison utilities](https://mpmath.org/doc/1.3.0/general.html)：arbitrary-precision context、quadrature、root 与认证边界；
-- [Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.given)：research boundary 的生成式性质测试与反例缩减。

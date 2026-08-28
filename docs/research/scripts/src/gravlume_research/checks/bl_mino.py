@@ -22,10 +22,10 @@ Primary mathematical sources:
   https://mpmath.org/doc/1.3.0/general.html
 * Python NaN comparison semantics:
   https://docs.python.org/3/reference/expressions.html#value-comparisons
-* Dataclass post-init and replacement behavior:
-  https://docs.python.org/3.10/library/dataclasses.html#post-init-processing
+* Dataclass post-init behavior:
+  https://docs.python.org/3.14/library/dataclasses.html#post-init-processing
 * Runtime relationship between bool and int:
-  https://docs.python.org/3.10/library/stdtypes.html#boolean-type-bool
+  https://docs.python.org/3.14/library/stdtypes.html#boolean-type-bool
 """
 
 import platform
@@ -57,12 +57,12 @@ _SOURCE_EDGE_ESCAPE_TERMINAL = "escape"
 _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS = 1
 
 
-class UnsupportedWitnessError(ValueError):
+class _UnsupportedWitnessError(ValueError):
     """The requested case lies outside this research slice's certified domain."""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SurfaceWitness:
+class _SurfaceWitness:
     """Certified identity, observables, and margins for one named surface ray."""
 
     precision_digits: int
@@ -92,7 +92,7 @@ class SurfaceWitness:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class EscapeWitness:
+class _EscapeWitness:
     """Certified identity, observables, and event margins for one escape ray."""
 
     precision_digits: int
@@ -122,27 +122,27 @@ class EscapeWitness:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class SourceEdgePairWitness:
+class _SourceEdgePairWitness:
     """One fixed outside/inside pair that brackets the canonical outer source edge."""
 
-    outside: EscapeWitness
-    inside: SurfaceWitness
+    outside: _EscapeWitness
+    inside: _SurfaceWitness
 
     def __post_init__(self) -> None:
         if self.outside.precision_digits != self.inside.precision_digits:
-            raise UnsupportedWitnessError("source-edge pair mixes working precisions")
+            raise _UnsupportedWitnessError("source-edge pair mixes working precisions")
         if not (
             self.outside.first_equatorial_crossing_radius_m
             > SURFACE_OUTER_RADIUS_M
             > self.inside.source_radius_m
         ):
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "source-edge pair does not bracket the outer radial edge"
             )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class PrecisionCertificate[Witness]:
+class _PrecisionCertificate[Witness]:
     """Precision-doubling evidence for one named witness."""
 
     low_precision_digits: int
@@ -217,7 +217,7 @@ class _PolarMotion:
         """Integrate from the equator without subtracting two endpoint integrals."""
 
         if not 0 <= upper_mu <= self.turning:
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "polar quadrature crossed its simple turning root"
             )
         upper_angle = mp.asin(upper_mu / self.turning)
@@ -277,7 +277,7 @@ class _RadialMotion:
         """Integrate through the regularized simple radial turning endpoint."""
 
         if upper_radius < self.turning:
-            raise UnsupportedWitnessError("radial quadrature crossed its turning root")
+            raise _UnsupportedWitnessError("radial quadrature crossed its turning root")
         upper_coordinate = mp.sqrt(upper_radius - self.turning)
 
         def regularized(coordinate: mp.mpf) -> mp.mpf:
@@ -304,14 +304,14 @@ class _TransferObservables:
 
 def _validate_precision_digits(precision_digits: object) -> None:
     if type(precision_digits) is not int:
-        raise UnsupportedWitnessError("witness precision must be an integer")
+        raise _UnsupportedWitnessError("witness precision must be an integer")
     if precision_digits < MINIMUM_WITNESS_DIGITS:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             f"witness precision must be at least {MINIMUM_WITNESS_DIGITS} digits"
         )
 
 
-def _validate_surface_witness(witness: SurfaceWitness) -> None:
+def _validate_surface_witness(witness: _SurfaceWitness) -> None:
     _validate_precision_digits(witness.precision_digits)
     discrete_identity = (
         (witness.terminal, _CANONICAL_TERMINAL),
@@ -328,7 +328,7 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         type(actual) is not type(expected) or actual != expected
         for actual, expected in discrete_identity
     ):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "surface witness does not match the named discrete path identity"
         )
     continuous_fields = (
@@ -350,11 +350,13 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
     if not all(
         isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
     ):
-        raise UnsupportedWitnessError("witness contains a non-real or non-finite value")
+        raise _UnsupportedWitnessError(
+            "witness contains a non-real or non-finite value"
+        )
     if not (
         SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= SURFACE_OUTER_RADIUS_M
     ):
-        raise UnsupportedWitnessError("crossing lies outside the canonical surface")
+        raise _UnsupportedWitnessError("crossing lies outside the canonical surface")
     positive_fields = (
         witness.frequency_ratio,
         witness.travel_time_m,
@@ -363,9 +365,9 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         witness.energy,
     )
     if any(value <= 0 for value in positive_fields):
-        raise UnsupportedWitnessError("witness contains a non-positive physical value")
+        raise _UnsupportedWitnessError("witness contains a non-positive physical value")
     if witness.radial_turning_derivative <= 0 or witness.polar_turning_derivative <= 0:
-        raise UnsupportedWitnessError("separated turning root is not simple")
+        raise _UnsupportedWitnessError("separated turning root is not simple")
 
     residuals = (
         witness.initial_null_residual,
@@ -379,13 +381,13 @@ def _validate_surface_witness(witness: SurfaceWitness) -> None:
         )
         if any(residual < 0 or residual >= residual_limit for residual in residuals):
             certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "equation residual does not retain the required "
                 f"{certified_digits} decimal digits"
             )
 
 
-def _validate_escape_witness(witness: EscapeWitness) -> None:
+def _validate_escape_witness(witness: _EscapeWitness) -> None:
     _validate_precision_digits(witness.precision_digits)
     discrete_identity = (
         (witness.terminal, _SOURCE_EDGE_ESCAPE_TERMINAL),
@@ -402,14 +404,16 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
         type(actual) is not type(expected) or actual != expected
         for actual, expected in discrete_identity
     ):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "escape witness does not match the named discrete path identity"
         )
     if (
         len(witness.escape_position_xyz_m) != 3
         or len(witness.escape_direction_xyz) != 3
     ):
-        raise UnsupportedWitnessError("escape vectors must contain exactly three lanes")
+        raise _UnsupportedWitnessError(
+            "escape vectors must contain exactly three lanes"
+        )
     continuous_fields = (
         witness.first_equatorial_crossing_radius_m,
         witness.escape_radius_m,
@@ -429,17 +433,17 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
     if not all(
         isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
     ):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "escape witness contains a non-real or non-finite value"
         )
     if witness.escape_radius_m != ESCAPE_RADIUS_M:
-        raise UnsupportedWitnessError("escape witness uses the wrong terminal radius")
+        raise _UnsupportedWitnessError("escape witness uses the wrong terminal radius")
     if not (
         SURFACE_OUTER_RADIUS_M
         < witness.first_equatorial_crossing_radius_m
         < witness.escape_radius_m
     ):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "escape witness first crossing is not ordered between the outer "
             "source edge and escape terminal"
         )
@@ -451,7 +455,7 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
         witness.polar_turning_derivative,
     )
     if any(value <= 0 for value in positive_fields):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "escape witness contains a non-positive physical or event margin"
         )
 
@@ -464,7 +468,7 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
             component**2 for component in witness.escape_direction_xyz
         )
         if abs(direction_norm_squared - 1) >= residual_limit:
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "escape traversal direction is not normalized"
             )
         if (
@@ -478,7 +482,7 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
             )
             <= 0
         ):
-            raise UnsupportedWitnessError("escape traversal direction is not outward")
+            raise _UnsupportedWitnessError("escape traversal direction is not outward")
 
         x, y, z = witness.escape_position_xyz_m
         spin = mp.mpf(4) / 5
@@ -492,7 +496,7 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
             / witness.escape_radius_m
         )
         if radius_residual >= residual_limit:
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "escape position does not lie on the named oblate radius"
             )
 
@@ -503,7 +507,7 @@ def _validate_escape_witness(witness: EscapeWitness) -> None:
         )
         if any(residual < 0 or residual >= residual_limit for residual in residuals):
             certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
-            raise UnsupportedWitnessError(
+            raise _UnsupportedWitnessError(
                 "escape equation residual does not retain the required "
                 f"{certified_digits} decimal digits"
             )
@@ -555,7 +559,7 @@ def _project_and_normalize(
         )
     norm_squared = _metric_dot(metric, projected, projected)
     if norm_squared <= 0:
-        raise UnsupportedWitnessError("canonical observer frame seed is degenerate")
+        raise _UnsupportedWitnessError("canonical observer frame seed is degenerate")
     return _vector_scale(projected, 1 / mp.sqrt(norm_squared))
 
 
@@ -612,7 +616,7 @@ def _try_image_right_axis(
 ) -> tuple[mp.mpf, ...] | None:
     try:
         return _project_and_normalize(metric, four_velocity, axis, (sight, up))
-    except UnsupportedWitnessError:
+    except _UnsupportedWitnessError:
         return None
 
 
@@ -657,7 +661,7 @@ def _canonical_initial_ray(
         if candidate is not None
     )
     if not right_candidates:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "canonical observer frame has no image-right axis"
         )
     right = max(
@@ -818,7 +822,7 @@ def _build_polar_motion(
     negative_turning_squared = (quadratic_coefficient - discriminant) / (2 * spin**2)
     turning = mp.sqrt(turning_squared)
     if not initial_mu < turning < 1 or negative_turning_squared >= 0:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "polar potential does not have the required simple turning"
         )
     return _PolarMotion(
@@ -866,12 +870,12 @@ def _build_radial_motion(
         root for root in roots if horizon_radius < root < geometry.radius
     )
     if not turning_candidates:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "radial root topology has no exterior turning point"
         )
     turning = max(turning_candidates)
     if turning >= SURFACE_OUTER_RADIUS_M:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "radial turning precedes the canonical source edge"
         )
     turning = mp.findroot(
@@ -884,7 +888,7 @@ def _build_radial_motion(
         4 * turning * factor(turning) - 2 * (turning - mass) * separation
     )
     if turning_derivative <= 0:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "radial turning root is not simple and outward-facing"
         )
     return _RadialMotion(
@@ -921,7 +925,7 @@ def _solve_equatorial_crossing_radius(
     lower_value = crossing_equation(lower_radius)
     upper_value = crossing_equation(upper_radius)
     if not (lower_value < 0 and upper_value > 0):
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "first equatorial crossing is not bracketed by the named interval: "
             f"lower={mp.nstr(lower_value, 12)}, "
             f"upper={mp.nstr(upper_value, 12)}, "
@@ -1065,7 +1069,7 @@ def _solve_escape_polar_endpoint(
     ) + radial.integrate_from_turn(_unit_integrand, escape_radius)
     after_first_crossing = escape_duration - first_crossing_duration
     if not 0 < after_first_crossing < equator_to_turn:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "escape is not ordered between the first crossing and southern turning"
         )
     target_to_turn = equator_to_turn - after_first_crossing
@@ -1143,7 +1147,7 @@ def _escape_position_and_direction(
     )
     tangent_norm = mp.sqrt(mp.fsum(component**2 for component in physical_tangent))
     if tangent_norm <= 0 or not mp.isfinite(tangent_norm):
-        raise UnsupportedWitnessError("escape traversal direction is unavailable")
+        raise _UnsupportedWitnessError("escape traversal direction is unavailable")
     traversal_direction = tuple(
         -component / tangent_norm for component in physical_tangent
     )
@@ -1186,12 +1190,12 @@ def _compute_source_edge_escape_witness(
     pixel_x: int,
     pixel_y: int,
     precision_digits: int,
-) -> EscapeWitness:
+) -> _EscapeWitness:
     geometry = _canonical_geometry()
     initial_ray = _canonical_initial_ray(geometry, pixel_x, pixel_y)
     separated = _separated_initial_state(geometry, initial_ray)
     if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "source-edge escape requires a future-outgoing ray after one "
             "northern polar turning"
         )
@@ -1240,7 +1244,7 @@ def _compute_source_edge_escape_witness(
         terminal_mu_magnitude,
         path.terminal_azimuth,
     )
-    return EscapeWitness(
+    return _EscapeWitness(
         precision_digits=precision_digits,
         terminal=_SOURCE_EDGE_ESCAPE_TERMINAL,
         initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
@@ -1267,12 +1271,12 @@ def _compute_source_edge_escape_witness(
 
 def _compute_surface_witness(
     pixel_x: int, pixel_y: int, precision_digits: int
-) -> SurfaceWitness:
+) -> _SurfaceWitness:
     geometry = _canonical_geometry()
     initial_ray = _canonical_initial_ray(geometry, pixel_x, pixel_y)
     separated = _separated_initial_state(geometry, initial_ray)
     if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
-        raise UnsupportedWitnessError(
+        raise _UnsupportedWitnessError(
             "named surface witness requires a future-outgoing ray after one northern "
             "polar turning"
         )
@@ -1308,7 +1312,7 @@ def _compute_surface_witness(
         radial,
         source_radius,
     )
-    return SurfaceWitness(
+    return _SurfaceWitness(
         precision_digits=precision_digits,
         terminal=_CANONICAL_TERMINAL,
         initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
@@ -1335,7 +1339,7 @@ def _compute_surface_witness(
     )
 
 
-def canonical_surface_witness(*, precision_digits: int) -> SurfaceWitness:
+def _canonical_surface_witness(*, precision_digits: int) -> _SurfaceWitness:
     """Compute the single named ordinary-region surface witness."""
 
     _validate_precision_digits(precision_digits)
@@ -1348,14 +1352,14 @@ def canonical_surface_witness(*, precision_digits: int) -> SurfaceWitness:
         )
 
 
-def source_edge_pair_witness(*, precision_digits: int) -> SourceEdgePairWitness:
+def _source_edge_pair_witness(*, precision_digits: int) -> _SourceEdgePairWitness:
     """Compute the fixed adjacent outside/inside source-edge pair."""
 
     _validate_precision_digits(precision_digits)
     with mp.workdps(precision_digits):
         outside_x, outside_y = SOURCE_EDGE_OUTSIDE_PIXEL
         inside_x, inside_y = SOURCE_EDGE_INSIDE_PIXEL
-        return SourceEdgePairWitness(
+        return _SourceEdgePairWitness(
             outside=_compute_source_edge_escape_witness(
                 outside_x,
                 outside_y,
@@ -1414,17 +1418,17 @@ def _certify_precision_doubling(
     return maximum_delta
 
 
-def _build_precision_certificate() -> PrecisionCertificate[SurfaceWitness]:
+def _build_precision_certificate() -> _PrecisionCertificate[_SurfaceWitness]:
     """Recompute the canonical case at 120 and 180 digits and certify stability."""
 
-    low = canonical_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = canonical_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    low = _canonical_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = _canonical_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
     with mp.workdps(HIGH_PRECISION_DIGITS):
         maximum_delta = _certify_precision_doubling(
             (getattr(low, field), getattr(high, field))
             for field in _SURFACE_PRECISION_FIELDS
         )
-    return PrecisionCertificate(
+    return _PrecisionCertificate(
         low_precision_digits=LOW_PRECISION_DIGITS,
         high_precision_digits=HIGH_PRECISION_DIGITS,
         required_stable_digits=REQUIRED_STABLE_DIGITS,
@@ -1433,13 +1437,13 @@ def _build_precision_certificate() -> PrecisionCertificate[SurfaceWitness]:
     )
 
 
-def _build_source_edge_pair_precision_certificate() -> PrecisionCertificate[
-    SourceEdgePairWitness
+def _build_source_edge_pair_precision_certificate() -> _PrecisionCertificate[
+    _SourceEdgePairWitness
 ]:
     """Recompute both edge cases at 120/180 digits and certify every observable."""
 
-    low = source_edge_pair_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = source_edge_pair_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    low = _source_edge_pair_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = _source_edge_pair_witness(precision_digits=HIGH_PRECISION_DIGITS)
     with mp.workdps(HIGH_PRECISION_DIGITS):
         value_pairs = [
             (getattr(low.outside, field), getattr(high.outside, field))
@@ -1464,7 +1468,7 @@ def _build_source_edge_pair_precision_certificate() -> PrecisionCertificate[
             for field in _SURFACE_PRECISION_FIELDS
         )
         maximum_delta = _certify_precision_doubling(value_pairs)
-    return PrecisionCertificate(
+    return _PrecisionCertificate(
         low_precision_digits=LOW_PRECISION_DIGITS,
         high_precision_digits=HIGH_PRECISION_DIGITS,
         required_stable_digits=REQUIRED_STABLE_DIGITS,
@@ -1477,7 +1481,7 @@ def _scientific(value: mp.mpf, digits: int = 110) -> str:
     return mp.nstr(value, digits, strip_zeros=False)
 
 
-def _print_path_identity(witness: SurfaceWitness | EscapeWitness) -> None:
+def _print_path_identity(witness: _SurfaceWitness | _EscapeWitness) -> None:
     print(f"terminal={witness.terminal}")
     print(
         "branch="
@@ -1490,7 +1494,7 @@ def _print_path_identity(witness: SurfaceWitness | EscapeWitness) -> None:
     )
 
 
-def _print_turning_and_residuals(witness: SurfaceWitness | EscapeWitness) -> None:
+def _print_turning_and_residuals(witness: _SurfaceWitness | _EscapeWitness) -> None:
     print(f"energy={_scientific(witness.energy)}")
     print(f"impact_parameter={_scientific(witness.impact_parameter)}")
     print(f"carter_parameter={_scientific(witness.carter_parameter)}")
@@ -1511,7 +1515,7 @@ def _print_turning_and_residuals(witness: SurfaceWitness | EscapeWitness) -> Non
 
 
 def _print_surface_observables(
-    witness: SurfaceWitness,
+    witness: _SurfaceWitness,
     *,
     outer_edge_signed_margin: mp.mpf | None = None,
 ) -> None:
