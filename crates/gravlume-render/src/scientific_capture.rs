@@ -9,8 +9,9 @@ pub const INVARIANT_RELATIVE_DRIFT_LIMIT: f32 = 0.05;
 const SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET: f64 = 3.0e-6;
 const SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET: f64 = 2.0e-3;
 const SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR: f64 = 1.0e-6;
-const BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET: f64 = 2.0e-3;
-const SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET: f64 = 4.0e-3;
+pub const GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET: f64 = 2.0e-3;
+pub const GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET: f64 = 4.0e-3;
+pub const RGBA16_FLOAT_MINIMUM_NORMAL: f64 = 1.0 / 16_384.0;
 const HALF_POSITIVE_ZERO_BITS: u16 = 0x0000;
 const HALF_NEGATIVE_ZERO_BITS: u16 = 0x8000;
 const HALF_ANALYTIC_ESCAPE_TAG_BITS: u16 = 0x3c00;
@@ -62,8 +63,10 @@ impl ScientificTexel {
 
     /// Returns IEEE-754 binary16 bit patterns in `R`, `G`, `B`, `A` memory order.
     ///
-    /// WebGPU texel copies preserve the numeric value of finite, normal channels but may
-    /// canonicalize zero and other exceptional representations.
+    /// WebGPU texel copies preserve the numeric value of finite, normal channels, may change the
+    /// sign of zero, and may replace a subnormal channel with either signed zero.
+    ///
+    /// Source: <https://www.w3.org/TR/webgpu/#texel-copies>
     #[must_use]
     pub const fn rgba16_float_bits(self) -> [u16; 4] {
         self.rgba16_float_bits
@@ -132,9 +135,11 @@ impl ScientificCaptureMetadata {
             channels,
             numerical: ScientificNumericalMetadata {
                 invariant_relative_drift_limit: INVARIANT_RELATIVE_DRIFT_LIMIT,
-                bolometric_surface_relative_error_budget: BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET,
-                spectral_surface_relative_error_budget: optional_budget(
-                    SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
+                rgba16_float_minimum_normal: RGBA16_FLOAT_MINIMUM_NORMAL,
+                bolometric_surface_normal_relative_error_budget:
+                    GPU_BOLOMETRIC_RADIANCE_RELATIVE_BUDGET,
+                spectral_surface_normal_relative_error_budget: optional_budget(
+                    GPU_SPECTRAL_RADIANCE_RELATIVE_BUDGET,
                 ),
                 spectral_lut_absolute_fraction_error_budget: optional_budget(
                     SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET,
@@ -181,8 +186,9 @@ pub enum ScientificChannelModel {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ScientificNumericalMetadata {
     invariant_relative_drift_limit: f32,
-    bolometric_surface_relative_error_budget: f64,
-    spectral_surface_relative_error_budget: Option<f64>,
+    rgba16_float_minimum_normal: f64,
+    bolometric_surface_normal_relative_error_budget: f64,
+    spectral_surface_normal_relative_error_budget: Option<f64>,
     spectral_lut_absolute_fraction_error_budget: Option<f64>,
     spectral_lut_visible_relative_error_budget: Option<f64>,
     spectral_lut_relative_error_fraction_floor: Option<f64>,
@@ -194,14 +200,27 @@ impl ScientificNumericalMetadata {
         self.invariant_relative_drift_limit
     }
 
+    /// Smallest positive normal value representable by the capture's `Rgba16Float` channels.
+    ///
+    /// Relative-error budgets apply at or above this value. WebGPU permits a subnormal texel copy
+    /// to preserve the value or replace it with either signed zero.
+    ///
+    /// Source: <https://www.w3.org/TR/webgpu/#texel-copies>
     #[must_use]
-    pub const fn bolometric_surface_relative_error_budget(self) -> f64 {
-        self.bolometric_surface_relative_error_budget
+    pub const fn rgba16_float_minimum_normal(self) -> f64 {
+        self.rgba16_float_minimum_normal
     }
 
+    /// Relative-error budget for normal bolometric `Rgba16Float` radiance channels.
     #[must_use]
-    pub const fn spectral_surface_relative_error_budget(self) -> Option<f64> {
-        self.spectral_surface_relative_error_budget
+    pub const fn bolometric_surface_normal_relative_error_budget(self) -> f64 {
+        self.bolometric_surface_normal_relative_error_budget
+    }
+
+    /// Relative-error budget for normal spectral `Rgba16Float` radiance channels.
+    #[must_use]
+    pub const fn spectral_surface_normal_relative_error_budget(self) -> Option<f64> {
+        self.spectral_surface_normal_relative_error_budget
     }
 
     #[must_use]
@@ -272,7 +291,7 @@ pub fn capture_texture(
     );
     let (sender, receiver) = mpsc::sync_channel(1);
     // Bind the mapping request to the producing encoder so wgpu orders it after the copy.
-    // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
+    // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.CommandEncoder.html#method.map_buffer_on_submit
     encoder.map_buffer_on_submit(&readback, wgpu::MapMode::Read, .., move |result| {
         let _send_result = sender.send(result);
     });
@@ -366,21 +385,20 @@ pub enum ScientificCaptureError {
 
 #[cfg(test)]
 mod tests {
+    use std::mem::size_of;
+
     use gravlume_domain::{
         EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab, SurfaceTransport,
     };
 
     use super::{
-        BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET, INVARIANT_RELATIVE_DRIFT_LIMIT,
-        SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET, SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR,
-        SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET, SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET,
         ScientificCaptureMetadata, ScientificChannelModel, ScientificNumericalMetadata,
         ScientificPixelKind, capture_texture, classify_alpha_bits,
     };
     use crate::extent::RenderExtent;
 
     #[test]
-    fn capture_metadata_keeps_validated_surface_semantics_and_exact_budgets() {
+    fn capture_metadata_maps_surface_models_and_publishes_validation_budgets() {
         let bolometric = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0)
             .expect("test bolometric source is valid");
         let bolometric_surface = validated_surface(bolometric, SurfaceTransport::Vacuum);
@@ -424,18 +442,23 @@ mod tests {
             usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let first_row = [
-            0x00, 0x3c, 0x00, 0x38, 0x00, 0x00, 0x00, 0x40, 0x00, 0x40, 0x00, 0x42, 0x00, 0x44,
-            0x00, 0xc5,
-        ];
-        let second_row = [
-            0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00,
+        let source_words: [[u16; 4]; 4] = [
+            [0x3c00, 0x3800, 0x3400, 0x4000],
+            [0x4000, 0x4200, 0x4400, 0xc500],
+            [0x4500, 0x4600, 0x4700, 0x3c00],
+            [0x4800, 0x4880, 0x4900, 0x0000],
         ];
         let mut bytes = vec![0_u8; 2 * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize];
-        bytes[..first_row.len()].copy_from_slice(&first_row);
-        let second_row_start = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
-        bytes[second_row_start..second_row_start + second_row.len()].copy_from_slice(&second_row);
+        for (row, texels) in source_words.as_chunks::<2>().0.iter().enumerate() {
+            for (column, texel) in texels.iter().enumerate() {
+                for (channel, word) in texel.iter().enumerate() {
+                    let offset = row * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize
+                        + column * 8
+                        + channel * size_of::<u16>();
+                    bytes[offset..offset + size_of::<u16>()].copy_from_slice(&word.to_le_bytes());
+                }
+            }
+        }
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -474,22 +497,16 @@ mod tests {
             .copied()
             .map(super::ScientificTexel::rgba16_float_bits)
             .collect::<Vec<_>>();
-        assert_eq!(
-            words,
-            [
-                [0x3c00, 0x3800, 0x0000, 0x4000],
-                [0x4000, 0x4200, 0x4400, 0xc500],
-                [0x3c00, 0x0000, 0x0000, 0x3c00],
-                [0x0000, 0x0000, 0x0000, 0x0000],
-            ]
-        );
+        assert_eq!(&words[..3], &source_words[..3]);
+        assert_eq!(&words[3][..3], &source_words[3][..3]);
+        assert_eq!(words[3][3] & 0x7fff, 0, "WebGPU may change zero sign");
         assert_eq!(
             capture.texels()[0].kind(),
             ScientificPixelKind::SurfaceRadiance
         );
         assert_eq!(
             capture.texels()[0].surface_radiance_rgb16_float_bits(),
-            Some([0x3c00, 0x3800, 0x0000])
+            Some([0x3c00, 0x3800, 0x3400])
         );
         assert_eq!(
             capture.texels()[1].kind(),
@@ -560,29 +577,33 @@ mod tests {
 
         assert_eq!(
             metadata.invariant_relative_drift_limit().to_bits(),
-            INVARIANT_RELATIVE_DRIFT_LIMIT.to_bits()
+            0.05_f32.to_bits()
+        );
+        assert_eq!(
+            metadata.rgba16_float_minimum_normal().to_bits(),
+            (1.0_f64 / 16_384.0).to_bits()
         );
         assert_eq!(
             metadata
-                .bolometric_surface_relative_error_budget()
+                .bolometric_surface_normal_relative_error_budget()
                 .to_bits(),
-            BOLOMETRIC_SURFACE_RELATIVE_ERROR_BUDGET.to_bits()
+            2.0e-3_f64.to_bits()
         );
         assert_eq!(
-            metadata.spectral_surface_relative_error_budget(),
-            spectral(SPECTRAL_SURFACE_RELATIVE_ERROR_BUDGET)
+            metadata.spectral_surface_normal_relative_error_budget(),
+            spectral(4.0e-3)
         );
         assert_eq!(
             metadata.spectral_lut_absolute_fraction_error_budget(),
-            spectral(SPECTRAL_LUT_ABSOLUTE_FRACTION_ERROR_BUDGET)
+            spectral(3.0e-6)
         );
         assert_eq!(
             metadata.spectral_lut_visible_relative_error_budget(),
-            spectral(SPECTRAL_LUT_VISIBLE_RELATIVE_ERROR_BUDGET)
+            spectral(2.0e-3)
         );
         assert_eq!(
             metadata.spectral_lut_relative_error_fraction_floor(),
-            spectral(SPECTRAL_LUT_RELATIVE_ERROR_FRACTION_FLOOR)
+            spectral(1.0e-6)
         );
     }
 

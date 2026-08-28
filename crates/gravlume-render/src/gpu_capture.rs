@@ -24,6 +24,11 @@ pub struct TraceCapture {
     hdr: Vec<u8>,
 }
 
+pub struct TraceSampleCapture {
+    pub record: TraceRecord,
+    pub hdr_pixel: [u8; 8],
+}
+
 impl TraceCapture {
     pub fn hdr_pixel(&self, index: usize) -> [u8; 8] {
         let start = index * 8;
@@ -40,12 +45,11 @@ pub fn capture_trace(observation: &Observation) -> TraceCapture {
     capture(gpu, observation, &trace, false)
 }
 
-pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> TraceCapture {
+pub fn capture_trace_sample(observation: &Observation, sample: ImageSample) -> TraceSampleCapture {
     let gpu = crate::test_device::native_gpu();
     let trace = TracePipeline::for_trace_capture(&gpu.device, observation, sample.subpixel())
         .expect("observation packs for GPU");
-    let tile = TileRegion::containing_pixel(sample.pixel());
-    capture_region(gpu, observation, &trace, tile)
+    capture_sample(gpu, observation, &trace, sample.pixel())
 }
 
 pub fn inspect_sample(observation: &Observation, sample: ImageSample) -> SampleInspection {
@@ -79,7 +83,7 @@ pub fn capture_sample_corpus(
 pub fn capture_surface_footprint_sample(
     observation: &Observation,
     sample: ImageSample,
-) -> TraceCapture {
+) -> TraceRecord {
     assert!(
         sample
             .subpixel()
@@ -91,8 +95,7 @@ pub fn capture_surface_footprint_sample(
     let trace =
         TracePipeline::for_surface_footprint_capture(&gpu.device, observation, sample.subpixel())
             .expect("surface observation packs for GPU footprint capture");
-    let tile = TileRegion::containing_pixel(sample.pixel());
-    capture_region(gpu, observation, &trace, tile)
+    capture_sample(gpu, observation, &trace, sample.pixel()).record
 }
 
 pub fn capture_surface_transport_case(observation: &Observation) -> TraceCapture {
@@ -102,18 +105,63 @@ pub fn capture_surface_transport_case(observation: &Observation) -> TraceCapture
     capture(gpu, observation, &trace, false)
 }
 
-pub fn capture_accelerated_trace(observation: &Observation) -> TraceCapture {
-    let gpu = crate::test_device::native_gpu();
-    let trace = TracePipeline::for_accelerated_trace_capture(&gpu.device, observation)
-        .expect("observation packs for GPU");
-    capture(gpu, observation, &trace, false)
-}
-
 pub fn capture_refined_trace(observation: &Observation) -> TraceCapture {
     let gpu = crate::test_device::native_gpu();
     let trace = TracePipeline::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
         .expect("observation packs for GPU");
     capture(gpu, observation, &trace, true)
+}
+
+pub fn capture_trace_in_batches(
+    observation: &Observation,
+    maximum_tiles_per_batch: u32,
+) -> TraceCapture {
+    assert!(
+        maximum_tiles_per_batch > 0,
+        "a batch must contain at least one tile"
+    );
+    let gpu = crate::test_device::native_gpu();
+    let trace = TracePipeline::for_trace_capture(&gpu.device, observation, [0.5, 0.5])
+        .expect("observation packs for GPU");
+    let extent = observation_extent(observation);
+    let target = trace.create_target(&gpu.device, extent);
+    let grid = tile_grid(extent);
+    let total_tiles = grid[0] * grid[1];
+    let mut next_tile = 0;
+
+    while next_tile < total_tiles {
+        let tile_x = next_tile % grid[0];
+        let tile_y = next_tile / grid[0];
+        let budget = maximum_tiles_per_batch.min(total_tiles - next_tile);
+        let workgroups_x = budget.min(grid[0] - tile_x);
+        let workgroups_y = if tile_x == 0 && workgroups_x == grid[0] {
+            (budget / grid[0]).min(grid[1] - tile_y)
+        } else {
+            1
+        };
+        let tiles = TileRegion::new([tile_x, tile_y], [workgroups_x, workgroups_y]);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("batched headless trace encoder"),
+            });
+        trace.encode_batch(&gpu.queue, &mut encoder, &target, tiles, None);
+        let submission = gpu.queue.submit([encoder.finish()]);
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: Some(submission),
+                timeout: None,
+            })
+            .expect("headless trace batch completes");
+        next_tile += tiles.len();
+    }
+
+    let encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("batched headless trace readback encoder"),
+        });
+    finish_capture(gpu, extent, &target, encoder)
 }
 
 pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -> u32 {
@@ -147,16 +195,6 @@ pub fn capture_refined_edge_count(observation: &Observation, repetitions: u32) -
     );
     let submission = gpu.queue.submit([encoder.finish()]);
     bytemuck::pod_read_unaligned(&gpu.read_buffer(&readback, submission))
-}
-
-pub fn capture_accelerated_trace_in_batches(
-    observation: &Observation,
-    tiles_per_batch: u32,
-) -> TraceCapture {
-    let gpu = crate::test_device::native_gpu();
-    let trace = TracePipeline::for_accelerated_trace_capture(&gpu.device, observation)
-        .expect("observation packs for GPU");
-    capture_in_batches(gpu, observation, &trace, tiles_per_batch)
 }
 
 pub fn capture_initial_rays(observation: &Observation, subpixel: [f32; 2]) -> TraceCapture {
@@ -202,12 +240,12 @@ fn capture(
     finish_capture(gpu, extent, &target, encoder)
 }
 
-fn capture_region(
+fn capture_sample(
     gpu: &crate::test_device::TestGpu,
     observation: &Observation,
     trace: &TracePipeline,
-    tiles: TileRegion,
-) -> TraceCapture {
+    pixel: [u32; 2],
+) -> TraceSampleCapture {
     let extent = observation_extent(observation);
     let target = trace.create_target(&gpu.device, extent);
     let mut encoder = gpu
@@ -215,51 +253,13 @@ fn capture_region(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("headless trace region encoder"),
         });
-    trace.encode_base(&gpu.queue, &mut encoder, &target, tiles);
-    finish_capture(gpu, extent, &target, encoder)
-}
-
-fn capture_in_batches(
-    gpu: &crate::test_device::TestGpu,
-    observation: &Observation,
-    trace: &TracePipeline,
-    tiles_per_batch: u32,
-) -> TraceCapture {
-    assert!(tiles_per_batch > 0, "tile batches must be nonzero");
-    let extent = observation_extent(observation);
-    let target = trace.create_target(&gpu.device, extent);
-    let [tile_columns, tile_rows] = tile_grid(extent);
-    let total_tiles = tile_columns * tile_rows;
-    let mut next_tile = 0;
-    while next_tile < total_tiles {
-        let tile_x = next_tile % tile_columns;
-        let tile_y = next_tile / tile_columns;
-        let workgroups_x = tiles_per_batch
-            .min(tile_columns - tile_x)
-            .min(total_tiles - next_tile);
-        let batch = TileRegion::new([tile_x, tile_y], [workgroups_x, 1]);
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("headless trace batch encoder"),
-            });
-        trace.encode_base(&gpu.queue, &mut encoder, &target, batch);
-        let submission = gpu.queue.submit([encoder.finish()]);
-        gpu.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: Some(submission),
-                timeout: None,
-            })
-            .expect("trace batch completes");
-        next_tile += batch.len();
-    }
-
-    let encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("headless trace readback encoder"),
-        });
-    finish_capture(gpu, extent, &target, encoder)
+    trace.encode_base(
+        &gpu.queue,
+        &mut encoder,
+        &target,
+        TileRegion::containing_pixel(pixel),
+    );
+    finish_sample_capture(gpu, extent, &target, pixel, encoder)
 }
 
 fn observation_extent(observation: &Observation) -> RenderExtent {
@@ -354,6 +354,83 @@ fn finish_capture(
         padded_bytes_per_row,
     );
     TraceCapture { records, hdr }
+}
+
+fn finish_sample_capture(
+    gpu: &crate::test_device::TestGpu,
+    extent: RenderExtent,
+    target: &crate::trace::TraceTarget,
+    pixel: [u32; 2],
+    mut encoder: wgpu::CommandEncoder,
+) -> TraceSampleCapture {
+    const RECORD_BYTES: u64 = RECORD_FIELD_COUNT * RECORD_FIELD_SIZE as u64;
+    // Keep the texture payload on the same portable copy-row boundary as full-frame readback.
+    const HDR_OFFSET: u64 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64;
+    const HDR_BYTES: u64 = 8;
+    const _: () = assert!(RECORD_BYTES <= HDR_OFFSET);
+
+    let pixel_index = u64::from(pixel[1]) * u64::from(extent.width()) + u64::from(pixel[0]);
+    let source_offset = pixel_index * RECORD_FIELD_SIZE as u64;
+    let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("headless trace sample readback"),
+        size: HDR_OFFSET + HDR_BYTES,
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    for (plane_index, plane) in target.record_planes().into_iter().enumerate() {
+        encoder.copy_buffer_to_buffer(
+            plane,
+            source_offset,
+            &readback,
+            u64::try_from(plane_index).expect("record plane index fits u64")
+                * RECORD_FIELD_SIZE as u64,
+            RECORD_FIELD_SIZE as u64,
+        );
+    }
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: target.texture(),
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: pixel[0],
+                y: pixel[1],
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &readback,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: HDR_OFFSET,
+                bytes_per_row: None,
+                rows_per_image: None,
+            },
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    let submission = gpu.queue.submit([encoder.finish()]);
+    let mapped = gpu.read_buffer(&readback, submission);
+    let record_bytes = usize::try_from(RECORD_BYTES).expect("record readback length fits usize");
+    let hdr_offset = usize::try_from(HDR_OFFSET).expect("HDR readback offset fits usize");
+    let record_fields = mapped[..record_bytes].as_chunks::<RECORD_FIELD_SIZE>().0;
+    let [source_time, invariant_drift, metadata, event] = record_fields else {
+        unreachable!("sample readback has four record fields");
+    };
+    TraceSampleCapture {
+        record: TraceRecord {
+            source_time: bytemuck::pod_read_unaligned(source_time),
+            invariant_drift: bytemuck::pod_read_unaligned(invariant_drift),
+            metadata: bytemuck::pod_read_unaligned(metadata),
+            event: bytemuck::pod_read_unaligned(event),
+        },
+        hdr_pixel: mapped[hdr_offset..]
+            .try_into()
+            .expect("sample HDR texel contains eight bytes"),
+    }
 }
 
 const fn readback_row_layout(extent: RenderExtent) -> (u32, u32) {

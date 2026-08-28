@@ -26,7 +26,7 @@ failed completion。Completed result 分开携带：
 - `published_texel`：从 request 所绑定 generation 实际复制的 `Rgba16Float` texel；
 - `fresh_retrace`：同一 logical sample 的 fresh full-KS/WGSL-binary32 typed evidence。
 
-两者不能合并。Presentation 可能使用 escape-map accelerator、shadow subpixel refinement，并最终写入
+两者不能合并。Presentation 使用完整 KS、可能追加 shadow subpixel refinement，并最终写入
 binary16 texture；inspection retrace 则执行单条 full-KS trace 并保留 binary32 output。数值接近或偶然
 bit-equal 都不建立 producer identity。
 

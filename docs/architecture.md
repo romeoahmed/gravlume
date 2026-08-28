@@ -122,8 +122,8 @@ WGSL 位于 `src/shaders/`：
 | `kerr_schild_dynamics.wgsl`       | Cartesian Kerr–Schild geometry、Hamilton RHS 与 RK4                        |
 | `geodesic_events.wgsl`            | dense event localization、invariant、observable 与 branch evidence         |
 | `geodesic_integration.wgsl`       | per-ray integration state machine 与完整 KS entry points                   |
-| `geodesic_acceleration.wgsl`      | interval capture、escape-direction map 与完整 KS fallback                  |
 | `lensing_preview.wgsl`            | termination/direction 到 scene-linear preview                              |
+| `analytic_sky_preview.wgsl`       | 完整 KS 结果到 analytic-sky presentation entry point                       |
 | `surface_transport.wgsl`          | inverse-cube/slab transport、范围安全缩放与三 band 向量运算                |
 | `bolometric_surface_preview.wgsl` | equatorial source 的直接 bolometric transport                              |
 | `blackbody_surface_preview.wgsl`  | blackbody LUT、三 boxcar bands 与 spectral slab transport                  |
@@ -145,16 +145,15 @@ shader module；`trace/shader.rs` 是生产、shadow 与 test capture source 顺
 
 ```text
 private TracePlan
-  -> sky: escape-map -> reconstruct/full-KS trace -> final-batch shadow refine
+  -> sky: full-KS trace -> final-batch shadow refine
   -> bolometric surface: full-KS trace -> immediate g^4 + slab transport
   -> blackbody surface: full-KS trace -> gT + LUT bands + slab transport
-  -> plan-sized timestamp resolve/copy/map-on-submit + bound generation
+  -> trace timestamp resolve/copy/map-on-submit + bound generation
   -> promote candidate texture view
   -> request one presentation
 ```
 
-- escape-direction map 在共享 4-pixel node grid 上追踪；每个 `8×8` tile 读取 `3×3` stencil，只有 branch 一致且方向误差通过才重建；
-- interval Bernstein certificate 只在严格支持域证明 capture，无结论时执行完整 KS；
+- 三种 plan 都从同一完整 Cartesian Kerr–Schild trace 形成 terminal、方向、travel time 与 diagnostics；
 - shadow classification 从不可变 candidate 读取 alpha tag，refinement 在后续 dispatch 写回真实 subpixel 平均；
 - incomplete candidate 永不进入 display bind group；stale completion 只能回收资源；
 - candidate 完成后直接提升 texture view，不做同尺寸 publication copy。
@@ -234,12 +233,15 @@ Production 不常驻每像素科学 records：
 - candidate HDR：`8 B/pixel`；
 - UI target：`4 B/pixel`；
 - published scene：`8 B/pixel`；
-- escape map 与 shadow scratch：按 extent 精确计算；
+- sky plan 的 shadow scratch：按 extent 精确计算；
 - blackbody plan 的固定 spectral LUT；
 - sample inspection 固定 request `32 B`、record `96 B`、readback `104 B`，合计最多 `232 B`
   logical buffer；1×1 texel copy 提供 `256 B` row pitch，但最后一行只占实际 `8 B` texel，readback
   不为未使用的下一行分配 padding；
-- 四个 `16 B/pixel` scientific planes：只在 small-extent test capture 中创建。
+- 四个 `16 B/pixel` scientific planes：只在 test-only diagnostic capture 中创建。通常测试使用
+  small extent；版本化 surface/radiance 与 footprint witness 为保持 canonical ray identity，会在
+  原始 extent 上临时分配 planes，但只 dispatch 目标 tile，并只回读目标 pixel 的四个 `16 B` record
+  lane 与一个对齐后的 `8 B` texel；它们不进入 production resource plan。
 
 显式 scientific export 临时分配 padded readback buffer，完成 map 后即释放；它不属于 steady frame
 resources。WebGPU texel copy 对正常有限值保证数值等价，但允许重新编码 zero、subnormal 与

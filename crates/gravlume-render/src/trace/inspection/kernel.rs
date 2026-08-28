@@ -19,7 +19,7 @@ impl SampleInspectionKernel {
         records: &wgpu::Buffer,
     ) -> Self {
         let shader_source = match trace.plan {
-            TracePlan::AcceleratedSky => shader::analytic_sample_inspection(),
+            TracePlan::AnalyticSky => shader::analytic_sample_inspection(),
             TracePlan::EquatorialBolometricSurface => shader::bolometric_sample_inspection(),
             TracePlan::EquatorialBlackbodySurface => shader::blackbody_sample_inspection(),
         };
@@ -58,12 +58,12 @@ impl SampleInspectionKernel {
         ];
         if let Some(blackbody_lut) = &trace.blackbody_lut {
             entries.push(wgpu::BindGroupEntry {
-                binding: 8,
+                binding: 7,
                 resource: blackbody_lut.as_entire_binding(),
             });
         }
         entries.push(wgpu::BindGroupEntry {
-            binding: 9,
+            binding: 8,
             resource: requests.as_entire_binding(),
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {

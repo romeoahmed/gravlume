@@ -22,7 +22,7 @@ use crate::{
     timing::GpuTimings,
     trace::{
         SampleInspectionCompletion, SampleInspectionRequestError, SampleInspectionSlot,
-        SampleInspectionTicket, TracePipeline, TraceTimestampWrites,
+        SampleInspectionTicket, TracePipeline,
     },
 };
 
@@ -267,7 +267,7 @@ impl Renderer {
         let published_scene = DisplayPipeline::create_initial_scene(&device, &queue);
         let egui =
             egui_wgpu::Renderer::new(&device, UI_FORMAT, egui_wgpu::RendererOptions::default());
-        let timings = GpuTimings::new(&device, trace.has_escape_map());
+        let timings = GpuTimings::new(&device);
         let initial_size = window.inner_size();
         let mut renderer = Self {
             surface: Some(surface),
@@ -537,10 +537,7 @@ impl Renderer {
             &mut encoder,
             candidate,
             batch,
-            TraceTimestampWrites::new(
-                self.timings.escape_map_writes(),
-                Some(self.timings.trace_writes()),
-            ),
+            Some(self.timings.trace_writes()),
         );
         let generation = self.extent.generation();
         self.timings.encode_readback(&mut encoder, generation)?;
@@ -921,42 +918,5 @@ fn free_egui_textures_after_submit(
 ) {
     for texture_id in &textures_delta.free {
         renderer.free_texture(texture_id);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{matching_extent, matching_publication};
-    use crate::extent::RenderExtent;
-
-    #[test]
-    fn inspection_requires_an_active_matching_publication() {
-        let current_extent = RenderExtent::new(1_920, 1_080).expect("test extent is nonzero");
-        let retained_extent = RenderExtent::new(1_280, 720).expect("test extent is nonzero");
-
-        assert_eq!(matching_extent(None, Some(current_extent)), None);
-        assert_eq!(matching_extent(Some(current_extent), None), None);
-        assert_eq!(
-            matching_extent(Some(retained_extent), Some(current_extent)),
-            None
-        );
-        assert_eq!(
-            matching_extent(Some(current_extent), Some(current_extent)),
-            Some(current_extent)
-        );
-        assert_eq!(matching_publication(None, Some((4, current_extent))), None);
-        assert_eq!(
-            matching_publication(Some((3, current_extent)), Some((4, current_extent))),
-            None
-        );
-        assert_eq!(matching_publication(Some((4, current_extent)), None), None);
-        assert_eq!(
-            matching_publication(Some((4, retained_extent)), Some((4, current_extent))),
-            None
-        );
-        assert_eq!(
-            matching_publication(Some((4, current_extent)), Some((4, current_extent))),
-            Some((4, current_extent))
-        );
     }
 }

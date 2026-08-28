@@ -9,7 +9,7 @@ impl TestGpu {
     pub fn read_buffer(&self, buffer: &wgpu::Buffer, submission: wgpu::SubmissionIndex) -> Vec<u8> {
         // map_async callbacks are driven by polling; waiting for the producing submission makes
         // the contract deterministic without a wall-clock timeout.
-        // Source: https://docs.rs/wgpu/30.0.0/wgpu/struct.Buffer.html#method.map_async
+        // Source: https://docs.rs/wgpu/30.0.1/wgpu/struct.Buffer.html#method.map_async
         let (sender, receiver) = mpsc::sync_channel(1);
         buffer.map_async(wgpu::MapMode::Read, .., move |result| {
             let _send_result = sender.send(result);

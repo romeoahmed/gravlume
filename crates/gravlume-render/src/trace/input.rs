@@ -387,11 +387,12 @@ mod tests {
     use std::num::NonZeroU32;
 
     use gravlume_domain::{
-        Angle, KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
-        StationaryObserverInput,
+        Angle, EquatorialCircularEmitter, EquatorialSurface, HomogeneousScalarSlab,
+        KerrSchildChart, Observation, PerspectiveView, PhysicalScene, PhysicalSceneInput,
+        StationaryObserverInput, SurfaceTransport,
     };
 
-    use super::TraceUniforms;
+    use super::{GpuTraceInputError, TraceUniforms};
 
     #[test]
     fn trace_uniforms_preserve_polar_side_before_binary32_packing() {
@@ -423,5 +424,170 @@ mod tests {
 
             assert_eq!(uniforms.observer[0].to_bits(), expected_side.to_bits());
         }
+    }
+
+    #[test]
+    fn trace_uniforms_reject_non_normalized_observer_frequency() {
+        let observation = observation_with(1.0, 0.8, 0.0, [30.0, 0.0, 0.0], 1.0e-6);
+
+        assert!(matches!(
+            TraceUniforms::from_observation(&observation),
+            Err(GpuTraceInputError::NonNormalizedObserverFrequency { .. })
+        ));
+    }
+
+    #[test]
+    fn trace_uniforms_reject_extremality_changed_by_binary32_packing() {
+        let observation = observation_with(
+            1.0,
+            0.157_132_806_437_842_44,
+            0.987_577_480_983_596_3,
+            [30.0, 0.0, 0.0],
+            1.0,
+        );
+
+        assert!(matches!(
+            TraceUniforms::from_observation(&observation),
+            Err(GpuTraceInputError::ExtremalityChangedByPacking { .. })
+        ));
+    }
+
+    #[test]
+    fn trace_uniforms_reject_surface_emitters_collapsed_by_binary32_packing() {
+        let base = default_observation();
+        let collapsed_interval = EquatorialCircularEmitter::inverse_cube_bolometric_v1(
+            6.0,
+            f64::from_bits(6.0_f64.to_bits() + 1),
+            1.0,
+        )
+        .expect("binary64 interval is nonempty");
+        let underflowed_intensity =
+            EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, f64::MIN_POSITIVE)
+                .expect("binary64 intensity is positive");
+
+        for emitter in [collapsed_interval, underflowed_intensity] {
+            let observation = with_surface(
+                &base,
+                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                    .expect("test surface is compatible with vacuum"),
+            );
+            assert!(matches!(
+                TraceUniforms::from_observation(&observation),
+                Err(GpuTraceInputError::NotRepresentable {
+                    field: "surface_emitter"
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn trace_uniforms_reject_surfaces_at_or_beyond_the_packed_escape_boundary() {
+        let base = default_observation();
+
+        for outer_radius_m in [199.999_999, 200.0, 250.0] {
+            let emitter =
+                EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, outer_radius_m, 1.0)
+                    .expect("the emitter is valid independently of the GPU profile");
+            let observation = with_surface(
+                &base,
+                EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                    .expect("test surface is compatible with vacuum"),
+            );
+
+            assert!(
+                matches!(
+                    TraceUniforms::from_observation(&observation),
+                    Err(GpuTraceInputError::SurfaceOutsideEscapeBoundary { .. })
+                ),
+                "surface ending at {outer_radius_m} M escaped the GPU profile applicability check"
+            );
+        }
+    }
+
+    #[test]
+    fn trace_uniforms_reject_surface_transport_outside_the_binary32_normal_range() {
+        let base = default_observation();
+        let emitter = EquatorialCircularEmitter::inverse_cube_bolometric_v1(6.0, 20.0, 1.0e38)
+            .expect("the high dynamic-range surface is intrinsically valid");
+
+        for optical_depth in [92.0, 1_000.0] {
+            let slab = HomogeneousScalarSlab::pure_absorption_v1(optical_depth)
+                .expect("the high optical-depth slab is intrinsically valid");
+            let observation = with_surface(
+                &base,
+                EquatorialSurface::new(emitter, SurfaceTransport::HomogeneousScalar(slab))
+                    .expect("bolometric surface and slab are compatible"),
+            );
+
+            assert!(matches!(
+                TraceUniforms::from_observation(&observation),
+                Err(GpuTraceInputError::NotRepresentable {
+                    field: "surface_transport"
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn trace_uniforms_reject_temperature_outside_the_spectral_lut() {
+        let base = default_observation();
+        let emitter =
+            EquatorialCircularEmitter::inverse_cube_blackbody_v1(1.0e-12, 20.0, 1.0, 6_000.0)
+                .expect("the source profile is valid independently of the GPU LUT");
+        let observation = with_surface(
+            &base,
+            EquatorialSurface::new(emitter, SurfaceTransport::Vacuum)
+                .expect("blackbody surface is compatible with vacuum"),
+        );
+
+        assert!(matches!(
+            TraceUniforms::from_observation(&observation),
+            Err(GpuTraceInputError::TemperatureOutsideSpectralLut {
+                field: "equatorial_circular_emitter.inner_temperature_kelvin",
+                ..
+            })
+        ));
+    }
+
+    fn default_observation() -> Observation {
+        observation_with(1.0, 0.8, 0.0, [30.0, 0.0, 0.0], 1.0)
+    }
+
+    fn with_surface(base: &Observation, surface: EquatorialSurface) -> Observation {
+        Observation::new(
+            base.scene().clone().with_equatorial_surface(surface),
+            *base.view(),
+        )
+    }
+
+    fn observation_with(
+        mass: f64,
+        spin: f64,
+        charge: f64,
+        observer_xyz: [f64; 3],
+        observer_frequency: f64,
+    ) -> Observation {
+        let observer = StationaryObserverInput::new(
+            [0.0, observer_xyz[0], observer_xyz[1], observer_xyz[2]],
+            [0.0; 4],
+            [0.0, 0.0, 1.0],
+            observer_frequency,
+        );
+        let scene = PhysicalScene::new(PhysicalSceneInput::new(
+            mass,
+            spin,
+            charge,
+            KerrSchildChart::Outgoing,
+            observer,
+        ))
+        .expect("test scene is valid");
+        let view = PerspectiveView::new(
+            NonZeroU32::MIN,
+            NonZeroU32::MIN,
+            Angle::from_radians(std::f64::consts::FRAC_PI_4)
+                .expect("the test field of view is finite"),
+        )
+        .expect("test view is valid");
+        Observation::new(scene, view)
     }
 }

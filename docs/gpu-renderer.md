@@ -9,7 +9,7 @@ validated Observation
   -> checked f64-to-f32 packing
   -> private sealed TracePlan
   -> hidden native-resolution candidate
-       sky: escape-map + reconstruction/full-KS fallback + shadow refine
+       sky: full KS + shadow refine
        bolometric surface: full KS + local GeometricSample + immediate g^4/slab transport
        blackbody surface: full KS + gT + spectral LUT/slab transport
   -> timestamp + generation check
@@ -36,8 +36,8 @@ validated Observation
 - Termination discriminant 固定为 horizon、escape、singularity guard、step exhaustion、numerical failure、uncertain 与 equatorial surface，并有 checked host/WGSL mapping。可证明的 determinate sample 另携带 initial polar side、radial/equatorial crossing counts 与 signed azimuth winding 的 exact branch key；numerical failure 与 `Uncertain` 都不输出确定 branch。
 - Renderer 只匹配一次 `SceneRadiance`，同一 compiled input 同时生成 `TraceUniforms`、private sealed
   `TracePlan` 与 scientific metadata；不存在三个消费者各自解释 Observation 的漂移。WGSL pipeline
-  override 固化 surface-event capability。Surface plan 在 shader、bindings、timing 与 target 上都不含
-  escape map 或 shadow refinement scratch；caller 不选择 accelerator。
+  override 固化 surface-event capability。Surface plan 在 shader、bindings 与 target 上不含 shadow
+  refinement scratch；caller 不选择 solver 或 accelerator。
 
 ### 数值基线
 
@@ -53,13 +53,17 @@ validated Observation
 
 完整公式、符号验证和 binary32 边界见 [KS RK4 约化记录](research/kerr-schild-rk4-reduction.md)。
 
-### 保守加速
+### 当前求解与轮廓 refinement
 
-- **Escape-direction map：** 在共享 4-pixel grid 上追踪，按 `8×8` tile 读取 `3×3` stencil；branch/condition 通过时重建归一化 Escape direction，否则逐像素执行完整 KS。
-- **Interval capture：** 严格支持域内，用向外扩张的 Bernstein interval 证明 radial potential 无 turning point后直接分类 Horizon；near-axis、near-extreme、超出参数 envelope 或任何不确定性都 fallback。
+- **Full KS：** analytic sky 与 surface plan 都逐像素执行完整 Cartesian Kerr–Schild trace，并由同一
+  localized state 提供 terminal、方向、travel time 与 diagnostics。
 - **Shadow coverage：** 最后一批完成后，先读取不可变 alpha branch tag 分类 capture/escape 边缘，再以四个真实 rotated-grid subpixel rays 覆盖边界。非边缘像素保持原结果，不用颜色 blur 伪造物理 coverage。
 
-Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例从 production 删除。性能与否决证据只在[加速研究账本](research/gpu-geodesic-acceleration.md)和 [Mino 决策记录](research/mino-step-selection.md)维护。
+Escape-direction map 与 interval capture 在合同复核中一并撤出 production：前者重建时把 travel time
+写成零，后者直接 capture 时不计算 time integral；原测试只比较 terminal/direction，不能证明
+[验证合同](validation.md#53-gpu-renderer-agreement)要求的 `1e-3 M` travel-time gate。Numerical fixed-step
+Mino candidate 也已因 accepted ray 的 travel-time 反例删除。实验与否决证据只在
+[加速研究账本](research/gpu-geodesic-acceleration.md)和 [Mino 决策记录](research/mino-step-selection.md)维护。
 
 ### Thin surface transport 与 scientific capture
 
@@ -73,10 +77,12 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
   Surface alpha tag `2.0` 才表示 metadata 所述 radiance；escape tag `1.0` 仍是 analytic
   orientation preview，zero 是 horizon，negative tag 是 trace failure。API 返回
   `ScientificTexel` slice；raw RGBA binary16 words、texel kind 与只对 `SurfaceRadiance` 开放的 RGB
-  projection 不能发生索引错配。Metadata 原子携带 source/transport/channel，以及 bolometric
-  `2e-3`、final spectral `4e-3` 与 LUT 分项误差预算。它只导出最终 radiance、texel kind 与整次
-  capture 的解释 metadata，不导出逐像素 source anchor、branch、$g$、travel time 或 event/invariant
-  records；这些逐样本证据不混入整帧 capture，而由下述 production inspection 提供。
+  projection 不能发生索引错配。Metadata 原子携带 source/transport/channel，以及
+  [验证合同](validation.md#53-gpu-renderer-agreement)定义的 normal-channel relative budgets、
+  `RGBA16F` minimum-normal floor 与 LUT 分项预算；subnormal 的跨 backend 解释由同一合同限定。它只
+  导出最终 radiance、texel kind 与整次 capture 的解释 metadata，不导出逐像素 source anchor、branch、
+  $g$、travel time 或 event/invariant records；这些逐样本证据不混入整帧 capture，而由下述
+  production inspection 提供。
 - 该 source 只声称运动学 circular thin surface 与 diluted blackbody；不声称 orbit radial stability、Novikov–Thorne/Page–Thorne disk 或完整 GRRT。
 
 ### Production 有界 sample inspection
@@ -89,7 +95,9 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
   production batch interface。它只允许一个 pending request，并在 resize/suspend 后保持 Busy 直到已提交
   work 和 mapping drain；mapping failure 保留 typed source，只有成功 mapping 才在 mapped view drop 后
   `unmap`。
-- Completion 分开携带实际 published `Rgba16Float` texel 与 fresh retrace。严格 decoder 只形成
+- Completion 分开携带实际 published `Rgba16Float` texel 与 fresh retrace。严格 decoder 要求 readback
+  恰为 `104 B`，并拒绝非单位 Escape direction、未知 bit 与不可能的 terminal/flags/event-candidate
+  组合；它只形成
   terminal 合法的 source/scene/branch/channel 组合；`NumericalFailure`/`Uncertain` 没有 branch，step
   exhaustion 只有 branch prefix。三种 plan 的 GPU tests 与 production lifecycle tests 覆盖 ABI、非法
   branch protocol、单次消费、cancel-drain、generation mismatch 和两类像素证据分离。精确 protocol、
@@ -120,14 +128,14 @@ Numerical fixed-step Mino candidate 已因 accepted ray 的 travel-time 反例�
 | initial ray               | center/corners/jitter 的 CPU/WGSL angular、null 与 frequency budgets                                                                                         |
 | solver                    | 默认 Kerr matrix 的 termination、escape direction、event residual、travel time、四项 invariant drift、affine tie 与 surface arming                           |
 | surface                   | canonical v2 有独立 BL/Mino → CPU regular/strict → fresh binary32 → 最终 `RGBA16F` 链；相邻 outer-edge pair 另有独立 Escape/surface witness → CPU → fresh binary32 链 |
-| scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission、blackbody bands 与 LUT budgets                                                          |
+| scalar/spectral transport | 四个 v3 fixture 的 vacuum、absorption、constant slab、pure emission；完整 `f32` blackbody bands、normal/subnormal `RGBA16F` representation 与 LUT budgets                     |
 | branch/footprint          | 四个 Schwarzschild/Kerr/Kerr–Newman profile 的分层 surface terminal/branch-key exact gate；五条真实 quarter-pixel ray 的 parity 与 CPU/GPU Jacobian max-norm |
 | scientific export         | bound texel words/kind、physical RGB gating、row unpadding 与解释 metadata                                                                                   |
 | sample inspection         | fixed ABI/resource cap、strict decode、published texel/retrace 分离、Busy/cancel-drain/generation mismatch 与三种 plan 的真实 GPU record                     |
 | dispatch                  | odd extent、workgroup boundary、multi-batch 与 single-dispatch equality、65 个乱序 sample 的 runtime-array partial workgroup、device workgroup-dimension cap |
-| acceleration              | escape-map 与 full baseline branch/direction gate；Kerr/KN interval capture 的支持域与 conservative fallback                                                 |
+| solver/refinement         | full-KS terminal/direction/travel-time gate；shadow refinement 只改真实边缘 coverage                                                                          |
 | coverage                  | branch-edge detection、四样本 fractional coverage、reset/order 与非边缘稳定性                                                                                |
-| resources                 | 4K pixel boundary、cold/completed/worst transactional plan 与分配前 typed rejection                                                                          |
+| resources                 | 4K pixel boundary、cold/active/completed transactional plan 与 synthetic oversized plan 的分配前 typed rejection                                             |
 | lifecycle/display         | publication generation、resize、HDR/SDR resolver、linear composition 与 native smoke                                                                         |
 
 GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度、状态和积分器；agreement 只证明受测样本满足预算，不构成独立物理证明。
@@ -139,7 +147,6 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
   Kerr–Newman matrix 目前只准入 terminal/branch exactness。其他非 canonical source/time phase 尚未
   满足同一预算，详见
   [reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#57-surface-full-ks-的-binary32-phase-边界)。
-  KN accelerator equality 也只覆盖严格亚极端的具名样本，不是完整 charge sweep。
 - Near-critical、高绕转、near-axis 与 near-extreme 的 GPU/reference ladder 尚未闭合。
 - RK4 v2 只对具名 source-edge band 条件重追；当前没有 near-critical、axis、near-extreme 或一般
   `Uncertain` ray 的第二种 science-quality GPU policy。
@@ -159,7 +166,10 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 
 ## 性能证据
 
-Batching 只控制 watchdog 与事件循环响应；真正减少工作的是 outgoing chart、endpoint reuse、KS 代数约化、escape-direction map 与 interval capture。所有历史 A/B、累计结果、adapter、extent 与统计方法集中在[GPU geodesic 加速账本](research/gpu-geodesic-acceleration.md)，永久 benchmark 的测量边界见[基准方法](research/gpu-benchmark-methodology.md)。本页不维护第二份数字。
+Batching 只控制 watchdog 与事件循环响应；当前减少工作的 production 优化是 outgoing chart、endpoint
+reuse 与 KS 代数约化，shadow refinement 则只在最终批次为真实边缘增加必要样本。所有历史 A/B、累计
+结果、adapter、extent 与统计方法集中在[GPU geodesic 加速账本](research/gpu-geodesic-acceleration.md)，
+永久 benchmark 的测量边界见[基准方法](research/gpu-benchmark-methodology.md)。本页不维护第二份数字。
 
 ## 主要来源
 

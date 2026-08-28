@@ -265,10 +265,11 @@ impl FrameResources {
             return None;
         }
         self.completed_batches += 1;
-        if compute_ms.is_finite() {
-            self.total_compute_ms += compute_ms;
-            self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
-        }
+        accumulate_compute_time(
+            &mut self.total_compute_ms,
+            &mut self.maximum_batch_ms,
+            compute_ms,
+        );
         if completion != TraceCompletion::Ready {
             return None;
         }
@@ -394,10 +395,11 @@ impl TraceProgress {
             return;
         };
         self.completed_batches += 1;
-        if compute_ms.is_finite() {
-            self.total_compute_ms += compute_ms;
-            self.maximum_batch_ms = self.maximum_batch_ms.max(compute_ms);
-        }
+        accumulate_compute_time(
+            &mut self.total_compute_ms,
+            &mut self.maximum_batch_ms,
+            compute_ms,
+        );
         if self.next_tile == self.total_tiles || !compute_ms.is_finite() || compute_ms <= 0.0 {
             return;
         }
@@ -450,6 +452,13 @@ impl TraceProgress {
     }
 }
 
+fn accumulate_compute_time(total_ms: &mut f64, maximum_ms: &mut f64, sample_ms: f64) {
+    if sample_ms.is_finite() && sample_ms >= 0.0 {
+        *total_ms += sample_ms;
+        *maximum_ms = maximum_ms.max(sample_ms);
+    }
+}
+
 pub const fn validate_extent(
     extent: RenderExtent,
     limits: &wgpu::Limits,
@@ -499,12 +508,28 @@ mod tests {
             width in 1_u32..=3_840,
             height in 1_u32..=2_160,
             maximum_dispatch_dimension in 1_u32..=512,
+            compute_samples in prop::collection::vec(
+                prop_oneof![
+                    Just(f64::NAN),
+                    Just(f64::INFINITY),
+                    Just(f64::NEG_INFINITY),
+                    Just(-0.0),
+                    Just(0.0),
+                    Just(TARGET_BATCH_MS),
+                    Just(MAXIMUM_BATCH_MS),
+                    Just(MAXIMUM_BATCH_MS + 1.0),
+                    -100.0_f64..0.0,
+                    f64::EPSILON..100.0,
+                ],
+                1..=16,
+            ),
         ) {
             let extent = RenderExtent::new(width, height).expect("generated extent is nonzero");
             let mut progress = TraceProgress::new(extent, maximum_dispatch_dimension);
             let [tile_columns, tile_rows] = tile_grid(extent);
             let mut covered =
                 vec![false; usize::try_from(tile_columns * tile_rows).expect("small grid")];
+            let mut compute_samples = compute_samples.into_iter().cycle();
 
             while let Some(batch) = progress.next_batch() {
                 let [origin_x, origin_y] = batch.origin();
@@ -522,7 +547,16 @@ mod tests {
                 }
                 progress.submitted(batch);
                 prop_assert!(progress.next_batch().is_none(), "one batch stays in flight");
-                progress.completed(TARGET_BATCH_MS);
+                progress.completed(
+                    compute_samples
+                        .next()
+                        .expect("the generated timing sequence is nonempty"),
+                );
+                let diagnostics = progress.diagnostics();
+                prop_assert!(diagnostics.total_compute_ms().is_finite());
+                prop_assert!(diagnostics.total_compute_ms() >= 0.0);
+                prop_assert!(diagnostics.maximum_batch_ms().is_finite());
+                prop_assert!(diagnostics.maximum_batch_ms() >= 0.0);
             }
 
             prop_assert!(covered.into_iter().all(|tile| tile));
@@ -571,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn core_resource_budget_accounts_for_transactional_4k_rebuild() {
+    fn core_resource_budget_admits_each_transactional_4k_rebuild_state() {
         let limits = wgpu::Limits::default();
         let extent = RenderExtent::new(3_840, 2_160).expect("extent is nonzero");
         let scratch = sky_trace_scratch(extent);
@@ -598,12 +632,27 @@ mod tests {
         assert!(initial.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
         assert!(validate_extent(extent, &limits, initial).is_ok());
         assert!(validate_extent(extent, &limits, cold_rebuild).is_ok());
-        assert!(active_rebuild.required_bytes() > MAXIMUM_CORE_RESOURCE_BYTES);
-        assert!(matches!(
-            validate_extent(extent, &limits, active_rebuild),
-            Err(ResizeError::FrameResourceBudget { .. })
-        ));
+        assert!(active_rebuild.required_bytes() <= MAXIMUM_CORE_RESOURCE_BYTES);
+        assert!(validate_extent(extent, &limits, active_rebuild).is_ok());
         assert!(validate_extent(extent, &limits, completed_rebuild).is_ok());
+    }
+
+    #[test]
+    fn core_resource_budget_rejects_an_oversized_plan() {
+        let plan = CoreResourcePlan::without_installed_frame(
+            RenderExtent::ONE,
+            RenderExtent::ONE,
+            MAXIMUM_CORE_RESOURCE_BYTES + 1,
+        );
+
+        assert!(matches!(
+            validate_extent(RenderExtent::ONE, &wgpu::Limits::default(), plan),
+            Err(ResizeError::FrameResourceBudget {
+                required_bytes,
+                maximum_bytes: MAXIMUM_CORE_RESOURCE_BYTES,
+                ..
+            }) if required_bytes > MAXIMUM_CORE_RESOURCE_BYTES
+        ));
     }
 
     #[test]
@@ -672,6 +721,5 @@ mod tests {
 
     fn sky_trace_scratch(extent: RenderExtent) -> u64 {
         crate::trace::shadow_coverage_scratch_bytes(extent)
-            .saturating_add(crate::trace::escape_map_scratch_bytes(extent))
     }
 }
