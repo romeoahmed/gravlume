@@ -10,8 +10,8 @@ use std::{
 use gravlume_domain::ValidationReport;
 use gravlume_native_display::{DisplayMonitor, DynamicRange, UnknownDisplayState};
 use gravlume_render::{
-    DeviceEvent, PresentResult, PresentSkip, Renderer, RendererError, RendererInitError,
-    ResizeError,
+    CurrentPublication, DeviceEvent, PresentResult, PresentSkip, Renderer, RendererError,
+    RendererInitError, ResizeError,
 };
 use winit::{
     application::ApplicationHandler,
@@ -24,7 +24,6 @@ use winit::{
 
 use crate::{
     inspection::{InspectionStatus, cursor_pixel},
-    lifecycle::Lifecycle,
     preview::DEFAULT_PREVIEW,
     schedule::{DesktopSchedule, ResizeAction},
     ui::{install_cjk_fallback_font, show_overlay},
@@ -82,8 +81,41 @@ enum AppEvent {
     OutputStateDirty,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DesktopPhase {
+    #[default]
+    Inactive,
+    Active,
+    Stopping,
+}
+
+impl DesktopPhase {
+    const fn resume(&mut self) -> bool {
+        match self {
+            Self::Inactive => {
+                *self = Self::Active;
+                true
+            }
+            Self::Active | Self::Stopping => false,
+        }
+    }
+
+    const fn suspend(&mut self) -> bool {
+        if matches!(self, Self::Active) {
+            *self = Self::Inactive;
+            true
+        } else {
+            false
+        }
+    }
+
+    const fn is_stopping(self) -> bool {
+        matches!(self, Self::Stopping)
+    }
+}
+
 struct DesktopApp {
-    lifecycle: Lifecycle,
+    phase: DesktopPhase,
     window: Option<WindowState>,
     renderer: Option<Renderer>,
     egui_context: egui::Context,
@@ -97,7 +129,6 @@ struct DesktopApp {
     cursor_position: Option<PhysicalPosition<f64>>,
     sample_inspection: InspectionStatus,
     smoke_once: bool,
-    exit_requested: bool,
 }
 
 impl DesktopApp {
@@ -105,7 +136,7 @@ impl DesktopApp {
         let egui_context = egui::Context::default();
         install_cjk_fallback_font(&egui_context);
         Self {
-            lifecycle: Lifecycle::default(),
+            phase: DesktopPhase::default(),
             window: None,
             renderer: None,
             egui_context,
@@ -120,7 +151,6 @@ impl DesktopApp {
             sample_inspection: InspectionStatus::default(),
             smoke_once: std::env::var_os(SMOKE_ONCE_ENV)
                 .is_some_and(|value| value == OsStr::new("1")),
-            exit_requested: false,
         }
     }
 
@@ -310,7 +340,10 @@ impl DesktopApp {
         let Some(renderer) = self.renderer.as_ref() else {
             return;
         };
-        let Some([width, height]) = renderer.current_publication_extent() else {
+        let Some([width, height]) = renderer
+            .current_publication()
+            .map(CurrentPublication::extent)
+        else {
             self.sample_inspection = InspectionStatus::ViewportChanging;
             self.request_redraw();
             return;
@@ -356,7 +389,7 @@ impl DesktopApp {
             return;
         };
         let result = renderer.resize(width, height);
-        let viewport_has_current_publication = renderer.current_publication_extent().is_some();
+        let viewport_has_current_publication = renderer.current_publication().is_some();
         match result {
             Ok(()) => {
                 if width != 0 && height != 0 {
@@ -403,7 +436,6 @@ impl DesktopApp {
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: RunError) {
         if self.fatal_error.is_none() {
             tracing::error!(error = %error, "desktop runtime is stopping");
-            self.lifecycle.fail();
             self.pending_textures.clear();
             self.fatal_error = Some(error);
         }
@@ -411,8 +443,8 @@ impl DesktopApp {
     }
 
     fn request_exit(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.exit_requested {
-            self.exit_requested = true;
+        if !self.phase.is_stopping() {
+            self.phase = DesktopPhase::Stopping;
             self.pending_textures.clear();
             if let Some(window) = self.window.as_mut() {
                 window.display_monitor.shutdown();
@@ -436,7 +468,7 @@ impl DesktopApp {
 
 impl ApplicationHandler<AppEvent> for DesktopApp {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.lifecycle.resume()
+        if self.phase.resume()
             && let Err(error) = self.initialize(event_loop)
         {
             self.fail(event_loop, error);
@@ -445,7 +477,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: AppEvent) {
         match event {
-            AppEvent::RepaintAt(deadline) if !self.exit_requested => {
+            AppEvent::RepaintAt(deadline) if !self.phase.is_stopping() => {
                 self.schedule.request_repaint_at(deadline);
             }
             AppEvent::RepaintAt(_) => {}
@@ -453,7 +485,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                 if let Some(window) = self.window.as_ref() {
                     window.output_event_pending.store(false, Ordering::Release);
                 }
-                if self.exit_requested {
+                if self.phase.is_stopping() {
                     self.finish_exit(event_loop);
                     return;
                 }
@@ -475,7 +507,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
         window_id: WindowId,
         event: WindowEvent,
     ) {
-        if self.exit_requested {
+        if self.phase.is_stopping() {
             return;
         }
         let Some(window_state) = self.window.as_mut() else {
@@ -534,7 +566,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.exit_requested {
+        if self.phase.is_stopping() {
             self.finish_exit(event_loop);
             return;
         }
@@ -551,7 +583,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                     let viewport_has_current_publication = self
                         .renderer
                         .as_ref()
-                        .is_some_and(|renderer| renderer.current_publication_extent().is_some());
+                        .is_some_and(|renderer| renderer.current_publication().is_some());
                     self.sample_inspection
                         .on_publication(generation, viewport_has_current_publication);
                     self.request_redraw();
@@ -560,14 +592,22 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
                     self.completed_present_generation = Some(generation);
                 }
                 if let Some(event) = sample_inspection {
-                    let current_generation = self.renderer.as_ref().map(Renderer::generation);
+                    let current_generation = self
+                        .renderer
+                        .as_ref()
+                        .and_then(Renderer::current_publication)
+                        .map(CurrentPublication::generation);
                     if current_generation.is_some_and(|generation| {
                         self.sample_inspection.on_completion(event, generation)
                     }) {
                         self.request_redraw();
                     }
                 }
-                let current_generation = self.renderer.as_ref().map(Renderer::generation);
+                let current_generation = self
+                    .renderer
+                    .as_ref()
+                    .and_then(Renderer::current_publication)
+                    .map(CurrentPublication::generation);
                 if self.smoke_once
                     && current_generation.is_some()
                     && self.completed_present_generation == current_generation
@@ -630,7 +670,7 @@ impl ApplicationHandler<AppEvent> for DesktopApp {
 
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
         self.schedule.clear_resize();
-        if self.lifecycle.suspend()
+        if self.phase.suspend()
             && let Some(renderer) = self.renderer.as_mut()
         {
             renderer.suspend();

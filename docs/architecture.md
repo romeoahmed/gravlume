@@ -74,6 +74,8 @@ Reference 保留两个有意不同的接口：
 - `present` 只报告已提交或可恢复的 surface skip；
 - `suspend/resume` 幂等，并保留上一张完整 scene；
 - `update_output` 只换 display contract，不使 geometry generation 失效。
+- `current_publication` 一次返回 generation 与 physical extent；没有匹配当前 viewport 的完整 publication
+  时返回 `None`，调用者不分开读取可能来自不同状态的 identity 与尺寸。
 - `request_sample_inspection` 只接纳 active extent 与 published generation/extent 完全一致时的 validated
   `ImageSample`；zero extent 或 retained publication 与 active extent 不一致时拒绝。Renderer 捕获
   published generation、extent 与 sample 并返回 ticket；caller 不提供 identity、solver 或 GPU handle。
@@ -173,9 +175,10 @@ candidate、published texture 或默认 frame resource plan；精确 ABI、copy 
 
 桌面层使用 winit 0.30 `ApplicationHandler`：
 
-- `resumed` 创建或恢复 window、display monitor 与 renderer；重复 resume/suspend 幂等；
+- `resumed` 创建或恢复 window、display monitor 与 renderer；私有三态 phase 直接保存在 composition
+  root，重复 resume/suspend 幂等，不为这组浅转换维护单独模块或 public seam；
 - window event 先交给 egui，再处理应用语义；
-- 未被 egui 消费的左键释放只在 physical client extent 与 current publication extent 相等时，把有效
+- 未被 egui 消费的左键释放只在 `current_publication` 存在时，把有效
   physical cursor 映射为中心 `ImageSample`，并展示同代 published texel 与 retrace；新 publication
   使旧 generation 结果失效。只有 no-op resize 仍匹配该 extent 时，retained publication 才能结束
   viewport wait；

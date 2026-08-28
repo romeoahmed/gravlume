@@ -24,7 +24,9 @@ mod test_device;
 
 pub use capabilities::CapabilityError;
 pub use error::{DeviceEvent, DeviceEventKind, RendererError, RendererInitError, ResizeError};
-pub use renderer::{PresentResult, PresentSkip, Renderer, RendererDiagnostics, RendererUpdate};
+pub use renderer::{
+    CurrentPublication, PresentResult, PresentSkip, Renderer, RendererDiagnostics, RendererUpdate,
+};
 pub use scientific_capture::{
     ScientificCapture, ScientificCaptureError, ScientificCaptureMetadata, ScientificChannelModel,
     ScientificNumericalMetadata, ScientificPixelKind, ScientificTexel,
