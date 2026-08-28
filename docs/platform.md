@@ -18,6 +18,8 @@ Gravlume 是原生 Rust 2024 桌面应用。支持 macOS/Metal、Windows/Vulkan 
 
 平台 Cargo features 只在对应 target 增量启用：macOS 只启用 Metal，Windows/Linux 只启用 Vulkan，Linux 只启用 Wayland。Dependency 必须属于直接消费者。修改依赖后运行 `cargo tree -e features`，确认 X11 和未授权 backend 没有进入闭包。
 
+`egui-winit/accesskit` 当前不启用：[`egui-winit` 的 optional dependency](https://docs.rs/crate/egui-winit/0.36.1/source/Cargo.toml.orig)没有关闭下游默认 features，而 [`accesskit_winit` 默认闭包](https://docs.rs/crate/accesskit_winit/0.32.2/source/Cargo.toml.orig)同时启用 `winit/x11` 与 `winit/wayland`。Cargo features 只能合并，成员 crate 无法在下游重新关闭该 X11 feature；升级相关 crate 时应重审这项限制，在上游允许 backend-selective integration 前，不能用 accessibility bridge 破坏 Wayland-only 合同。
+
 ## 支持矩阵
 
 | Target                  | Backend          | 最低发布证据                                                                                     |

@@ -4,7 +4,6 @@
 
 mod app;
 mod inspection;
-mod lifecycle;
 mod preview;
 mod schedule;
 mod ui;

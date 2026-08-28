@@ -44,6 +44,25 @@ pub enum PresentResult {
     Skipped(PresentSkip),
 }
 
+/// Identifies the complete scene currently matching the physical viewport.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CurrentPublication {
+    generation: u64,
+    extent: [u32; 2],
+}
+
+impl CurrentPublication {
+    #[must_use]
+    pub const fn generation(self) -> u64 {
+        self.generation
+    }
+
+    #[must_use]
+    pub const fn extent(self) -> [u32; 2] {
+        self.extent
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct RendererUpdate {
     published_generation: Option<u64>,
@@ -494,7 +513,7 @@ impl Renderer {
         sample: ImageSample,
     ) -> Result<SampleInspectionTicket, SampleInspectionRequestError> {
         let (published, extent) = self
-            .current_publication()
+            .current_publication_parts()
             .ok_or(SampleInspectionRequestError::NoCurrentPublication)?;
         self.inspection_slot.request(
             &self.device,
@@ -606,19 +625,17 @@ impl Renderer {
         !self.timings.has_pending_readback() && self.pending_present_generation.is_none()
     }
 
-    pub const fn generation(&self) -> u64 {
-        self.extent.generation()
-    }
-
-    /// Returns the physical client extent only when the installed extent and complete publication
-    /// both exactly match it.
+    /// Returns the complete publication only while it exactly matches the physical viewport.
     #[must_use]
-    pub fn current_publication_extent(&self) -> Option<[u32; 2]> {
-        self.current_publication()
-            .map(|(_, extent)| [extent.width(), extent.height()])
+    pub fn current_publication(&self) -> Option<CurrentPublication> {
+        self.current_publication_parts()
+            .map(|(generation, extent)| CurrentPublication {
+                generation,
+                extent: [extent.width(), extent.height()],
+            })
     }
 
-    fn current_publication(&self) -> Option<(u64, RenderExtent)> {
+    fn current_publication_parts(&self) -> Option<(u64, RenderExtent)> {
         matching_publication(
             self.published_scene
                 .generation()
