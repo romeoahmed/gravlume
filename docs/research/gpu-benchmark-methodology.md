@@ -6,10 +6,11 @@
 
 ## 1. 测量对象
 
-固定 workload 为默认 Kerr surface scene、`1280×720`、full Cartesian KS、equatorial event 与
-直接 bolometric transport。资源、pipeline 和 scene 在 Criterion 计时闭包外创建；每次迭代重新
-编码并提交一张完整 candidate。该 workload 随 `surface-observable-v1` 取代旧 sky accelerator
-workload，因此两者的绝对时间不能串成同一历史序列。
+固定 workload ID 为 `full_ks_rk4_v2_bolometric_v1_1280x720`：Kerr surface scene、
+`1280×720`、full Cartesian KS RK4 v2、equatorial event 与 inverse-cube bolometric v1 direct
+transport。资源、pipeline 和 scene 在 Criterion 计时闭包外创建；每次迭代重新编码并提交一张完整
+candidate。算法、scene profile、extent 或输出语义任一改变，都必须换 workload ID；不同 ID 的绝对
+时间不能串成同一历史序列。
 
 benchmark 复用 renderer 自己的 `GpuTimings`，以一对 timestamp 包围 production trace pass。
 resolved GPU duration 通过 Criterion
@@ -59,9 +60,10 @@ run 相差约 6%，所以：
 cargo bench -p gravlume-render --bench trace_gpu --features gpu-benchmarks --locked
 ```
 
-benchmark feature 默认关闭，Criterion 不进入普通 runtime dependency closure。报告至少记录
-revision/dirty state、OS、adapter/backend、power mode、scene、extent、build profile、样本配置、
-mean/CI 和 output gate。实际 GPU memory peak 只能来自具名原生工具；`width × height × 8` 只是
+benchmark feature 默认关闭，Criterion 不进入普通 runtime dependency closure。程序会打印 workload
+ID、extent、adapter、device type、backend、driver 与 driver info；报告还必须记录 revision/dirty
+state、OS、power mode、build profile、样本配置、mean/CI 和 output gate。实际 GPU memory peak 只能
+来自具名原生工具；`width × height × 8` 只是
 logical FP16 texel payload，不能冒充 driver allocation。
 
 端到端交互性能另用 native invalidation→atomic-publish latency、batch timings 和 smoke 验证。
