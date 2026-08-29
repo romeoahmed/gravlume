@@ -64,7 +64,7 @@ Direct 与 highly bent Kerr rays 形成不同 image sequence，并有不同 rota
 
 ### 3.2 已采用的九点 source-edge witness
 
-[`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 从规范十进制输入独立重建
+[`_source_edge.py`](scripts/src/gravlume_research/checks/bl_mino/_source_edge.py) 从规范十进制输入独立重建
 canonical observer、frame 与 Photon Momentum，不导入 domain/reference crate，也不读取 CPU/GPU trace
 输出。它在 BL chart 中形成 $E,L_z,\mathcal Q$，按 Mino-separated potentials 与已分类 turning
 segments 求 event 顺序与 observable；KS coordinate-time/azimuth shift 同时使用 quadrature 与闭式
@@ -173,7 +173,7 @@ classification 与 manifestly-real 分段形式见 [Carter 1968](https://doi.org
 ### 6.2 120/180 位采用证书
 
 锁定环境中的统一 `gravlume-research bl-mino-surface` 调用
-[`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 的 separated equations，对固定九点做
+[`_source_edge.py`](scripts/src/gravlume_research/checks/bl_mino/_source_edge.py) 消费私有 separated equations，对固定九点做
 120/180 decimal-digit 完整重算；全 corpus maximum normalized delta 为
 `3.85612445201e-94`。下表列出本次补齐六点的逐 case 结果。Signed margin 定义为
 $20M-r_{\rm first\ crossing}$（Escape）或 $20M-r_{\rm source}$（Surface）；负号表示 crossing 在
