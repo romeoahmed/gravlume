@@ -25,9 +25,11 @@ Kerr 解析/半解析 terminal solver 是旁路 accelerator：它可以先建立
 ## 连续字段证据与质量政策
 
 这是当前优先级最高的开放工作。已经落地的 ordered execution seam 与 outer-edge 九点独立 witness
-关闭了当前 source-edge seed 的 semantic fields；surface/capture、critical/higher-order、spin/axis 等其余
-strata、统一 texture gate、质量方法和持久 artifact 仍未闭合，也没有扩大科学支持域。精确证据边界见
-[连续字段 corpus 记录](research/continuous-field-corpus.md)。
+关闭了当前 source-edge seed 的 semantic fields；相邻 surface/capture 与 critical/higher-order pair
+另有独立 BL/Mino 研究证书，但尚未进入 Rust/GPU agreement。negative spin、axis/extreme、统一
+texture gate、质量方法和持久 artifact 仍未闭合，也没有扩大科学支持域。精确证据边界见
+[连续字段 corpus 记录](research/continuous-field-corpus.md)与
+[critical pair 研究记录](research/critical-curve-surface-capture.md)。
 
 **交付：**
 

@@ -473,6 +473,36 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
     )
 
 
+def verify_outgoing_capture_regularization() -> None:
+    """Prove the horizon-finite outgoing radial time/azimuth identities."""
+
+    mass, radius = sp.symbols("M r", positive=True)
+    spin, impact = sp.symbols("a xi", real=True)
+    separation, radial_root = sp.symbols("K rho", positive=True)
+    delta = radius**2 - 2 * mass * radius + spin**2
+    radius_factor = radius**2 + spin**2
+    radial_factor = radius_factor - spin * impact
+    radial_relation = (radial_factor**2 - radial_root**2) / delta
+
+    direct_time = (
+        radius_factor * radial_factor / radial_root - 2 * mass * radius
+    ) / delta
+    regular_time = 1 + (
+        radius_factor * separation / (radial_root * (radial_factor + radial_root))
+    )
+    direct_azimuth = spin * (radial_factor / radial_root - 1) / delta
+    regular_azimuth = spin * separation / (radial_root * (radial_factor + radial_root))
+
+    require_zero(
+        (direct_time - regular_time).subs(separation, radial_relation),
+        "outgoing capture regular time primitive",
+    )
+    require_zero(
+        (direct_azimuth - regular_azimuth).subs(separation, radial_relation),
+        "outgoing capture regular azimuth primitive",
+    )
+
+
 def build_boundary_cases() -> tuple[BoundaryCase, ...]:
     """Return named exact points close to the three audited chart seams."""
 
@@ -694,6 +724,7 @@ def run() -> None:
     verify_cartesian_oblate_map(geometry)
     verify_bl_tangent_covector_duality(geometry)
     mino = build_and_verify_mino_system(geometry)
+    verify_outgoing_capture_regularization()
     boundary_results = verify_boundary_substitutions(geometry, mino)
 
     print(f"python={platform.python_version()}")
@@ -702,6 +733,7 @@ def run() -> None:
     print("symbolic.cartesian_oblate_map=PASS")
     print("symbolic.tangent_covector_duality=PASS")
     print("symbolic.affine_mino=PASS")
+    print("symbolic.outgoing_capture_regularization=PASS")
     print("symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing")
     print(f"symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch={mismatch}")
     print("symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591")
