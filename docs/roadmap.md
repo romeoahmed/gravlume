@@ -7,7 +7,7 @@
 下图从下一项未闭合工作开始，不把已实现能力重复列为里程碑。
 
 ```text
-连续字段 corpus + 独立证据
+闭合连续字段 corpus + 独立证据
               ↓
 具名 interactive / science-quality policy
               ↓
@@ -24,7 +24,10 @@ Kerr 解析/半解析 terminal solver 是旁路 accelerator：它可以先建立
 
 ## 连续字段证据与质量政策
 
-这是下一项已确定工作。现有 UI 证明 request、generation、资源和生命周期 seam 可用，不证明科学支持域已经扩大。
+这是当前优先级最高的开放工作。已经落地的 ordered execution seam、canonical witness 与相邻
+outer-edge pair 只证明首个切片可复算；其余 corpus、统一 texture gate、质量方法和持久 artifact
+仍未闭合，也没有扩大科学支持域。精确证据边界见
+[连续字段 corpus 记录](research/continuous-field-corpus.md)。
 
 **交付：**
 
