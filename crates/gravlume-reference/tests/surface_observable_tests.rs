@@ -46,15 +46,6 @@ fn regular_and_strict_surface_observables_close_the_vacuum_radiance_chain() {
 
 #[test]
 fn canonical_surface_matches_the_independent_bl_mino_witness() {
-    // Generated at 120/180 decimal digits by the independent separated-chart
-    // witness documented in docs/research/high-precision-bl-mino-witness.md.
-    const SOURCE_RADIUS_M: f64 = 19.650_678_984_603_292;
-    const SOURCE_AZIMUTH_RAD: f64 = 3.087_156_262_423_669;
-    const FREQUENCY_RATIO: f64 = 0.953_264_138_194_622_9;
-    const TRAVEL_TIME_M: f64 = 54.902_474_247_630_05;
-    const EMITTED_INTENSITY: f64 = 0.028_465_647_567_239_85;
-    const OBSERVED_INTENSITY: f64 = 0.023_505_748_696_197_13;
-
     let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
         .expect("repository surface fixture parses")
         .into_surface_observation()
@@ -68,45 +59,157 @@ fn canonical_surface_matches_the_independent_bl_mino_witness() {
                     .expect("fixture sample resolves through its observation"),
             )
             .expect("canonical surface source is valid");
-        assert_eq!(outcome.termination(), Termination::EquatorialSurface);
-        let branch = outcome.branch_key();
-        assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
-        assert_eq!(branch.radial_turnings(), 1);
-        assert_eq!(branch.equatorial_crossings(), 0);
-        assert_eq!(branch.azimuth_winding(), 0);
-
-        let observable = outcome
-            .terminal()
-            .surface_observable()
-            .expect("canonical trace carries its surface observable");
-        let anchor = observable.source_anchor();
-        let radial_difference = anchor.radius_m() - SOURCE_RADIUS_M;
-        let azimuth_difference =
-            (anchor.azimuth_rad() - SOURCE_AZIMUTH_RAD + PI).rem_euclid(TAU) - PI;
-        let mean_radius = anchor.radius_m().midpoint(SOURCE_RADIUS_M);
-        let source_anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
-        assert_abs_diff_eq!(source_anchor_distance_m, 0.0, epsilon = 2.0e-9);
-        assert_abs_diff_eq!(
-            observable.frequency_ratio().value(),
-            FREQUENCY_RATIO,
-            epsilon = 2.0e-9 * FREQUENCY_RATIO
-        );
-        assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
-        assert_abs_diff_eq!(
-            observable.emitted_bolometric_intensity(),
-            EMITTED_INTENSITY,
-            epsilon = 1.0e-12
-        );
-        assert_abs_diff_eq!(
-            observable.observed_bolometric_intensity(),
-            OBSERVED_INTENSITY,
-            epsilon = 1.0e-12
-        );
+        assert_independent_surface_witness(&outcome, CANONICAL_SURFACE_WITNESS);
     }
 }
 
+#[derive(Clone, Copy)]
+struct IndependentEscapeWitness {
+    position_xyz_m: [f64; 3],
+    direction_xyz: [f64; 3],
+    travel_time_m: f64,
+}
+
+#[derive(Clone, Copy)]
+struct IndependentSurfaceWitness {
+    source_radius_m: f64,
+    source_azimuth_rad: f64,
+    frequency_ratio: f64,
+    travel_time_m: f64,
+    emitted_intensity: f64,
+    observed_intensity: f64,
+}
+
+// Generated at 120/180 decimal digits by the independent separated-chart
+// witness documented in docs/research/high-precision-bl-mino-witness.md.
+const CANONICAL_SURFACE_WITNESS: IndependentSurfaceWitness = IndependentSurfaceWitness {
+    source_radius_m: 19.650_678_984_603_292,
+    source_azimuth_rad: 3.087_156_262_423_669_3,
+    frequency_ratio: 0.953_264_138_194_622_9,
+    travel_time_m: 54.902_474_247_630_05,
+    emitted_intensity: 0.028_465_647_567_239_85,
+    observed_intensity: 0.023_505_748_696_197_128,
+};
+
+#[derive(Clone, Copy)]
+enum IndependentSourceEdgeWitness {
+    Escape(IndependentEscapeWitness),
+    Surface(IndependentSurfaceWitness),
+}
+
+#[derive(Clone, Copy)]
+struct IndependentSourceEdgeCase {
+    pixel_y: u32,
+    witness: IndependentSourceEdgeWitness,
+}
+
+const INDEPENDENT_SOURCE_EDGE_CORPUS: [IndependentSourceEdgeCase; 9] = [
+    IndependentSourceEdgeCase {
+        pixel_y: 12,
+        witness: IndependentSourceEdgeWitness::Escape(IndependentEscapeWitness {
+            position_xyz_m: [
+                -170.743_537_420_571_3,
+                1.337_744_245_785_816_9,
+                -104.140_872_592_375_22,
+            ],
+            direction_xyz: [
+                -0.822_251_516_308_215_4,
+                0.005_874_201_091_296_951,
+                -0.569_093_962_092_710_7,
+            ],
+            travel_time_m: 238.406_047_718_117,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 13,
+        witness: IndependentSourceEdgeWitness::Escape(IndependentEscapeWitness {
+            position_xyz_m: [
+                -170.447_402_756_461_1,
+                1.369_244_882_783_220_7,
+                -104.624_437_497_465_04,
+            ],
+            direction_xyz: [
+                -0.820_715_680_321_071_6,
+                0.006_023_904_198_189_695,
+                -0.571_305_071_440_234_7,
+            ],
+            travel_time_m: 238.438_694_378_676_36,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 14,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.906_414_902_636_66,
+            source_azimuth_rad: 3.088_172_652_067_336_7,
+            frequency_ratio: 0.954_336_623_855_338_8,
+            travel_time_m: 55.111_445_736_567_96,
+            emitted_intensity: 0.027_382_594_561_449_43,
+            observed_intensity: 0.022_713_337_755_283_02,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 15,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.778_228_798_382_42,
+            source_azimuth_rad: 3.087_666_778_945_728,
+            frequency_ratio: 0.953_802_558_846_997_9,
+            travel_time_m: 55.006_599_298_066_206,
+            emitted_intensity: 0.027_918_466_604_424_055,
+            observed_intensity: 0.023_106_038_586_166_094,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 16,
+        witness: IndependentSourceEdgeWitness::Surface(CANONICAL_SURFACE_WITNESS),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 17,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.523_761_223_635_148,
+            source_azimuth_rad: 3.086_641_041_843_746_4,
+            frequency_ratio: 0.952_721_311_199_448_8,
+            travel_time_m: 54.799_067_017_429_486,
+            emitted_intensity: 0.029_024_402_523_646_662,
+            observed_intensity: 0.023_912_600_497_345_077,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 18,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.397_471_319_572_137,
+            source_azimuth_rad: 3.086_121_055_522_226_7,
+            frequency_ratio: 0.952_174_026_402_790_6,
+            travel_time_m: 54.696_374_090_040_83,
+            emitted_intensity: 0.029_595_003_517_611_927,
+            observed_intensity: 0.024_326_729_051_185_183,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 19,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.271_805_117_804_51,
+            source_azimuth_rad: 3.085_596_240_727_706,
+            frequency_ratio: 0.951_622_231_572_182_2,
+            travel_time_m: 54.594_391_998_135_35,
+            emitted_intensity: 0.030_177_729_768_427_544,
+            observed_intensity: 0.024_748_272_123_592_492,
+        }),
+    },
+    IndependentSourceEdgeCase {
+        pixel_y: 20,
+        witness: IndependentSourceEdgeWitness::Surface(IndependentSurfaceWitness {
+            source_radius_m: 19.146_758_504_563_227,
+            source_azimuth_rad: 3.085_066_533_659_228_7,
+            frequency_ratio: 0.951_065_873_687_221_2,
+            travel_time_m: 54.493_117_324_177_98,
+            emitted_intensity: 0.030_772_867_882_523_796,
+            observed_intensity: 0.025_177_370_240_523_023,
+        }),
+    },
+];
+
 #[test]
-fn source_edge_pair_matches_the_independent_bl_mino_witness() {
+fn source_edge_corpus_matches_the_independent_bl_mino_witness() {
     // Generated at 120/180 decimal digits by the independent separated-chart
     // witness documented in docs/research/high-precision-bl-mino-witness.md.
     let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
@@ -114,58 +217,41 @@ fn source_edge_pair_matches_the_independent_bl_mino_witness() {
         .into_surface_observation()
         .expect("fixture is a surface observation");
     let observation = fixture.observation();
-    let outside_sample = observation
-        .view()
-        .sample(640, 13, 0.5, 0.5)
-        .expect("outside source-edge sample belongs to the canonical view");
-    let inside_sample = observation
-        .view()
-        .sample(640, 14, 0.5, 0.5)
-        .expect("inside source-edge sample belongs to the canonical view");
     let oracle = ObservationTracer::baseline_v1();
 
-    for policy in [ReferencePolicy::regular_v1(), ReferencePolicy::strict_v1()] {
-        let outside = oracle
-            .trace(
-                ObservationTrace::new(
-                    TraceInputId::new(format!("source-edge-outside-{}", policy.id())),
-                    observation,
-                    outside_sample,
-                    policy,
+    for case in INDEPENDENT_SOURCE_EDGE_CORPUS {
+        let image_sample = observation
+            .view()
+            .sample(640, case.pixel_y, 0.5, 0.5)
+            .expect("certified source-edge sample belongs to the canonical view");
+        for policy in [ReferencePolicy::regular_v1(), ReferencePolicy::strict_v1()] {
+            let outcome = oracle
+                .trace(
+                    ObservationTrace::new(
+                        TraceInputId::new(format!("source-edge-{}-{}", case.pixel_y, policy.id())),
+                        observation,
+                        image_sample,
+                        policy,
+                    )
+                    .expect("source-edge trace request resolves"),
                 )
-                .expect("outside source-edge trace request resolves"),
-            )
-            .expect("outside source-edge trace succeeds");
-        assert_source_edge_escape(&outside);
-
-        let inside = oracle
-            .trace(
-                ObservationTrace::new(
-                    TraceInputId::new(format!("source-edge-inside-{}", policy.id())),
-                    observation,
-                    inside_sample,
-                    policy,
-                )
-                .expect("inside source-edge trace request resolves"),
-            )
-            .expect("inside source-edge trace succeeds");
-        assert_source_edge_surface(&inside);
+                .expect("source-edge trace succeeds");
+            match case.witness {
+                IndependentSourceEdgeWitness::Escape(witness) => {
+                    assert_independent_escape_witness(&outcome, witness);
+                }
+                IndependentSourceEdgeWitness::Surface(witness) => {
+                    assert_independent_surface_witness(&outcome, witness);
+                }
+            }
+        }
     }
 }
 
-fn assert_source_edge_escape(outcome: &ReferenceOutcome) {
-    const POSITION_XYZ_M: [f64; 3] = [
-        -170.447_402_756_461_1,
-        1.369_244_882_783_220_7,
-        -104.624_437_497_465_03,
-    ];
-    const DIRECTION_XYZ: [f64; 3] = [
-        -0.820_715_680_321_071_6,
-        0.006_023_904_198_189_695,
-        -0.571_305_071_440_234_7,
-    ];
-    const TRAVEL_TIME_M: f64 = 238.438_694_378_676_36;
-
+fn assert_independent_escape_witness(
+    outcome: &ReferenceOutcome,
+    witness: IndependentEscapeWitness,
+) {
     assert_eq!(outcome.termination(), Termination::Escape);
     let branch = outcome.branch_key();
     assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
@@ -176,7 +262,7 @@ fn assert_source_edge_escape(outcome: &ReferenceOutcome) {
     let components = outcome.state().components();
     let position_error = components[1..4]
         .iter()
-        .zip(POSITION_XYZ_M)
+        .zip(witness.position_xyz_m)
         .map(|(actual, expected)| (actual - expected).powi(2))
         .sum::<f64>()
         .sqrt();
@@ -187,12 +273,15 @@ fn assert_source_edge_escape(outcome: &ReferenceOutcome) {
         .escape_direction()
         .and_then(gravlume_reference::EscapeDirection::xyz)
         .expect("escape direction is available");
-    let expected_norm = DIRECTION_XYZ
+    let expected_norm = witness
+        .direction_xyz
         .iter()
         .map(|component| component * component)
         .sum::<f64>()
         .sqrt();
-    let expected = DIRECTION_XYZ.map(|component| component / expected_norm);
+    let expected = witness
+        .direction_xyz
+        .map(|component| component / expected_norm);
     let dot = direction
         .into_iter()
         .zip(expected)
@@ -210,17 +299,17 @@ fn assert_source_edge_escape(outcome: &ReferenceOutcome) {
         .sum::<f64>()
         .sqrt();
     assert_abs_diff_eq!(cross_norm.atan2(dot), 0.0, epsilon = 2.0e-9);
-    assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
+    assert_abs_diff_eq!(
+        outcome.travel_time_m(),
+        witness.travel_time_m,
+        epsilon = 2.0e-8
+    );
 }
 
-fn assert_source_edge_surface(outcome: &ReferenceOutcome) {
-    const SOURCE_RADIUS_M: f64 = 19.906_414_902_636_66;
-    const SOURCE_AZIMUTH_RAD: f64 = 3.088_172_652_067_336_7;
-    const FREQUENCY_RATIO: f64 = 0.954_336_623_855_338_7;
-    const TRAVEL_TIME_M: f64 = 55.111_445_736_567_96;
-    const EMITTED_INTENSITY: f64 = 0.027_382_594_561_449_43;
-    const OBSERVED_INTENSITY: f64 = 0.022_713_337_755_283_02;
-
+fn assert_independent_surface_witness(
+    outcome: &ReferenceOutcome,
+    witness: IndependentSurfaceWitness,
+) {
     assert_eq!(outcome.termination(), Termination::EquatorialSurface);
     let branch = outcome.branch_key();
     assert_eq!(branch.initial_polar_side(), PolarSide::Positive);
@@ -231,27 +320,32 @@ fn assert_source_edge_surface(outcome: &ReferenceOutcome) {
     let observable = outcome
         .terminal()
         .surface_observable()
-        .expect("inside source-edge trace carries its surface observable");
+        .expect("independently certified trace carries its surface observable");
     let anchor = observable.source_anchor();
-    let radial_difference = anchor.radius_m() - SOURCE_RADIUS_M;
-    let azimuth_difference = (anchor.azimuth_rad() - SOURCE_AZIMUTH_RAD + PI).rem_euclid(TAU) - PI;
-    let mean_radius = anchor.radius_m().midpoint(SOURCE_RADIUS_M);
+    let radial_difference = anchor.radius_m() - witness.source_radius_m;
+    let azimuth_difference =
+        (anchor.azimuth_rad() - witness.source_azimuth_rad + PI).rem_euclid(TAU) - PI;
+    let mean_radius = anchor.radius_m().midpoint(witness.source_radius_m);
     let anchor_distance_m = radial_difference.hypot(mean_radius * azimuth_difference);
     assert_abs_diff_eq!(anchor_distance_m, 0.0, epsilon = 2.0e-9);
     assert_abs_diff_eq!(
         observable.frequency_ratio().value(),
-        FREQUENCY_RATIO,
-        epsilon = 2.0e-9 * FREQUENCY_RATIO
+        witness.frequency_ratio,
+        epsilon = 2.0e-9 * witness.frequency_ratio
     );
-    assert_abs_diff_eq!(outcome.travel_time_m(), TRAVEL_TIME_M, epsilon = 2.0e-8);
+    assert_abs_diff_eq!(
+        outcome.travel_time_m(),
+        witness.travel_time_m,
+        epsilon = 2.0e-8
+    );
     assert_abs_diff_eq!(
         observable.emitted_bolometric_intensity(),
-        EMITTED_INTENSITY,
+        witness.emitted_intensity,
         epsilon = 1.0e-12
     );
     assert_abs_diff_eq!(
         observable.observed_bolometric_intensity(),
-        OBSERVED_INTENSITY,
+        witness.observed_intensity,
         epsilon = 1.0e-12
     );
 }

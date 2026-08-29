@@ -31,6 +31,7 @@ Primary mathematical sources:
 import platform
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
+from itertools import pairwise
 
 import mpmath as mp
 
@@ -44,15 +45,23 @@ SURFACE_OUTER_RADIUS_M = 20
 ESCAPE_RADIUS_M = 200
 VIEWPORT_WIDTH = 1280
 VIEWPORT_HEIGHT = 720
-CANONICAL_PIXEL = (640, 16)
-SOURCE_EDGE_OUTSIDE_PIXEL = (640, 13)
-SOURCE_EDGE_INSIDE_PIXEL = (640, 14)
-_CANONICAL_TERMINAL = "equatorial-surface"
-_CANONICAL_INITIAL_POLAR_SIDE = "positive"
-_CANONICAL_RADIAL_TURNINGS = 1
-_CANONICAL_POLAR_TURNINGS = 1
-_CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL = 0
-_CANONICAL_AZIMUTH_WINDING = 0
+_SOURCE_EDGE_PIXELS = tuple((640, pixel_y) for pixel_y in range(12, 21))
+_SOURCE_EDGE_ESCAPE_PIXELS = ((640, 12), (640, 13))
+_SOURCE_EDGE_SURFACE_PIXELS = (
+    (640, 14),
+    (640, 15),
+    (640, 16),
+    (640, 17),
+    (640, 18),
+    (640, 19),
+    (640, 20),
+)
+_SURFACE_TERMINAL = "equatorial-surface"
+_SOURCE_EDGE_INITIAL_POLAR_SIDE = "positive"
+_SOURCE_EDGE_RADIAL_TURNINGS = 1
+_SOURCE_EDGE_POLAR_TURNINGS = 1
+_SURFACE_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL = 0
+_SOURCE_EDGE_AZIMUTH_WINDING = 0
 _SOURCE_EDGE_ESCAPE_TERMINAL = "escape"
 _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS = 1
 
@@ -122,22 +131,63 @@ class _EscapeWitness:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class _SourceEdgePairWitness:
-    """One fixed outside/inside pair that brackets the canonical outer source edge."""
+class _SourceEdgeCaseWitness:
+    """One fixed pixel and its independently reconstructed terminal witness."""
 
-    outside: _EscapeWitness
-    inside: _SurfaceWitness
+    pixel: tuple[int, int]
+    witness: _SurfaceWitness | _EscapeWitness
 
     def __post_init__(self) -> None:
-        if self.outside.precision_digits != self.inside.precision_digits:
-            raise _UnsupportedWitnessError("source-edge pair mixes working precisions")
-        if not (
-            self.outside.first_equatorial_crossing_radius_m
-            > SURFACE_OUTER_RADIUS_M
-            > self.inside.source_radius_m
+        if self.pixel in _SOURCE_EDGE_ESCAPE_PIXELS:
+            expected_type = _EscapeWitness
+        elif self.pixel in _SOURCE_EDGE_SURFACE_PIXELS:
+            expected_type = _SurfaceWitness
+        else:
+            raise _UnsupportedWitnessError(
+                "pixel is not in the named source-edge corpus"
+            )
+        if type(self.witness) is not expected_type:
+            raise _UnsupportedWitnessError(
+                "source-edge case does not match its certified terminal stratum"
+            )
+
+    @property
+    def outer_edge_signed_margin_m(self) -> mp.mpf:
+        with mp.workdps(self.witness.precision_digits):
+            terminal_radius = (
+                self.witness.first_equatorial_crossing_radius_m
+                if isinstance(self.witness, _EscapeWitness)
+                else self.witness.source_radius_m
+            )
+            return mp.mpf(SURFACE_OUTER_RADIUS_M) - terminal_radius
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _SourceEdgeCorpusWitness:
+    """The fixed ordered nine-pixel corpus crossing the canonical outer edge."""
+
+    cases: tuple[_SourceEdgeCaseWitness, ...]
+
+    def __post_init__(self) -> None:
+        if tuple(case.pixel for case in self.cases) != _SOURCE_EDGE_PIXELS:
+            raise _UnsupportedWitnessError(
+                "source-edge corpus does not contain the named ordered pixels"
+            )
+        precision_digits = self.cases[0].witness.precision_digits
+        if any(
+            case.witness.precision_digits != precision_digits for case in self.cases
         ):
             raise _UnsupportedWitnessError(
-                "source-edge pair does not bracket the outer radial edge"
+                "source-edge corpus mixes working precisions"
+            )
+        margins = tuple(case.outer_edge_signed_margin_m for case in self.cases)
+        if not all(left < right for left, right in pairwise(margins)):
+            raise _UnsupportedWitnessError(
+                "source-edge corpus margins are not strictly ordered"
+            )
+        if not margins[1] < 0 < margins[2]:
+            raise _UnsupportedWitnessError(
+                "source-edge corpus does not bracket the outer radial edge"
             )
 
 
@@ -314,15 +364,15 @@ def _validate_precision_digits(precision_digits: object) -> None:
 def _validate_surface_witness(witness: _SurfaceWitness) -> None:
     _validate_precision_digits(witness.precision_digits)
     discrete_identity = (
-        (witness.terminal, _CANONICAL_TERMINAL),
-        (witness.initial_polar_side, _CANONICAL_INITIAL_POLAR_SIDE),
-        (witness.radial_turnings, _CANONICAL_RADIAL_TURNINGS),
-        (witness.polar_turnings, _CANONICAL_POLAR_TURNINGS),
+        (witness.terminal, _SURFACE_TERMINAL),
+        (witness.initial_polar_side, _SOURCE_EDGE_INITIAL_POLAR_SIDE),
+        (witness.radial_turnings, _SOURCE_EDGE_RADIAL_TURNINGS),
+        (witness.polar_turnings, _SOURCE_EDGE_POLAR_TURNINGS),
         (
             witness.equatorial_crossings_before_terminal,
-            _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL,
+            _SURFACE_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL,
         ),
-        (witness.azimuth_winding, _CANONICAL_AZIMUTH_WINDING),
+        (witness.azimuth_winding, _SOURCE_EDGE_AZIMUTH_WINDING),
     )
     if any(
         type(actual) is not type(expected) or actual != expected
@@ -391,14 +441,14 @@ def _validate_escape_witness(witness: _EscapeWitness) -> None:
     _validate_precision_digits(witness.precision_digits)
     discrete_identity = (
         (witness.terminal, _SOURCE_EDGE_ESCAPE_TERMINAL),
-        (witness.initial_polar_side, _CANONICAL_INITIAL_POLAR_SIDE),
-        (witness.radial_turnings, _CANONICAL_RADIAL_TURNINGS),
-        (witness.polar_turnings, _CANONICAL_POLAR_TURNINGS),
+        (witness.initial_polar_side, _SOURCE_EDGE_INITIAL_POLAR_SIDE),
+        (witness.radial_turnings, _SOURCE_EDGE_RADIAL_TURNINGS),
+        (witness.polar_turnings, _SOURCE_EDGE_POLAR_TURNINGS),
         (
             witness.equatorial_crossings_before_terminal,
             _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS,
         ),
-        (witness.azimuth_winding, _CANONICAL_AZIMUTH_WINDING),
+        (witness.azimuth_winding, _SOURCE_EDGE_AZIMUTH_WINDING),
     )
     if any(
         type(actual) is not type(expected) or actual != expected
@@ -1247,9 +1297,9 @@ def _compute_source_edge_escape_witness(
     return _EscapeWitness(
         precision_digits=precision_digits,
         terminal=_SOURCE_EDGE_ESCAPE_TERMINAL,
-        initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
-        radial_turnings=_CANONICAL_RADIAL_TURNINGS,
-        polar_turnings=_CANONICAL_POLAR_TURNINGS,
+        initial_polar_side=_SOURCE_EDGE_INITIAL_POLAR_SIDE,
+        radial_turnings=_SOURCE_EDGE_RADIAL_TURNINGS,
+        polar_turnings=_SOURCE_EDGE_POLAR_TURNINGS,
         equatorial_crossings_before_terminal=(_SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS),
         azimuth_winding=path.azimuth_winding,
         first_equatorial_crossing_radius_m=first_crossing_radius,
@@ -1314,12 +1364,12 @@ def _compute_surface_witness(
     )
     return _SurfaceWitness(
         precision_digits=precision_digits,
-        terminal=_CANONICAL_TERMINAL,
-        initial_polar_side=_CANONICAL_INITIAL_POLAR_SIDE,
-        radial_turnings=_CANONICAL_RADIAL_TURNINGS,
-        polar_turnings=_CANONICAL_POLAR_TURNINGS,
+        terminal=_SURFACE_TERMINAL,
+        initial_polar_side=_SOURCE_EDGE_INITIAL_POLAR_SIDE,
+        radial_turnings=_SOURCE_EDGE_RADIAL_TURNINGS,
+        polar_turnings=_SOURCE_EDGE_POLAR_TURNINGS,
         equatorial_crossings_before_terminal=(
-            _CANONICAL_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL
+            _SURFACE_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL
         ),
         azimuth_winding=path.azimuth_winding,
         source_radius_m=source_radius,
@@ -1339,37 +1389,29 @@ def _compute_surface_witness(
     )
 
 
-def _canonical_surface_witness(*, precision_digits: int) -> _SurfaceWitness:
-    """Compute the single named ordinary-region surface witness."""
+def _source_edge_corpus_witness(*, precision_digits: int) -> _SourceEdgeCorpusWitness:
+    """Compute the fixed ordered source-edge corpus from canonical inputs."""
 
     _validate_precision_digits(precision_digits)
     with mp.workdps(precision_digits):
-        pixel_x, pixel_y = CANONICAL_PIXEL
-        return _compute_surface_witness(
-            pixel_x,
-            pixel_y,
-            precision_digits,
-        )
-
-
-def _source_edge_pair_witness(*, precision_digits: int) -> _SourceEdgePairWitness:
-    """Compute the fixed adjacent outside/inside source-edge pair."""
-
-    _validate_precision_digits(precision_digits)
-    with mp.workdps(precision_digits):
-        outside_x, outside_y = SOURCE_EDGE_OUTSIDE_PIXEL
-        inside_x, inside_y = SOURCE_EDGE_INSIDE_PIXEL
-        return _SourceEdgePairWitness(
-            outside=_compute_source_edge_escape_witness(
-                outside_x,
-                outside_y,
-                precision_digits,
-            ),
-            inside=_compute_surface_witness(
-                inside_x,
-                inside_y,
-                precision_digits,
-            ),
+        return _SourceEdgeCorpusWitness(
+            cases=tuple(
+                _SourceEdgeCaseWitness(
+                    pixel=pixel,
+                    witness=(
+                        _compute_source_edge_escape_witness(
+                            *pixel,
+                            precision_digits,
+                        )
+                        if pixel in _SOURCE_EDGE_ESCAPE_PIXELS
+                        else _compute_surface_witness(
+                            *pixel,
+                            precision_digits,
+                        )
+                    ),
+                )
+                for pixel in _SOURCE_EDGE_PIXELS
+            )
         )
 
 
@@ -1418,55 +1460,51 @@ def _certify_precision_doubling(
     return maximum_delta
 
 
-def _build_precision_certificate() -> _PrecisionCertificate[_SurfaceWitness]:
-    """Recompute the canonical case at 120 and 180 digits and certify stability."""
-
-    low = _canonical_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = _canonical_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
-        maximum_delta = _certify_precision_doubling(
+def _witness_precision_pairs(
+    low: _SurfaceWitness | _EscapeWitness,
+    high: _SurfaceWitness | _EscapeWitness,
+) -> list[tuple[mp.mpf, mp.mpf]]:
+    if isinstance(low, _SurfaceWitness) and isinstance(high, _SurfaceWitness):
+        return [
             (getattr(low, field), getattr(high, field))
             for field in _SURFACE_PRECISION_FIELDS
-        )
-    return _PrecisionCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
-        witness=high,
-    )
-
-
-def _build_source_edge_pair_precision_certificate() -> _PrecisionCertificate[
-    _SourceEdgePairWitness
-]:
-    """Recompute both edge cases at 120/180 digits and certify every observable."""
-
-    low = _source_edge_pair_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = _source_edge_pair_witness(precision_digits=HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+        ]
+    if isinstance(low, _EscapeWitness) and isinstance(high, _EscapeWitness):
         value_pairs = [
-            (getattr(low.outside, field), getattr(high.outside, field))
+            (getattr(low, field), getattr(high, field))
             for field in _ESCAPE_PRECISION_FIELDS
         ]
         value_pairs.extend(
             zip(
-                low.outside.escape_position_xyz_m,
-                high.outside.escape_position_xyz_m,
+                low.escape_position_xyz_m,
+                high.escape_position_xyz_m,
                 strict=True,
             )
         )
         value_pairs.extend(
             zip(
-                low.outside.escape_direction_xyz,
-                high.outside.escape_direction_xyz,
+                low.escape_direction_xyz,
+                high.escape_direction_xyz,
                 strict=True,
             )
         )
-        value_pairs.extend(
-            (getattr(low.inside, field), getattr(high.inside, field))
-            for field in _SURFACE_PRECISION_FIELDS
-        )
+        return value_pairs
+    raise AssertionError("precision doubling changed a source-edge terminal stratum")
+
+
+def _build_source_edge_corpus_precision_certificate() -> _PrecisionCertificate[
+    _SourceEdgeCorpusWitness
+]:
+    """Recompute all nine cases at 120/180 digits and certify every observable."""
+
+    low = _source_edge_corpus_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = _source_edge_corpus_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    with mp.workdps(HIGH_PRECISION_DIGITS):
+        value_pairs = []
+        for low_case, high_case in zip(low.cases, high.cases, strict=True):
+            value_pairs.extend(
+                _witness_precision_pairs(low_case.witness, high_case.witness)
+            )
         maximum_delta = _certify_precision_doubling(value_pairs)
     return _PrecisionCertificate(
         low_precision_digits=LOW_PRECISION_DIGITS,
@@ -1535,67 +1573,55 @@ def _print_surface_observables(
     )
 
 
+def _print_escape_observables(
+    witness: _EscapeWitness,
+    *,
+    outer_edge_signed_margin: mp.mpf,
+) -> None:
+    print(
+        "first_equatorial_crossing_radius_m="
+        f"{_scientific(witness.first_equatorial_crossing_radius_m)}"
+    )
+    print(f"outer_edge_signed_margin_m={_scientific(outer_edge_signed_margin)}")
+    print(
+        "escape_position_xyz_m="
+        + ",".join(_scientific(value) for value in witness.escape_position_xyz_m)
+    )
+    print(
+        "escape_direction_xyz="
+        + ",".join(_scientific(value) for value in witness.escape_direction_xyz)
+    )
+    print(f"travel_time_m={_scientific(witness.travel_time_m)}")
+    print(
+        "escape_before_next_crossing_mino_margin="
+        f"{_scientific(witness.escape_before_next_crossing_mino_margin)}"
+    )
+
+
 def run() -> None:
-    certificate = _build_precision_certificate()
-    witness = certificate.witness
-    edge_certificate = _build_source_edge_pair_precision_certificate()
-    edge = edge_certificate.witness
-    with mp.workdps(edge_certificate.high_precision_digits):
-        outside_edge_margin = (
-            mp.mpf(SURFACE_OUTER_RADIUS_M)
-            - edge.outside.first_equatorial_crossing_radius_m
-        )
-        inside_edge_margin = (
-            mp.mpf(SURFACE_OUTER_RADIUS_M) - edge.inside.source_radius_m
-        )
+    certificate = _build_source_edge_corpus_precision_certificate()
     print(f"python={platform.python_version()}")
     print(f"mpmath={mp.__version__}")
     print(
-        "precision="
+        "source_edge_corpus_precision="
         f"{certificate.low_precision_digits},{certificate.high_precision_digits} "
         f"stable_digits>={certificate.required_stable_digits} "
         "maximum_normalized_delta="
         f"{_scientific(certificate.maximum_normalized_delta, 12)}"
     )
-    print("case=kerr-exterior-observation-v1:640:16:0.5:0.5")
-    _print_path_identity(witness)
-    _print_surface_observables(witness)
-    _print_turning_and_residuals(witness)
-    print(
-        "source_edge_precision="
-        f"{edge_certificate.low_precision_digits},"
-        f"{edge_certificate.high_precision_digits} "
-        f"stable_digits>={edge_certificate.required_stable_digits} "
-        "maximum_normalized_delta="
-        f"{_scientific(edge_certificate.maximum_normalized_delta, 12)}"
-    )
-    outside = edge.outside
-    print("case=kerr-exterior-observation-v1:640:13:0.5:0.5")
-    _print_path_identity(outside)
-    print(
-        "first_equatorial_crossing_radius_m="
-        f"{_scientific(outside.first_equatorial_crossing_radius_m)}"
-    )
-    print(f"outer_edge_signed_margin_m={_scientific(outside_edge_margin)}")
-    print(
-        "escape_position_xyz_m="
-        + ",".join(_scientific(value) for value in outside.escape_position_xyz_m)
-    )
-    print(
-        "escape_direction_xyz="
-        + ",".join(_scientific(value) for value in outside.escape_direction_xyz)
-    )
-    print(f"travel_time_m={_scientific(outside.travel_time_m)}")
-    print(
-        "escape_before_next_crossing_mino_margin="
-        f"{_scientific(outside.escape_before_next_crossing_mino_margin)}"
-    )
-    _print_turning_and_residuals(outside)
-    inside = edge.inside
-    print("case=kerr-exterior-observation-v1:640:14:0.5:0.5")
-    _print_path_identity(inside)
-    _print_surface_observables(
-        inside,
-        outer_edge_signed_margin=inside_edge_margin,
-    )
+    for case in certificate.witness.cases:
+        pixel_x, pixel_y = case.pixel
+        print(f"case=kerr-exterior-observation-v1:{pixel_x}:{pixel_y}:0.5:0.5")
+        _print_path_identity(case.witness)
+        if isinstance(case.witness, _EscapeWitness):
+            _print_escape_observables(
+                case.witness,
+                outer_edge_signed_margin=case.outer_edge_signed_margin_m,
+            )
+        else:
+            _print_surface_observables(
+                case.witness,
+                outer_edge_signed_margin=case.outer_edge_signed_margin_m,
+            )
+        _print_turning_and_residuals(case.witness)
     print("RESULT=PASS")

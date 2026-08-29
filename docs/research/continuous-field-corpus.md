@@ -1,8 +1,8 @@
-# 连续字段 corpus 首切片：执行 seam、相邻 edge pair 与独立证据边界
+# 连续字段 corpus 首切片：九点 semantic fields 与独立证据边界
 
-本文记录路线图“连续字段 corpus + 独立证据”的首个切片：已经采用的 test-only ordered batch、相邻 outer-source-edge pair、当前 source-edge seed 能证明什么，以及仍需独立 artifact 才能关闭的科学证据。它不定义 production 行为、public API、fixture profile 或质量政策；这些事实分别以[数学物理](../physics.md)、[验证合同](../validation.md)、[Reference 证据](../reference-implementation.md)和 [GPU 证据](../gpu-renderer.md)为准。
+本文记录路线图“连续字段 corpus + 独立证据”的首个切片：已经采用的 test-only ordered batch、固定九点 outer-source-edge semantic witness、当前证据能证明什么，以及仍开放的 texture、artifact 与后续科学 strata。它不定义 production 行为、public API、fixture profile 或质量政策；这些事实分别以[数学物理](../physics.md)、[验证合同](../validation.md)、[Reference 证据](../reference-implementation.md)和 [GPU 证据](../gpu-renderer.md)为准。
 
-**状态：执行 seam、一个 canonical witness 与一对相邻 outer-edge witness 已采用；完整 corpus 证据待闭合。** 当前 seed 的九点都提供 CPU regular/strict convergence 与 fresh WGSL-binary32 agreement；其中 `(640,13)` Escape、`(640,14)` Equatorial Surface 和与 v2 fixture 重合的 `(640,16)` ordinary surface 另有 separated BL/Mino high-precision witness。其余六点仍没有独立 expectation、分类 margin 和最终 texture-path gate，整个 seed 不能被称为 scientific fixture，也不能扩大 production 支持域。
+**状态：固定九点 source-edge corpus 的 semantic witness 已采用；统一 `RGBA16F` texture gate、持久 artifact 与其他 strata 未闭合。** Center-subpixel `(640,12..20)` 全部已有 separated BL/Mino 120/180 位独立证书、CPU regular/strict consumer 与 fresh WGSL-binary32 structured-field gate；正式证书的全 corpus maximum normalized delta 为 `3.85612445201e-94`。这只关闭当前九个具名 case 的 terminal、branch、source/escape、transfer、phase 与 diagnostics 语义字段，不把它们升级为持久 scientific fixture，不补齐九点统一 texture publication 证据，也不扩大 production 支持域。
 
 ## 1. 已采用决策与有限适用域
 
@@ -13,7 +13,7 @@
 - `kerr-exterior-observation-v1`：$M=1$、$a=+0.8M$、$q_e=0$、ingoing Cartesian Kerr–Schild 与 `1280×720` canonical viewport；输入只引用[唯一规范定义](../validation.md#3-kerr-exterior-observation-v1)；
 - vacuum inverse-cube bolometric equatorial surface：$r\in[6M,20M]$ 与 prograde circular emitter；模型和 $I_{\rm obs}=g^4I_{\rm em}$ 只由[验证合同](../validation.md#32-surface-observable)定义；
 - center subpixel、`x=640, y=12..20` 的九个 case；[`gpu_trace_tests/surface.rs`](../../crates/gravlume-render/src/gpu_trace_tests/surface.rs)在测试运行时要求它们同时包含 Escape 与 Equatorial Surface，并逐项比较 converged reference 与 GPU fields；
-- 其中相邻 `(640,13)/(640,14)` 分别位于 outer edge 外/内侧；前者的第一次 equatorial crossing 位于 source domain 外，随后 Escape，后者在 outer edge 内终止为 surface。两者的 root/event order、branch 和 continuous observable 由[高精度 BL/Mino witness](high-precision-bl-mino-witness.md#62-outer-edge-pair)独立约束；
+- 九点的 root/event order、branch 和 continuous observable 均由[高精度 BL/Mino witness](high-precision-bl-mino-witness.md#61-corpus-precision-certificate)独立约束；其中相邻 `(640,13)/(640,14)` 分别位于 outer edge 外/内侧，给出 signed-margin classification bracket；
 - 适用域仅是这组回归输入，不包含其像素邻域、$a<0$、$q_e\ne0$、higher-order/winding、critical curve、near-axis、near-extreme、spectral/absorbing transport 或任意 viewport。
 
 当前证据层必须保持分开：
@@ -24,7 +24,7 @@
 | CPU convergence      | 同一 Cartesian `f64` integrator 的 regular/strict outcome 收敛                                      | 独立 equation/chart witness               |
 | GPU agreement        | fresh binary32 terminal/branch、source、transfer、phase 与 diagnostics 满足适用 gate                | CPU 与 GPU 共同正确                       |
 | Texture path         | canonical v2 case 另有 `RGBA16F` 证据                                                               | 当前九点 seed 的 texture publication gate |
-| Independent artifact | 无持久 schema/artifact；`(640,13)/(640,14)/(640,16)` 有可复算 BL/Mino witness                     | 已关闭完整 source-edge science domain     |
+| Independent witness  | 九点均有可复算 BL/Mino 120/180 位证书；尚无持久 schema/artifact                                | 已关闭完整 source-edge science domain     |
 
 ## 2. Private execution seam
 
@@ -62,7 +62,7 @@ Direct 与 highly bent Kerr rays 形成不同 image sequence，并有不同 rota
 | Continuous phase       | coordinate-time duration                                                               | 独立累积 separated $t$ integral，并按 exact BL↔ingoing KS map 转换两端；使用 absolute gate                                                    |
 | Continuous diagnostics | event residual、null/$E$/$L_z$/$\mathcal Q$ max drift                                  | 每项单独验收；小 drift 不能替代 terminal、branch、source 或 radiance witness                                                                  |
 
-### 3.2 已采用的 canonical 与 outer-edge pair witness
+### 3.2 已采用的九点 source-edge witness
 
 [`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 从规范十进制输入独立重建
 canonical observer、frame 与 Photon Momentum，不导入 domain/reference crate，也不读取 CPU/GPU trace
@@ -70,18 +70,18 @@ canonical observer、frame 与 Photon Momentum，不导入 domain/reference crat
 segments 求 event 顺序与 observable；KS coordinate-time/azimuth shift 同时使用 quadrature 与闭式
 horizon primitive 交叉检查。
 
-当前 external seam 只接受 `(640,16,0.5,0.5)` ordinary surface 和固定
-`(640,13,0.5,0.5)/(640,14,0.5,0.5)` outer-edge pair。Pair 的 outside case 独立证明第一次
-equatorial crossing 位于 $r_{out}$ 之外且 Escape 早于下一次 crossing；inside case 独立恢复 surface
-Source Anchor、Frequency Ratio、coordinate time 与 bolometric radiance。两者和 canonical case 都经
-120/180 decimal-digit precision doubling，exact branch、逐 observable 结果、signed edge/event-order
-margin 与误差证书集中在[高精度 BL/Mino witness](high-precision-bl-mino-witness.md)。Reference tests 只
-消费舍入后的 expectation，并同时约束 regular/strict；这些 named cases 不是新 fixture schema、持久
-artifact、production solver 或整个九点 stencil 的授权。
+当前 research command 只接受固定 center-subpixel `(640,12..20)`：`y=12,13` 为 Escape，`y=14..20`
+为 ordinary surface。两个 outside case 独立证明第一次 equatorial crossing 位于 $r_{out}$ 之外且
+Escape 早于下一次 crossing；七个 inside case 独立恢复 Surface Source Anchor、Frequency Ratio、
+coordinate time 与 bolometric radiance。九点全部经 120/180 decimal-digit precision doubling，exact
+branch、逐 observable 结果、signed edge/event-order margin 与误差证书集中在
+[高精度 BL/Mino witness](high-precision-bl-mino-witness.md)。全 corpus maximum normalized delta 为
+`3.85612445201e-94`。Reference tests 只消费舍入后的 expectation，并同时约束 regular/strict；这些
+named cases 不是新 fixture schema、持久 artifact、production solver 或像素邻域的授权。
 
 ### 3.3 Artifact generator
 
-现有 research generator 已覆盖上述三个 named cases。继续扩展 corpus 时，它必须保持 repository 内可复算、但不进入 Cargo runtime closure：
+现有 research generator 已覆盖上述固定九点。继续扩展 corpus 时，它必须保持 repository 内可复算、但不进入 Cargo runtime closure：
 
 1. 从 canonical 十进制输入独立重建 observer event、tetrad 与 camera covector，不调用 Rust tracer，也不以 GPU 输出修正初值；
 2. 转为 Boyer–Lindquist covector，独立计算 $E,L_z,\mathcal Q$，用 separated $R(r),\Theta(\theta)$ 分类 roots 与 initial signs；
@@ -113,41 +113,154 @@ Host-shared `f32` 的 byte representation 是 binary32，不代表 runtime arith
 
 Fresh record 与 production texture 是不同 producer。`rgba16float` storage write 还会执行 `quantizeToF16`（[WGSL texel formats](https://www.w3.org/TR/WGSL/#texel-formats)），所以 binary32 corpus 不能证明最终 `RGBA16F` publication gate。Strict decoder 也必须拒绝 non-finite、unknown tag/flag 和非法 terminal-field combination；首个 corpus 不接纳依赖 subnormal 保留的 case。
 
-## 5. 当前证据与关闭条件
+## 5. 已关闭的语义切片与开放边界
 
-当前 GPU tests 已覆盖：
+当前证据链已覆盖：
 
 - regular sparse sequence 按 request order 与逐样本 retrace/reference 对应；
 - 65 个逆序 case 穿过 partial workgroup，并以重复 request 验证 multiplicity/order；
-- 九点 outer source-edge seed 同时包含 Escape 与 Surface；每点先通过 CPU regular/strict comparison，再逐 terminal 比较 fresh GPU branch、source/transfer、time 与 diagnostics；
-- 相邻 `(640,13)/(640,14)` 先由 120/180 位独立 BL/Mino witness 约束 outside/inside classification、
-  path identity、edge/event-order margin 和 terminal-specific continuous fields，再由 CPU regular/strict
-  消费 Escape position/direction/time 与 Surface source/frequency/time/radiance，并由同一 ordered GPU
-  corpus 的 fresh binary32 record 绑定 exact terminal/branch、逐字段对 reference 验收；
-- canonical `(640,16)` 由独立 BL/Mino witness 约束 path identity 与 continuous surface observable，
-  再经 CPU regular/strict 与已有 GPU/texture tests 形成一条纵向链；
+- 固定九点先由 120/180 位独立 BL/Mino witness 约束 exact path identity、edge/event-order margin 与
+  terminal-specific continuous fields；正式证书的全 corpus maximum normalized delta 为
+  `3.85612445201e-94`；
+- Reference consumer 对九点分别要求 regular/strict 满足 exact branch，以及 Escape
+  position/direction/time 或 Surface source/frequency/time/intensity 的 semantic gates；
+- ordered GPU consumer 先要求 `y=12,13` 为 Escape、`y=14..20` 为 Surface，再逐 terminal 比较 fresh
+  binary32 branch、source/transfer、time 与 diagnostics；
+- canonical `(640,16)` 另有已有 GPU/texture tests，形成独立 witness → CPU regular/strict → fresh
+  binary32 → `RGBA16F` 的完整纵向链；其他八点没有最后一层统一 texture gate；
 - production $N=1$ 与 test $N>1$ 使用同一 kernel、record ABI 和 strict decoder。
 
-仍缺：独立 schema/artifact；`(640,12)/(640,15)/(640,17..20)` 六点的 BL/Mino expectation、
-edge/competing-event margin 与逐字段 bound；具名 Metal/Vulkan 双平台 batch 证据；相邻 pair 与九点
-统一的最终 `RGBA16F` texture gate；以及 negative-spin、critical/higher-order branch 和路线图其余
-strata。
+因此已关闭的是这九个具名 sample 的 semantic fields，不是完整连续字段路线图。仍缺：持久独立
+schema/artifact；具名 Metal/Vulkan 双平台 batch 证据；九点统一的最终 `RGBA16F` texture gate；以及
+surface/capture boundary、different winding、critical/higher-order branch、negative-spin、near-axis、
+near-extreme 和路线图其余 strata。
 
-这个切片只有在以下条件同时满足后才能关闭：
+采用本语义切片所需的条件已经同时满足：
 
-- 每个 accepted case 的 discrete fields 与 independent artifact exact 一致，edge/event margin 大于保守合成误差，classifier false acceptance 为零；
+- 每个 accepted case 的 discrete fields 与 independent BL/Mino certificate exact 一致，edge/event margin 大于保守合成误差，classifier false acceptance 为零；
 - 每个 continuous field 单独满足适用 gate，不经过 tone map、display encoding、RGB aggregate 或 texture path 替代；
-- artifact 保存独立 equation/chart、precision convergence、逐字段 bound 与 generator provenance；
+- 可复算 generator 保存独立 equation/chart、precision convergence、逐字段 bound 与 provenance；
 - GPU batch 保持线性有界、输入有序和 private/test-only，不引入 production queue、solver trait、render graph 或 full-frame plane。
 
-## 6. 扩展与恢复条件
+持久 artifact 是下一层 evidence-product seam，而不是倒推本轮 semantic witness 状态的前置条件；只有
+出现真实 consumer 后才应版本化其 schema。最终 `RGBA16F` publication 也必须作为不同 producer 单独验收。
 
-下一最小切片是保持 observation、surface、viewport 与 test-only ordered execution seam 不变，为
-`(640,12)/(640,15)/(640,17..20)` 生成同型独立 expectation 和 signed margin，并让 Rust
-regular/strict 与 fresh GPU record 消费；这只关闭当前九点 seed 的 semantic fields，不顺带冻结持久
-artifact schema 或改变 WGSL ABI。随后才按独立 strata 扩展：surface/capture boundary；different
-winding/higher-order branch 与 critical curve 两侧；独立重算的 $a<0$ case；最后是
-near-axis/near-extreme root degeneracy。每层都先保存 discrete identity，再比较 continuous fields。
+## 6. 九点 semantic fields 的采用与恢复条件
+
+### 6.1 选择：补齐当前九点 source-edge field
+
+本次采用保持 observation、surface、viewport 与 test-only ordered execution seam 不变，为
+`(640,12)/(640,15)/(640,17..20)` 补齐与已有三点同型的独立 expectation 和 signed margin，并让 Rust
+regular/strict 与 fresh GPU record 消费。GPU test 原已把 `y=12..20` 作为一个有序 seed 执行；若只认证
+其中任意真子集，就会留下“同一 batch 中部分有 independent identity、部分只有 CPU/GPU agreement”
+的混合证据。补齐六点后形成一条跨 outer edge 的有符号连续场，同时没有引入新的 observation、root
+topology、transport 或 GPU protocol。
+
+本轮没有选择后续 strata：
+
+| 候选 | 额外数学/实现义务 | 本轮结论 |
+| ---- | --------------- | -------- |
+| 补齐六点 source-edge field | 与已采用 pair 相同的 pure-Kerr simple radial/polar turning segments；复用同一 BL/Mino equations、CPU outcome 与 private GPU batch | **已采用**；只扩 evidence data 与私有 generator aggregation |
+| surface/capture boundary | 需要新的 Physical Scene、horizon/surface competing-event order 与独立 margin | 后续独立 stratum，不混入本切片 |
+| different winding / higher-order / critical 两侧 | 需要多 turning segment、distance-to-critical 标签和 case-specific tolerance；direct 与 highly bent rays 不是同一路径族 | 后续独立 stratum；依据 [Kerr lensing 的 image sequence](https://arxiv.org/abs/1910.12873) |
+| $a<0$、near-axis、near-extreme | 当前 witness 把 canonical $a=+0.8$、simple roots 与非轴 chart 写入适用域；改变它们必须重新认证 physical-spin、emitter branch 与 root conditioning | 后续独立 stratum；不能由正自旋局部 stencil 外推 |
+
+Carter separability 只保证可写成 quadrature，不保证任意 root topology 可复用同一数值图；root
+classification 与 manifestly-real 分段形式见 [Carter 1968](https://doi.org/10.1103/PhysRev.174.1559)和
+[Gralla–Lupsasca 2020](https://arxiv.org/abs/1910.12881)。因此本切片选择“同拓扑闭合”，不是把 generator
+抽象成通用 Kerr solver。
+
+### 6.2 120/180 位采用证书
+
+锁定环境中的统一 `gravlume-research bl-mino-surface` 调用
+[`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 的 separated equations，对固定九点做
+120/180 decimal-digit 完整重算；全 corpus maximum normalized delta 为
+`3.85612445201e-94`。下表列出本次补齐六点的逐 case 结果。Signed margin 定义为
+$20M-r_{\rm first\ crossing}$（Escape）或 $20M-r_{\rm source}$（Surface）；负号表示 crossing 在
+outer edge 外，正号表示 surface hit 在 edge 内。`maximum normalized delta` 对 generator 声明的全部
+semantic scalar/vector lanes 取
+$|x_{120}-x_{180}|/\max(1,|x_{180}|)$ 的最大值。
+
+| Sample | Terminal | signed margin / $M$ | maximum normalized delta |
+| ------ | -------- | -----------------: | -----------------------: |
+| `(640,12)` | Escape | `-0.164713144840` | `2.34e-94` |
+| `(640,15)` | Surface | `+0.221771201618` | `8.39e-117` |
+| `(640,17)` | Surface | `+0.476238776365` | `5.12e-116` |
+| `(640,18)` | Surface | `+0.602528680428` | `4.32e-116` |
+| `(640,19)` | Surface | `+0.728194882195` | `2.04e-111` |
+| `(640,20)` | Surface | `+0.853241495437` | `5.53e-107` |
+
+六点都满足当前具名 identity：initial polar side `positive`、一个 radial turning、一个 polar turning、
+signed winding `0`；Escape 在 terminal 前有一次 equatorial crossing，Surface terminal 前为零次。
+`(640,12)` 的 Escape-before-next-crossing Mino margin 约为 `0.224620`，为正。连同已采用的
+`(640,13)/(640,14)/(640,16)`，九点 signed margin 随 `y=12..20` 严格递增，符号只在相邻
+`13/14` 之间改变。正式统一证书的 precision delta 远小于 `1e-80`；它是可复算的 semantic witness，
+但不是持久 schema/artifact。mpmath precision context、quadrature 与 root verification 的能力和限制见
+[官方文档](https://mpmath.org/doc/1.3.0/)。
+
+### 6.3 采用时的 RED 与最小 GREEN
+
+唯一新增行为属于 research generator；production tracer 和 shader 已经能执行九点。因此采用前的 RED
+固定为 Python 的 deterministic internal-seam test：
+
+```text
+test_source_edge_corpus_orders_cases_across_the_outer_edge
+```
+
+它要求 private corpus builder 返回固定顺序 `(640,12)..(640,20)`，terminal 序列为
+`Escape, Escape, Surface×7`，所有 case precision 一致，signed margins 严格递增且只在 `13/14`
+之间变号。采用前的旧实现只有 canonical builder 与 adjacent-pair builder，因此 RED 因缺少该 interface
+失败，而不是用错误 expectation 人为制造失败。最小 GREEN 把相同 topology 的具名 cases 聚合成 typed
+private tuple，并复用已有 surface/escape computation 与 per-case validation；该测试现已通过。pytest
+使用允许的最低高精度做快速 deterministic contract；120/180 位端到端证书仍由 scientific CLI 承担，
+pytest 不重复替代它。
+
+Rust 是 evidence consumer 而非新 production 行为：把现有 independent BL/Mino test 扩为九点 table，
+对六个新 case 消费舍入后的 expectation；已有 ordered GPU test 继续通过同一 `ObservationTracer` outcome
+逐项绑定 fresh record。测试只观察 terminal-specific outcome，不冻结 quadrature helper、打印格式、pass
+count 或 shader 内部步骤。
+
+### 6.4 已通过的逐层验收
+
+| 层 | 必须满足 |
+| -- | -------- |
+| Independent BL/Mino | case ID/order 与 discrete identity exact；120/180 位逐 field maximum normalized delta `<1e-80`；initial null、Mino constraint 与 chart primitive residual 各 `<10^{15-p}`；surface/edge/event-order margin 有正确符号，所有字段 real finite |
+| Classification | 九点 signed margin 严格递增；`y=12,13` 为 Escape、`y=14..20` 为 Surface；每个 accepted case 的 `|edge margin|` 大于 independent bound、CPU `2e-9 M` event-position gate 与 GPU `5e-3 M` surface-position gate 的保守合成值；最小现有 margin 是 `(640,13)` 的 `0.03524M` |
+| CPU regular/strict | terminal 与 branch exact；event position/Source Anchor `2e-9 M`、Escape direction `2e-9 rad`、Frequency Ratio relative `2e-9`、travel time `2e-8 M`、四项 drift 各 `5e-9`；独立 emitted/observed bolometric intensity 使用现有 `1e-12` absolute witness gate |
+| Fresh WGSL binary32 | terminal/branch exact且 zero false acceptance；Escape/source angle `3.82e-4 rad`、surface radius `5e-3 M`、Frequency Ratio relative `2e-3`、travel time `1e-3 M`、event residual `5e-3`、四项 drift 各 `≤0.05`、structured bolometric radiance relative `2e-3`；non-finite、flags、`Uncertain` 或非法 record 一律失败 |
+
+这些 gate 直接引用[验证合同](../validation.md#5-验收预算)，不得为了新点原地放宽。Fresh binary32
+record 与最终 `RGBA16F` texture 是不同 producer；本切片只关闭九点的 terminal-specific semantic
+fields，不声称补上 texture publication gate，也不改变 canonical v2 已有 texture evidence。
+
+### 6.5 Stable seam、WGSL layout 与并行边界
+
+- Research module 的 interface 仍是单一 `bl-mino-surface` check；case aggregation、root segments 与
+  certificate types 保持 private，不增加任意 pixel/observation 的 scientific API。一个固定 generator
+  consumer 不足以证明新的 public seam。
+- Reference expectations 留在具名 test table，不修改 fixture v1–v3 schema。没有持久 artifact consumer
+  前不预占 artifact version、producer envelope 或 migration policy。
+- Render 继续复用 `cfg(test)` 的 ordered corpus helper、同一个 `SampleInspectionKernel`、96-byte record
+  与 strict decoder；不增加 production queue、count uniform、solver trait、render graph 或 full-frame
+  semantic plane。
+- 九点只需一个 `8×8×1` workgroup，logical request/output/readback 为
+  `9×(32+96+96)=2016` bytes；每个 active invocation 独占 `index` 对应的 request/record，55 个越界 lane
+  在 `arrayLength` guard 返回。这里没有共享写入、reduction 或跨 workgroup producer/consumer，加入
+  barrier/subgroup 不会增加证据。WGSL 规定 runtime-array length 由 binding 决定，且同步 built-ins 的
+  memory/execution scope 为 Workgroup（[runtime array](https://www.w3.org/TR/WGSL/#buffer-binding-determines-runtime-sized-array-element-count)、
+  [synchronization](https://www.w3.org/TR/WGSL/#memory-semantics)）。
+- `vec4` lanes 是 host-shareable layout 合同，不是跨设备 SIMD/vectorization 保证。WGSL `f32/u32` 为
+  alignment/size `4/4`、`vec4` 为 `16/16`；Rust 必须同时保留 `#[repr(C, align(16))]` 与 size/alignment/
+  offset assertions，因为 `align` 自身不保证 field order（[WGSL layout](https://www.w3.org/TR/WGSL/#alignment-and-size)、
+  [Rust type layout](https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers)）。
+- Pixel/index/discriminant/branch words exact；continuous fields 只按上述 semantic budgets 比较。WGSL 不固定
+  rounding mode，允许 subnormal flush、reassociation 与 fusion；新 case 不能依赖 bit-exact arithmetic 或
+  subnormal 保留（[floating-point differences](https://www.w3.org/TR/WGSL/#floating-point-differences)、
+  [reassociation and fusion](https://www.w3.org/TR/WGSL/#reassociation-and-fusion)）。
+
+本切片采用后，按独立 strata 扩展：surface/capture boundary；different winding/higher-order branch
+与 critical curve 两侧；独立重算的 $a<0$ case；最后是 near-axis/near-extreme root degeneracy。每层都
+先保存 discrete identity，再比较 continuous fields。
 
 - Generator 在 root degeneracy、axis chart 或 event competition 上不能给出小于 gate 的证书时，该 case 保持 unsupported；只能由更高精度 representation、published independent implementation 或严格 interval bound 重开。
 - AoS→SoA、不同 workgroup size、subgroup operation 或多 dispatch producer/consumer，只有 correctness-approved workload 的 Metal/Vulkan profile 证明净收益且重新验证可见性后重开。

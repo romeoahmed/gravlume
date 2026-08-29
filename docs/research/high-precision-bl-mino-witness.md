@@ -1,8 +1,8 @@
-# Canonical surface 与 outer-edge pair 高精度 BL/Mino witness
+# Source-edge 九点 corpus 高精度 BL/Mino witness
 
-本文记录 `kerr-exterior-observation-v1` 上 canonical surface ray 与相邻 outer-source-edge pair 的独立高精度见证、可复算方法、失败边界与后续候选。它只是一份 research decision/evidence record，不定义 production interface、Validation Profile、fixture schema、GPU method identity 或支持域；这些合同仍分别以[数学物理](../physics.md)、[验证合同](../validation.md)、[路线图](../roadmap.md)和[连续字段 corpus 记录](continuous-field-corpus.md)为准。
+本文记录 `kerr-exterior-observation-v1` 上跨 outer source edge 的固定九点 corpus 的独立高精度见证、可复算方法、失败边界与后续候选。它只是一份 research decision/evidence record，不定义 production interface、Validation Profile、fixture schema、GPU method identity 或支持域；这些合同仍分别以[数学物理](../physics.md)、[验证合同](../validation.md)、[路线图](../roadmap.md)和[连续字段 corpus 记录](continuous-field-corpus.md)为准。
 
-**状态：canonical 与相邻 outer-edge pair 已采用；完整 corpus 与 artifact 未闭合。** 当前方法认证 `(640,16)` ordinary surface，以及 `(640,13)` Escape / `(640,14)` surface 的 center-subpixel pair。它不能授权完整九点 stencil、其他 observation、Kerr–Newman、near-critical/axis/extreme case、production BL/Mino solver 或 WGSL fast path。
+**状态：固定九点 corpus 的 semantic witness 已采用；统一 texture gate、持久 artifact 与其他 strata 未闭合。** 当前方法认证 center-subpixel `(640,12..20)`：`y=12,13` 为 Escape，`y=14..20` 为 ordinary surface，且 `(640,16)` 与 v2 canonical case 重合。它不能授权其他 observation、Kerr–Newman、near-critical/axis/extreme case、production BL/Mino solver 或 WGSL fast path。
 
 ## 1. 可否证假设
 
@@ -10,8 +10,8 @@
 
 1. 从规范十进制 Observation 独立重建的 future-directed Photon Momentum，可在 ingoing Cartesian Kerr–Schild 与 Boyer–Lindquist canonical covector 之间保持 $E,L_z,\mathcal Q$ 和 null constraint；
 2. pure Kerr separated radial/polar potentials 能给出与 Cartesian KS reference 相同的 discrete path identity，而不是只恢复接近的 terminal position；
-3. 对 simple-root surface case，分 turning segment 的 100+ decimal-digit quadrature 能独立恢复 Source Anchor、Frequency Ratio、KS coordinate-time duration 与 surface radiance；
-4. 对 outer-edge 外侧 case，第一次 equatorial crossing 的 signed radial margin、Escape 与下一 crossing 的 Mino-order margin、localized KS position、negative-affine traversal direction 和 travel time 能在同一 separated graph 中闭合；
+3. 对七个 simple-root surface case，分 turning segment 的 100+ decimal-digit quadrature 能独立恢复 Source Anchor、Frequency Ratio、KS coordinate-time duration 与 surface radiance；
+4. 对两个 outer-edge 外侧 case，第一次 equatorial crossing 的 signed radial margin、Escape 与下一 crossing 的 Mino-order margin、localized KS position、negative-affine traversal direction 和 travel time 能在同一 separated graph 中闭合；
 5. 120/180 decimal-digit 重算、turning-root conditioning 与两种 KS chart primitive evaluation 能把数值误差压到 validation gate 之下；
 6. 若上述任一 discrete identity、root/event order、constraint 或 precision-doubling gate 失败，该 case 必须保持 unsupported，不能用 CPU/GPU agreement 替代。
 
@@ -52,16 +52,16 @@ U(\mu)=\eta+(a^2-\eta-b^2)\mu^2-a^2\mu^4,
 \left(\frac{d\mu}{d\tau}\right)^2=U.
 \]
 
-脚本先从 initial Hamilton tangent 决定 radial/polar sign，再分类 quartic roots；不从 backward traversal、position 或 `signum(0)` 猜 branch。三个具名 case 的 exact discrete identity 为：
+脚本先从 initial Hamilton tangent 决定 radial/polar sign，再分类 quartic roots；不从 backward traversal、position 或 `signum(0)` 猜 branch。固定 corpus 的 exact discrete identity 为：
 
-| 字段                                 | `(640,16)` ordinary | `(640,13)` outside | `(640,14)` inside |
-| ------------------------------------ | ------------------- | ------------------ | ----------------- |
-| terminal                             | surface             | Escape             | surface           |
-| initial polar side                   | `positive`          | `positive`         | `positive`        |
-| radial turnings                      | `1`                 | `1`                | `1`               |
-| polar turnings                       | `1`                 | `1`                | `1`               |
-| equatorial crossings before terminal | `0`                 | `1`                | `0`               |
-| signed azimuth winding               | `0`                 | `0`                | `0`               |
+| 字段                                 | `(640,12..13)` outside | `(640,14..20)` inside |
+| ------------------------------------ | --------------------- | ---------------------- |
+| terminal                             | Escape                | surface                |
+| initial polar side                   | `positive`            | `positive`             |
+| radial turnings                      | `1`                   | `1`                    |
+| polar turnings                       | `1`                   | `1`                    |
+| equatorial crossings before terminal | `1`                   | `0`                    |
+| signed azimuth winding               | `0`                   | `0`                    |
 
 Terminal surface crossing 本身不计入“before terminal”的 crossing count，与 Reference branch-key 提交语义一致。Polar turning 是独立 witness 保存的 path identity；当前 Rust branch key 没有该字段。
 
@@ -122,11 +122,11 @@ d\phi_s=d\phi_B+\frac a\Delta dr.
 
 Chart shift 只依赖 endpoints；radial turning 的往返部分精确抵消。脚本同时以直接 quadrature 和 subextremal horizon-log primitive 计算这两个 shift，并报告 normalized disagreement。Source Frequency Ratio 和 bolometric radiance 按[数学物理合同](../physics.md#7-frequency-与-radiative-transfer)独立计算，不从 fixture RGB 或 GPU output 反推。
 
-Outer-edge pair 另把第一次 equatorial crossing 解在 source outer radius 两侧。Outside case 必须证明 crossing 位于 $20M$ 之外，且 $R_{esc}=200M$ 先于下一次 equatorial crossing；随后把 BL endpoint tangent 转为 ingoing Cartesian KS，并按 reference 的 negative-affine traversal orientation 归一化 Escape direction。Position、direction 与 travel time 分别验收，不用 preview RGB 替代。
+九点 corpus 把每个 terminal radial value 映射为相对 $20M$ outer edge 的 signed margin，并要求随 `pixel_y=12..20` 严格递增；`y=13/14` 的相邻负/正 margin 给出分类 bracket。两个 outside case 还必须证明 crossing 位于 $20M$ 之外，且 $R_{esc}=200M$ 先于下一次 equatorial crossing；随后把 BL endpoint tangent 转为 ingoing Cartesian KS，并按 reference 的 negative-affine traversal orientation 归一化 Escape direction。Position、direction 与 travel time 分别验收，不用 preview RGB 替代。
 
 ## 6. 认证条件与 120/180 十进制位结果
 
-研究环境要求 Python 3.10 或更高版本；精确依赖版本以 [`pyproject.toml`](scripts/pyproject.toml)与 [`uv.lock`](scripts/uv.lock) 为准，不把一次复算所用的 Python patch 版本写成算法合同。每次结果必须先满足以下认证条件：
+研究环境要求 Python 3.14 或更高版本；精确依赖版本以 [`pyproject.toml`](scripts/pyproject.toml)与 [`uv.lock`](scripts/uv.lock) 为准，不把一次复算所用的 Python patch 版本写成算法合同。每次结果必须先满足以下认证条件：
 
 - terminal、initial side、turning/crossing counts 与 winding 精确等于第 3 节的对应 discrete identity；
 - 所有连续字段为 real finite；surface source 位于 $[6M,20M]$，Escape position 位于 $R_{esc}$、direction normalized/outward，edge 与 event-order margin 符号正确；有物理正号要求的 observable 与 conditioning 严格为正；
@@ -138,59 +138,48 @@ Outer-edge pair 另把第一次 equatorial crossing 解在 source outer radius �
 
 其中 $p$ 是 working decimal digits，15 位作为 guard。任一条件失败都不给出通过证书。mpmath precision context、finite 检查与数值比较的实现依据集中在[一手来源](#11-一手来源)，私有 Python record、函数名与测试结构不属于研究结论。
 
-### 6.1 Canonical surface
+### 6.1 Corpus precision certificate
 
-120 与 180 decimal-digit 两次完整重算分别先通过同一个 exact canonical identity seam，再比较 source/transfer/phase、constants of motion 及 radial/polar turning derivatives；所有 normalized delta 先要求 finite。最大值为：
+120 与 180 decimal-digit 两次完整重算先各自通过 exact corpus identity、signed-margin ordering、event order、finite/physical-value、turning-root 与 residual gate，再逐 case 比较全部 source/transfer/phase fields、Escape vector lanes、constants of motion 和 turning derivatives。整个 corpus 的最大 normalized delta 为 `3.85612445201e-94`，超过要求的 80 stable decimal digits。
 
-```text
-2.84198169412e-116
-```
+180 位运行的 terminal radial field、outer-edge signed margin 与 travel time 如下；表格只显示供审阅的有效位，CLI 会输出主要 source/escape/transfer/phase observable 的 110 位文本：
 
-180 位运行保留的主要输出如下；显示位数少于 working precision，但远高于 binary64：
+| pixel | terminal | crossing/source radius $/M$ | signed margin $/M$ | travel time $/M$ |
+| ----- | -------- | --------------------------: | -----------------: | ----------------: |
+| 12    | Escape   | 20.164713144839971847       | -0.164713144839971847 | 238.406047718117012 |
+| 13    | Escape   | 20.035241577257517150       | -0.035241577257517150 | 238.438694378676361 |
+| 14    | surface  | 19.906414902636657675       | 0.093585097363342325  | 55.111445736567960  |
+| 15    | surface  | 19.778228798382417869       | 0.221771201617582131  | 55.006599298066207  |
+| 16    | surface  | 19.650678984603292402       | 0.349321015396707598  | 54.902474247630054  |
+| 17    | surface  | 19.523761223635148545       | 0.476238776364851455  | 54.799067017429487  |
+| 18    | surface  | 19.397471319572138440       | 0.602528680427861560  | 54.696374090040828  |
+| 19    | surface  | 19.271805117804512272       | 0.728194882195487728  | 54.594391998135353  |
+| 20    | surface  | 19.146758504563225500       | 0.853241495436774500  | 54.493117324177979  |
 
-```text
-source_radius_m=19.650678984603292401979974641605230299041623565323313117936548513382249668946276890048582220807888696663401564
-source_azimuth_rad=3.0871562624236691978088921179317878660145706182501492328189946911311491495070169991747041709053874960130102662
-frequency_ratio=0.95326413819462285789527508811632595633667388809241237167378175163595970034762335101213042362744948362044209166
-travel_time_m=54.902474247630053841777238380553092247364224368644429474406867691088764431638153286622246820521818044574301422
-emitted_bolometric_intensity=0.028465647567239848463048432243762537365965395227154871892176970966564958642363544152492872077320420261682581790
-observed_bolometric_intensity=0.023505748696197128508784777489376183681874993000970528536248652660575945459339356874036049870753785112414387513
-energy=0.96609791588563310122334760012182709671623780961475185717111104084186357155978342318687688893224572025401175692
-impact_parameter=-0.097077403034846176173748571716234534524033968006103986458653222851983509233574937910244025566519010090379433865
-carter_parameter=130.33773934131547879531639059882714720394238555932693290625932484496191771867535611756462700122611718710644936
-```
+七个 surface case 的其余 consumer observable 为：
 
-Conditioning 与 constraint diagnostics：
+| pixel | source azimuth / rad | frequency ratio | emitted intensity | observed intensity |
+| ----- | -------------------: | --------------: | ----------------: | -----------------: |
+| 14 | 3.088172652067336683 | 0.954336623855338749 | 0.027382594561449430 | 0.022713337755283022 |
+| 15 | 3.087666778945727741 | 0.953802558846997944 | 0.027918466604424057 | 0.023106038586166092 |
+| 16 | 3.087156262423669198 | 0.953264138194622858 | 0.028465647567239848 | 0.023505748696197129 |
+| 17 | 3.086641041843746459 | 0.952721311199448859 | 0.029024402523646663 | 0.023912600497345078 |
+| 18 | 3.086121055522226600 | 0.952174026402790559 | 0.029595003517611926 | 0.024326729051185183 |
+| 19 | 3.085596240727705795 | 0.951622231572182167 | 0.030177729768427544 | 0.024748272123592492 |
+| 20 | 3.085066533659228475 | 0.951065873687221144 | 0.030772867882523797 | 0.025177370240523024 |
 
-```text
-radial_turning_derivative=1902.5746415344517763
-polar_turning_derivative=261.96471835640187990
-initial_null_residual=2.99768672025e-181
-mino_constraint_residual=1.44183089292e-180
-chart_primitive_residual=7.22975959531e-181
-```
-
-### 6.2 Outer-edge pair
-
-Pair certificate 同时重算 outside/inside 的全部 semantic fields、Escape position/direction lanes、source/transfer/phase 与 conditioning。最大 normalized delta 为 `3.85612445201e-94`，超过要求的 80 stable decimal digits。180 位主要结果：
+两个 Escape case 的 endpoint fields 与 competing-event margin 为：
 
 ```text
-outside=(640,13) terminal=escape crossings=1
-first_crossing_radius_m=20.0352415772575171500624302418
-outer_edge_signed_margin_m=-0.0352415772575171500624302418
-escape_position_xyz_m=(-170.44740275646108545,1.36924488278322070,-104.62443749746503348)
-escape_direction_xyz=(-0.82071568032107155,0.00602390419818969,-0.57130507144023473)
-travel_time_m=238.43869437867636128
-escape_before_next_crossing_mino_margin=0.22493106732856668234
-
-inside=(640,14) terminal=equatorial-surface crossings=0
-source_radius_m=19.9064149026366576745254702082
-outer_edge_signed_margin_m=0.0935850973633423254745297918
-source_azimuth_rad=3.0881726520673366834001641677
-frequency_ratio=0.9543366238553387492793786680
-travel_time_m=55.1114457365679603363977638103
-observed_bolometric_intensity=0.0227133377552830216082509940
+y=12 position=(-170.743537420571297,1.337744245785817,-104.140872592375216)
+     direction=(-0.822251516308215,0.005874201091297,-0.569093962092711)
+     escape_before_next_crossing_mino_margin=0.224619765654128162
+y=13 position=(-170.447402756461085,1.369244882783221,-104.624437497465033)
+     direction=(-0.820715680321072,0.006023904198190,-0.571305071440235)
+     escape_before_next_crossing_mino_margin=0.224931067328566682
 ```
+
+每个 case 还输出 $E,b,\eta$、radial/polar simple-root derivative 与 initial-null/Mino/chart residual。所有 180 位 residual 均通过 $10^{-165}$ 门槛；它们是方程与条件性诊断，不替代上表的 observable comparison。
 
 `polyroots` 的官方合同指出 multiple/ill-conditioned roots 需要额外 precision 与 convergence study；脚本因此把 root classification、simple-root derivative 和完整 precision doubling 分开保存，而不把一次 `polyroots` return 当作充分证明。[mpmath polynomial roots](https://mpmath.org/doc/1.3.0/calculus/polynomials.html) `findroot(..., verify=True)` 只验证求得点的 residual，仍不替代 bracket/root-topology 证据。[mpmath root finding](https://mpmath.org/doc/1.3.0/calculus/optimization.html)
 
@@ -198,11 +187,11 @@ observed_bolometric_intensity=0.0227133377552830216082509940
 
 [`surface_observable_tests.rs`](../../crates/gravlume-reference/tests/surface_observable_tests.rs) 将上述 expectation 舍入到 binary64，并要求 `reference-regular-v1` 与 `reference-strict-v1` 同时满足 exact branch、Escape position/direction/time、surface source/frequency/time/intensity gates。Source Anchor 只应用[验证合同定义的二维 wrapped surface-distance gate](../validation.md#52-reference-agreement)，不把 radial/azimuth component tolerance 分开后同时放行。它不改变 v2 fixture 的 schema、profile、producer 字段或旧 expected。
 
-统一 CLI 直接复算固定 canonical/edge pair，并在构造证书时验证 precision、discrete identity、event
+统一 CLI 直接复算固定九点 corpus，并在构造证书时验证 precision、discrete identity、event
 margin、unit/outward direction 与 residual threshold。该模块不发布通用 scientific API；连续量使用显式
 semantic gate，验证不冻结私有 record、辅助函数或打印格式。
 
-Renderer 已有 canonical v2 的 fresh binary32 fields 与最终 `RGBA16F` gate；ordered corpus 也包含相邻 pair，并逐项比较 fresh binary32 terminal/branch/continuous fields。因此当前证据链是：
+Renderer 已有 canonical v2 的 fresh binary32 fields 与最终 `RGBA16F` gate；ordered corpus 对全部九点逐项比较 fresh binary32 terminal/branch/continuous fields。因此当前证据链是：
 
 ```text
 independent BL/Mino 120/180 digits
@@ -211,7 +200,7 @@ independent BL/Mino 120/180 digits
   -> RGBA16F texture (canonical only)
 ```
 
-CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 BL equations。Pair 尚无统一的最终 `RGBA16F` texture gate。没有 WGSL、buffer ABI、workgroup、dispatch 或 publication 改动：现有 runtime-array kernel 已满足 host-shareable `vec4` layout、每 invocation 独占 record 与 partial-workgroup guard，本次科学增量不以未测 AoS→SoA、subgroup 或 workgroup-size 改写混入证据提交。
+CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 BL equations。除 canonical v2 外，corpus 尚无统一的最终 `RGBA16F` texture gate。没有 WGSL、buffer ABI、workgroup、dispatch 或 publication 改动：现有 runtime-array kernel 已满足 host-shareable `vec4` layout、每 invocation 独占 record 与 partial-workgroup guard，本次科学增量不以未测 AoS→SoA、subgroup 或 workgroup-size 改写混入证据提交。
 
 ## 8. 后续候选
 
@@ -224,7 +213,7 @@ CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 
 
 ## 9. 不支持域与恢复条件
 
-当前方法只接受 `(640,16)` ordinary surface 与固定 `(640,13)/(640,14)` pair，并拒绝：
+当前方法只接受固定 `(640,12..20)` center-subpixel corpus，并拒绝：
 
 - 不是 canonical ingoing pure Kerr Observation 的输入；
 - initial sign、root topology 或 event order 不符合本记录的单 radial/polar turning case；
@@ -232,7 +221,7 @@ CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 
 - surface crossing 不在 `[6M,20M]`，或 Escape case 无法证明 first crossing 在外缘之外且 escape 早于下一 crossing，或 horizon/singularity/event competition 可能更早；
 - axis、near-axis、extreme/near-extreme、multiple/near-multiple roots；
 - precision doubling 不能保留至少 80 个 normalized decimal digits，或任一 normalized delta 非 finite；
-- sample 不是上述 canonical viewport 的具名整数 pixel/pair；
+- sample 不是上述 canonical viewport 的九个具名整数 pixel；
 - terminal/branch 不精确匹配对应具名 case；
 - 任一连续字段非 finite、surface/escape/event-order margin 非法、物理正号非法，或 null/Mino/chart primitive residual 达不到 $p-15$ 位。
 
