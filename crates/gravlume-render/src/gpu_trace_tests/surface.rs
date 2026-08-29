@@ -112,15 +112,13 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
         .collect::<Vec<_>>();
     let retraces = capture_sample_corpus(observation, &samples);
     let oracle = ObservationTracer::baseline_v1();
-    let mut escape_count = 0;
-    let mut surface_count = 0;
 
     assert_eq!(retraces.len(), samples.len());
     for (image_sample, gpu) in samples.into_iter().zip(retraces) {
         let reference = trace_converged_surface_edge(oracle, observation, image_sample);
         let [_, pixel_y] = image_sample.pixel();
-        // Every case is independently certified by the separated BL/Mino
-        // witness in docs/research/scripts; GPU fields remain compared below.
+        // The independent BL/Mino witness certifies every discrete identity below; fresh GPU
+        // fields are then compared with the converged Reference outcome.
         let (expected_terminal, expected_crossings) = match pixel_y {
             12 | 13 => (Termination::Escape, 1),
             14..=20 => (Termination::EquatorialSurface, 0),
@@ -137,16 +135,8 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
             expected_crossings
         );
         assert_eq!(reference.branch_key().azimuth_winding(), 0);
-        match reference.termination() {
-            Termination::Escape => escape_count += 1,
-            Termination::EquatorialSurface => surface_count += 1,
-            terminal => panic!("{image_sample:?}: unexpected reference terminal {terminal:?}"),
-        }
         super::assert_retrace_matches_reference(image_sample, &reference, gpu);
     }
-
-    assert_eq!(escape_count, 2, "corpus escape stratum changed");
-    assert_eq!(surface_count, 7, "corpus surface stratum changed");
 }
 
 fn trace_converged_surface_edge(

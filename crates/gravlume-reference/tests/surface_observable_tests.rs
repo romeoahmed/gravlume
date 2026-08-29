@@ -210,8 +210,6 @@ const INDEPENDENT_SOURCE_EDGE_CORPUS: [IndependentSourceEdgeCase; 9] = [
 
 #[test]
 fn source_edge_corpus_matches_the_independent_bl_mino_witness() {
-    // Generated at 120/180 decimal digits by the independent separated-chart
-    // witness documented in docs/research/high-precision-bl-mino-witness.md.
     let fixture = FixtureDocument::parse_toml(SURFACE_OBSERVABLE)
         .expect("repository surface fixture parses")
         .into_surface_observation()
@@ -224,27 +222,37 @@ fn source_edge_corpus_matches_the_independent_bl_mino_witness() {
             .view()
             .sample(640, case.pixel_y, 0.5, 0.5)
             .expect("certified source-edge sample belongs to the canonical view");
-        for policy in [ReferencePolicy::regular_v1(), ReferencePolicy::strict_v1()] {
-            let outcome = oracle
+        let input_id = TraceInputId::new(format!("source-edge-640-{}", case.pixel_y));
+        let trace = |policy| {
+            oracle
                 .trace(
-                    ObservationTrace::new(
-                        TraceInputId::new(format!("source-edge-{}-{}", case.pixel_y, policy.id())),
-                        observation,
-                        image_sample,
-                        policy,
-                    )
-                    .expect("source-edge trace request resolves"),
+                    ObservationTrace::new(input_id.clone(), observation, image_sample, policy)
+                        .expect("source-edge trace request resolves"),
                 )
-                .expect("source-edge trace succeeds");
+                .expect("source-edge trace succeeds")
+        };
+        let regular = trace(ReferencePolicy::regular_v1());
+        let strict = trace(ReferencePolicy::strict_v1());
+
+        for outcome in [&regular, &strict] {
             match case.witness {
                 IndependentSourceEdgeWitness::Escape(witness) => {
-                    assert_independent_escape_witness(&outcome, witness);
+                    assert_independent_escape_witness(outcome, witness);
                 }
                 IndependentSourceEdgeWitness::Surface(witness) => {
-                    assert_independent_surface_witness(&outcome, witness);
+                    assert_independent_surface_witness(outcome, witness);
                 }
             }
         }
+
+        let comparison = ReferenceComparison::baseline_v1(&regular, &strict)
+            .expect("regular and strict requests have the same certified input");
+        assert!(
+            comparison.is_accepted(),
+            "source-edge pixel y={} failed regular/strict convergence: {:?}",
+            case.pixel_y,
+            comparison.issues()
+        );
     }
 }
 
