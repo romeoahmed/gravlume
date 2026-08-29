@@ -6,10 +6,8 @@ from fractions import Fraction
 import mpmath as mp
 import pytest
 
-from gravlume_research.checks.kerr_elliptic import (
+from gravlume_research.checks.kerr_elliptic._carlson import (
     _build_carlson_certificate,
-    _build_topology_certificate,
-    _build_topology_report,
     _carlson_definition,
     _carlson_difference_report,
     _CarlsonDecision,
@@ -17,11 +15,42 @@ from gravlume_research.checks.kerr_elliptic import (
     _homogeneity_residual,
     _rd_duplication_residual,
     _rj_duplication_residual,
+    _UnsupportedCarlsonError,
+)
+from gravlume_research.checks.kerr_elliptic._topology import (
+    _build_topology_certificate,
+    _build_topology_report,
     _TopologyCase,
     _TopologyDecision,
-    _UnsupportedCarlsonError,
     _UnsupportedTopologyError,
 )
+
+
+def _rd_duplication_without_additive_term() -> mp.mpf:
+    with mp.workdps(180):
+        x, y, z = mp.mpf("0.5"), mp.mpf("1.25"), mp.mpf("2.75")
+        root_x, root_y, root_z = mp.sqrt(x), mp.sqrt(y), mp.sqrt(z)
+        duplication = root_x * root_y + root_y * root_z + root_z * root_x
+        reduced = tuple((value + duplication) / 4 for value in (x, y, z))
+        left = mp.elliprd(x, y, z)
+        incomplete = mp.elliprd(*reduced) / 4
+        return abs(left - incomplete) / max(mp.mpf(1), abs(left))
+
+
+def _rj_duplication_without_rc_correction() -> mp.mpf:
+    with mp.workdps(180):
+        x, y, z, p = (
+            mp.mpf("0.5"),
+            mp.mpf("1.25"),
+            mp.mpf("2.75"),
+            mp.mpf("1.75"),
+        )
+        root_x, root_y, root_z = mp.sqrt(x), mp.sqrt(y), mp.sqrt(z)
+        duplication = root_x * root_y + root_y * root_z + root_z * root_x
+        reduced = tuple((value + duplication) / 4 for value in (x, y, z, p))
+        left = mp.elliprj(x, y, z, p)
+        incomplete = mp.elliprj(*reduced) / 4
+        return abs(left - incomplete) / max(mp.mpf(1), abs(left))
 
 
 def test_radial_topology_rejects_near_double_root_without_margin() -> None:
@@ -181,13 +210,13 @@ def test_carlson_oracle_rejects_wrong_homogeneity_degree() -> None:
 
 
 def test_carlson_oracle_detects_missing_rd_additive_term() -> None:
-    assert _rd_duplication_residual(include_additive_term=True) < mp.mpf("1e-100")
-    assert _rd_duplication_residual(include_additive_term=False) > mp.mpf("0.1")
+    assert _rd_duplication_residual() < mp.mpf("1e-100")
+    assert _rd_duplication_without_additive_term() > mp.mpf("0.1")
 
 
 def test_carlson_oracle_detects_missing_rj_rc_correction() -> None:
-    assert _rj_duplication_residual(include_rc_correction=True) < mp.mpf("1e-100")
-    assert _rj_duplication_residual(include_rc_correction=False) > mp.mpf("0.1")
+    assert _rj_duplication_residual() < mp.mpf("1e-100")
+    assert _rj_duplication_without_rc_correction() > mp.mpf("0.1")
 
 
 def test_carlson_oracle_does_not_treat_rd_as_fully_symmetric() -> None:
