@@ -62,7 +62,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - CPU surface geometry 仍以一个默认 Kerr image neighborhood 为主；固定 outer-edge 九点已有独立
   high-precision terminal/continuous witness，critical surface/capture pair 的高精度研究层也已存在，
   具名 negative-spin sample 也有独立 continuous witness，但后二者对应的 Rust regular/strict/GPU
-  ladder 均未闭合。更广 Kerr–Newman 参数、near-axis/near-extreme 以及独立 artifact/Jacobi oracle 仍缺；
+  ladder 均未闭合。near-axis/near-extreme 另有只认证 conservative fallback 的 research condition
+  report；production classifier、接受态 observable 与 GPU routing 仍缺。更广 Kerr–Newman 参数以及
+  独立 artifact/Jacobi oracle 也仍缺；
 - 当前 slab 是 terminal analytic operator，不沿 volume ray 积分变化的 invariant coefficients；它不能
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。

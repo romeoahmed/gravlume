@@ -29,6 +29,7 @@ from .._binary32 import (
     next_up,
     round_binary32,
 )
+from .._interval_f32 import IntervalF32, exact_fraction, interval_contains
 from .._sympy import require_polynomial_equal
 
 type ExactScalar = sp.Expr | Fraction
@@ -169,95 +170,6 @@ def verify_bernstein_transform(model: KerrRadialModel) -> None:
         (parameter,),
         "degree-four Bernstein partition of unity",
     )
-
-
-def ftz_safe_lower(value: float) -> float:
-    """Widen a lower bound across implementations that may flush subnormals."""
-
-    if not math.isfinite(value) or abs(value) >= MIN_NORMAL:
-        return value
-    return -MIN_NORMAL if value <= 0.0 else 0.0
-
-
-def ftz_safe_upper(value: float) -> float:
-    """Widen an upper bound across implementations that may flush subnormals."""
-
-    if not math.isfinite(value) or abs(value) >= MIN_NORMAL:
-        return value
-    return MIN_NORMAL if value >= 0.0 else 0.0
-
-
-def outward_lower(value: float) -> float:
-    return ftz_safe_lower(next_down(round_binary32(value)))
-
-
-def outward_upper(value: float) -> float:
-    return ftz_safe_upper(next_up(round_binary32(value)))
-
-
-@dataclass(frozen=True, slots=True)
-class IntervalF32:
-    lower: float
-    upper: float
-
-    def __post_init__(self) -> None:
-        if math.isnan(self.lower) or math.isnan(self.upper) or self.lower > self.upper:
-            raise ValueError(f"invalid interval [{self.lower}, {self.upper}]")
-
-    @classmethod
-    def point(cls, value: float) -> IntervalF32:
-        packed = round_binary32(value)
-        if not math.isfinite(packed):
-            raise ValueError("an interval input must be finite")
-        return cls(packed, packed)
-
-    @classmethod
-    def rational(cls, numerator: int, denominator: int) -> IntervalF32:
-        exact = numerator / denominator
-        return cls(outward_lower(exact), outward_upper(exact))
-
-    def add(self, other: IntervalF32) -> IntervalF32:
-        return IntervalF32(
-            outward_lower(self.lower + other.lower),
-            outward_upper(self.upper + other.upper),
-        )
-
-    def sub(self, other: IntervalF32) -> IntervalF32:
-        return IntervalF32(
-            outward_lower(self.lower - other.upper),
-            outward_upper(self.upper - other.lower),
-        )
-
-    def mul(self, other: IntervalF32) -> IntervalF32:
-        products = (
-            self.lower * other.lower,
-            self.lower * other.upper,
-            self.upper * other.lower,
-            self.upper * other.upper,
-        )
-        return IntervalF32(outward_lower(min(products)), outward_upper(max(products)))
-
-    def square(self) -> IntervalF32:
-        if self.lower <= 0.0 <= self.upper:
-            maximum = max(self.lower * self.lower, self.upper * self.upper)
-            return IntervalF32(0.0, outward_upper(maximum))
-        products = (self.lower * self.lower, self.upper * self.upper)
-        return IntervalF32(outward_lower(min(products)), outward_upper(max(products)))
-
-    def scale_rational(self, numerator: int, denominator: int) -> IntervalF32:
-        return self.mul(IntervalF32.rational(numerator, denominator))
-
-
-def exact_fraction(value: float) -> Fraction:
-    if not math.isfinite(value):
-        raise ValueError("infinite values have no finite rational representation")
-    return Fraction(value)
-
-
-def interval_contains(interval: IntervalF32, exact: Fraction) -> bool:
-    lower_ok = interval.lower == -math.inf or exact_fraction(interval.lower) <= exact
-    upper_ok = interval.upper == math.inf or exact <= exact_fraction(interval.upper)
-    return lower_ok and upper_ok
 
 
 def check_interval_primitives(left: float, right: float) -> None:

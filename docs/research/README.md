@@ -18,6 +18,7 @@
 | [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | 九点 corpus 已采用          | `(640,12..20)` 独立约束 branch、margin、Escape/source/transfer/phase                           |
 | [Critical surface/capture 证书](critical-curve-surface-capture.md)         | P1/P2 研究层已闭合          | 相邻 critical 两侧、event order、higher-order/winding 已有独立证书；Rust/GPU 支持仍开放        |
 | [负自旋连续字段证书](negative-spin-continuous-witness.md)                 | P0 研究层已闭合             | signed spin/chart/emitter branch 与 source/phase/transfer 已独立复算；Rust/GPU agreement 仍开放 |
+| [近轴/近极值 fallback 证书](near-axis-extreme-fallback.md)               | P3 研究层已闭合             | exact/strict-binary32 condition report 保守拒绝病态输入；production routing 仍开放             |
 | [路线图纯研究任务审计](roadmap-pure-research-audit.md)                    | 当前审计                    | 区分可离线闭合的证书/classifier 与必须依赖 production、GPU、平台或 consumer 的工程事项         |
 | [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |
