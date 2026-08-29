@@ -334,9 +334,10 @@ equatorial crossings 与 signed winding exact equality。该 matrix 不改变上
 未来 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须
 通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition
 signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过
-travel-time budget。后续 elliptic/Carlson variant 至少覆盖正/负 spin、近场高绕转、critical 两侧、
-near-axis、near-extreme 与 unsupported-domain fallback；parameter sweep 只属于研究 artifact，不进入
-常规测试。
+travel-time budget。现有 [Kerr/Carlson 高精度 oracle](research/carlson-kerr-oracle.md)只关闭 exact
+topology 与 positive-real special-function 研究层；任何后续 production elliptic/Carlson variant 仍至少
+覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；
+parameter sweep 只属于研究 artifact，不进入常规测试。
 
 ## 6. Fixture envelope
 

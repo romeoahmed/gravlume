@@ -11,7 +11,7 @@
 | [Kerr–Schild RK4 约化](kerr-schild-rk4-reduction.md)                      | 已采用，step policy 仍研究  | reduced Hamiltonian、Carter、Hermite event 已采用；KN interval certificate 已撤出             |
 | [Kerr–Schild ↔ Mino seam](kerr-schild-mino-map.md)                        | 数学 seam 已采用            | physical-spin/chart 修复已进入 domain/WGSL                                                    |
 | [数值 Mino step 选择](mino-step-selection.md)                             | 已拒绝                      | fixed-step candidate 因高分辨率 travel-time 反例删除                                          |
-| [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策                    | scalar slab、spectral fixture 与 footprint 证据已采用；production reconstruction/Carlson 待证 |
+| [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策                    | scalar slab、spectral fixture 与 footprint 已采用；production reconstruction/Carlson solver 待证 |
 | [有界单样本 GPU 路径审计](bounded-sample-inspection.md)                   | 历史基线                    | 固定 record、exact branch 与 `8×8 + lane 0` Metal witness 被后续 production 采用              |
 | [Production 按需单样本检查](on-demand-sample-inspection.md)               | 已采用，质量域仍开放        | 单槽 ticket/completion、cancel-drain、published texel/retrace 分离与 desktop consumer 已采用  |
 | [连续字段 corpus 首切片](continuous-field-corpus.md)                      | 九点 semantic seed 已闭合   | ordered batch 与九点独立 witness 已采用；texture/artifact 与其余 strata 仍开放                 |
@@ -19,6 +19,7 @@
 | [Critical surface/capture 证书](critical-curve-surface-capture.md)         | P1/P2 研究层已闭合          | 相邻 critical 两侧、event order、higher-order/winding 已有独立证书；Rust/GPU 支持仍开放        |
 | [负自旋连续字段证书](negative-spin-continuous-witness.md)                 | P0 研究层已闭合             | signed spin/chart/emitter branch 与 source/phase/transfer 已独立复算；Rust/GPU agreement 仍开放 |
 | [近轴/近极值 fallback 证书](near-axis-extreme-fallback.md)               | P3 研究层已闭合             | exact/strict-binary32 condition report 保守拒绝病态输入；production routing 仍开放             |
+| [Kerr topology 与 Carlson oracle](carlson-kerr-oracle.md)                | KA-1/2 纯研究层已闭合       | exact root isolation、positive-real Carlson 与 Ib reduction 已认证；terminal/GPU solver 仍开放  |
 | [路线图纯研究任务审计](roadmap-pure-research-audit.md)                    | 当前审计                    | 区分可离线闭合的证书/classifier 与必须依赖 production、GPU、平台或 consumer 的工程事项         |
 | [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |

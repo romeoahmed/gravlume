@@ -211,6 +211,10 @@ CPU test 与 GPU test 仍是两个 consumer；GPU 没有读取 Python 输出或 
 
 **决策：** 采用第一个候选扩展独立 evidence；第二个候选保持研究方向。当前 fixed-step reciprocal-Mino 已被 travel-time 反例否决，不能借本次高精度成功恢复；见 [Mino step selection](mino-step-selection.md)。
 
+**后续状态：** [Kerr/Carlson oracle](carlson-kerr-oracle.md) 已关闭第二候选的 exact topology、
+positive-real symmetric functions 与 Ib radial-reduction 研究前置；完整 terminal observable interface、
+Rust/WGSL implementation、fallback routing 与 GPU bake-off 仍未实现。
+
 ## 9. 不支持域与恢复条件
 
 当前方法只接受固定 `(640,12..20)` center-subpixel corpus，并拒绝：

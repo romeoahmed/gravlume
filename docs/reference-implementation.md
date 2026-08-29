@@ -45,6 +45,10 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
   BL/Mino 证书，显式约束 physical spin、outgoing chart、负向 circular-emitter branch、两根
   scattering topology、source/phase/time/frequency/radiance；它仍不是 Rust fixture 或 structured
   agreement。见[负自旋记录](research/negative-spin-continuous-witness.md)。
+- pure-Kerr radial quartic 另有 research-only exact rational I--IV classifier 与 positive-real
+  `RF/RC/RD/RJ` defining-integral oracle；它保存 sign-changing root brackets、turn sequence、
+  degenerate/domain fallback、120/180 位复算与 actual Ib radial reduction，但不进入 Reference crate，
+  也不是 terminal outcome。见 [Kerr/Carlson 记录](research/carlson-kerr-oracle.md)。
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
@@ -65,6 +69,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
   ladder 均未闭合。near-axis/near-extreme 另有只认证 conservative fallback 的 research condition
   report；production classifier、接受态 observable 与 GPU routing 仍缺。更广 Kerr–Newman 参数以及
   独立 artifact/Jacobi oracle 也仍缺；
+- Kerr/Carlson research oracle 只把 separated Class Ib 标为 `eligible-for-further-analysis`；Reference
+  尚无消费该 oracle 的解析 terminal method，II--IV、Ia、degenerate、axis 与 near-extreme 仍须走现有
+  数值方法或 typed fallback；
 - 当前 slab 是 terminal analytic operator，不沿 volume ray 积分变化的 invariant coefficients；它不能
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。

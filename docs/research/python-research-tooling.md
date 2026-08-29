@@ -50,6 +50,7 @@ Build backend 按 uv 官方模式使用单个 minor compatibility range。它由
 | ---------------------- | --------------------------------------------------- |
 | `bl-mino-surface`      | BL/Mino outer-edge、critical pair 与 negative-spin witness |
 | `kerr-capture`         | Kerr quartic、Bernstein 与 binary32 interval        |
+| `kerr-elliptic`        | Kerr root topology 与 Carlson high-precision oracle |
 | `kerr-schild-map`      | Kerr–Schild ↔ Boyer–Lindquist/Mino seam             |
 | `kerr-schild-rhs`      | Kerr–Schild Hamiltonian/RHS 约化                    |
 | `kerr-support`         | near-axis/extreme/root conservative fallback        |
@@ -63,7 +64,7 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research <check>
 ```
 
-完整 Python gate 必须逐项执行七个 scientific witness；pytest 只验证可独立表述的行为与性质，不能替代这些端到端复算：
+完整 Python gate 必须逐项执行八个 scientific witness；pytest 只验证可独立表述的行为与性质，不能替代这些端到端复算：
 
 ```bash
 uv lock --project docs/research/scripts --check
@@ -71,6 +72,8 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research bl-mino-surface
 uv run --isolated --project docs/research/scripts --locked \
   gravlume-research kerr-capture
+uv run --isolated --project docs/research/scripts --locked \
+  gravlume-research kerr-elliptic
 uv run --isolated --project docs/research/scripts --locked \
   gravlume-research kerr-schild-map
 uv run --isolated --project docs/research/scripts --locked \

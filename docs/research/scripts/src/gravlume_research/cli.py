@@ -7,6 +7,7 @@ from importlib import import_module
 CHECK_MODULES = {
     "bl-mino-surface": "gravlume_research.checks.bl_mino",
     "kerr-capture": "gravlume_research.checks.kerr_capture",
+    "kerr-elliptic": "gravlume_research.checks.kerr_elliptic",
     "kerr-schild-map": "gravlume_research.checks.kerr_schild_map",
     "kerr-schild-rhs": "gravlume_research.checks.kerr_schild_rhs",
     "kerr-support": "gravlume_research.checks.kerr_support",

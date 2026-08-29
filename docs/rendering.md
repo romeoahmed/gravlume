@@ -125,7 +125,12 @@ observable，相关 production shortcut 已撤出。未来 Kerr–Newman classif
 
 解析或半解析 Kerr solver 是受限 accelerator，不是通用数值基线。已经实验过的 fixed-step reciprocal-Mino RK4 candidate 虽能显著减少通用 Kerr–Schild work，却在扩大 reference lattice 后越过正式 travel-time budget，因此不得进入 resolved production plan。potential residual、局部阶数和低分辨率 acceptance 都不能单独约束 terminal phase observable。
 
-后续 Kerr 专用路线优先研究具名 root topology 与 elliptic/Carlson terminal solver；任何实现都必须显式处理 turning branch、near-critical conditioning、axis/horizon domain 和 observable error，并在条件不明时回退 Cartesian Kerr–Schild。完整推导、正面性能结果与否决证据只保留在 [Mino candidate 研究结论](research/mino-step-selection.md)；chart 与 physical-spin seam 见 [KS–BL/Mino 零步映射](research/kerr-schild-mino-map.md)。
+具名 root topology 与 positive-real Carlson 的高精度 CPU oracle 已在
+[Kerr/Carlson 研究记录](research/carlson-kerr-oracle.md)闭合；它只接纳分离的 Class Ib 作 further
+analysis，不是 terminal solver。后续 production 候选仍必须显式处理 turning branch、near-critical
+conditioning、axis/horizon domain 和 observable error，并在条件不明时回退 Cartesian Kerr–Schild。
+fixed-step 路线的否决证据见 [Mino candidate 研究结论](research/mino-step-selection.md)；chart 与
+physical-spin seam 见 [KS–BL/Mino 零步映射](research/kerr-schild-mino-map.md)。
 
 ## 5. Surface、volume 与时间
 
