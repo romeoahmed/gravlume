@@ -119,21 +119,24 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
     for (image_sample, gpu) in samples.into_iter().zip(retraces) {
         let reference = trace_converged_surface_edge(oracle, observation, image_sample);
         let [_, pixel_y] = image_sample.pixel();
-        match pixel_y {
-            // The adjacent pair is independently certified by the separated
-            // BL/Mino witness in docs/research/scripts.
-            13 => {
-                assert_eq!(reference.termination(), Termination::Escape);
-                assert_eq!(reference.branch_key().radial_turnings(), 1);
-                assert_eq!(reference.branch_key().equatorial_crossings(), 1);
-            }
-            14 => {
-                assert_eq!(reference.termination(), Termination::EquatorialSurface);
-                assert_eq!(reference.branch_key().radial_turnings(), 1);
-                assert_eq!(reference.branch_key().equatorial_crossings(), 0);
-            }
-            _ => {}
-        }
+        // Every case is independently certified by the separated BL/Mino
+        // witness in docs/research/scripts; GPU fields remain compared below.
+        let (expected_terminal, expected_crossings) = match pixel_y {
+            12 | 13 => (Termination::Escape, 1),
+            14..=20 => (Termination::EquatorialSurface, 0),
+            _ => panic!("{image_sample:?}: sample is outside the certified corpus"),
+        };
+        assert_eq!(reference.termination(), expected_terminal);
+        assert_eq!(
+            reference.branch_key().initial_polar_side(),
+            PolarSide::Positive
+        );
+        assert_eq!(reference.branch_key().radial_turnings(), 1);
+        assert_eq!(
+            reference.branch_key().equatorial_crossings(),
+            expected_crossings
+        );
+        assert_eq!(reference.branch_key().azimuth_winding(), 0);
         match reference.termination() {
             Termination::Escape => escape_count += 1,
             Termination::EquatorialSurface => surface_count += 1,
@@ -142,8 +145,8 @@ fn ordered_gpu_surface_edge_corpus_matches_reference_fields() {
         super::assert_retrace_matches_reference(image_sample, &reference, gpu);
     }
 
-    assert!(escape_count > 0, "corpus does not bracket the source edge");
-    assert!(surface_count > 0, "corpus does not enter the source");
+    assert_eq!(escape_count, 2, "corpus escape stratum changed");
+    assert_eq!(surface_count, 7, "corpus surface stratum changed");
 }
 
 fn trace_converged_surface_edge(

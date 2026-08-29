@@ -14,8 +14,8 @@
 | [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策                    | scalar slab、spectral fixture 与 footprint 证据已采用；production reconstruction/Carlson 待证 |
 | [有界单样本 GPU 路径审计](bounded-sample-inspection.md)                   | 历史基线                    | 固定 record、exact branch 与 `8×8 + lane 0` Metal witness 被后续 production 采用              |
 | [Production 按需单样本检查](on-demand-sample-inspection.md)               | 已采用，质量域仍开放        | 单槽 ticket/completion、cancel-drain、published texel/retrace 分离与 desktop consumer 已采用  |
-| [连续字段 corpus 首切片](continuous-field-corpus.md)                      | seam/相邻 edge pair 已采用  | ordered batch 与相邻 pair witness 已采用；其余六个 source-edge samples 仍缺独立证据            |
-| [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | canonical/edge pair 已采用  | `(640,13/14/16)` 独立约束 branch、Escape/source/transfer/phase；其余 corpus 仍开放             |
+| [连续字段 corpus 首切片](continuous-field-corpus.md)                      | 九点 semantic seed 已闭合   | ordered batch 与九点独立 witness 已采用；texture/artifact 与其余 strata 仍开放                 |
+| [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | 九点 corpus 已采用          | `(640,12..20)` 独立约束 branch、margin、Escape/source/transfer/phase                           |
 | [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |
 | [Python 研究工具链](python-research-tooling.md)                           | 当前方法                    | Python 3.14、uv lock、统一 CLI、pytest/Hypothesis 与 Ruff                                      |

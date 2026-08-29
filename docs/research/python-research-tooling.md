@@ -48,7 +48,7 @@ Build backend 按 uv 官方模式使用单个 minor compatibility range。它由
 
 | CLI 参数               | 研究对象                                            |
 | ---------------------- | --------------------------------------------------- |
-| `bl-mino-surface`      | 具名 BL/Mino surface 与 outer-edge witness          |
+| `bl-mino-surface`      | 具名 BL/Mino outer-edge 九点 corpus witness         |
 | `kerr-capture`         | Kerr quartic、Bernstein 与 binary32 interval        |
 | `kerr-schild-map`      | Kerr–Schild ↔ Boyer–Lindquist/Mino seam             |
 | `kerr-schild-rhs`      | Kerr–Schild Hamiltonian/RHS 约化                    |
