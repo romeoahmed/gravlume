@@ -22,7 +22,7 @@ Carlson special functions，见
 [GPU 加速研究](gpu-geodesic-acceleration.md)已把 root-aware elliptic/Carlson terminal solver
 列为 fixed-step Mino 失败后的下一候选，但没有把候选写成 production 事实。
 
-本轮开始前，[`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 已能为命名
+本轮开始前，[`bl_mino`](scripts/src/gravlume_research/checks/bl_mino/) proof package 已能为命名
 surface/capture pair 以 `mp.polyroots`、exterior stationary minimum 和独立 quadrature 证明
 separatrix 两侧的 terminal、event order 与 continuous observables；120/180 位证书记录在
 [critical-curve 研究](critical-curve-surface-capture.md)。它的“虚部小于

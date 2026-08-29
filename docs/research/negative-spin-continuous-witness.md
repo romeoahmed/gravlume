@@ -17,7 +17,7 @@
 | sample | pixel `(62, 7)`，center subpixel `(0.5, 0.5)` |
 | emitter | equatorial circular branch $s=-1$，$6M\le r\le20M$，inverse-cube bolometric source，vacuum |
 
-observer tetrad、photon covector、Boyer–Lindquist constants、roots、turning quadratures 和 transfer 都由 [`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py) 从这些输入重建。该 private in-process module 是测试 seam；没有第二个 production consumer，因此没有引入 solver trait 或 public adapter。
+observer tetrad、photon covector、Boyer–Lindquist constants、roots、turning quadratures 和 transfer 都由 [`_negative_spin.py`](scripts/src/gravlume_research/checks/bl_mino/_negative_spin.py) 从这些输入重建。该 private in-process proof module 是测试 seam；没有第二个 production consumer，因此没有引入 solver trait 或 public adapter。
 
 ## 2. 方程与符号约定
 

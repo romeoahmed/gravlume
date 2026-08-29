@@ -6,14 +6,22 @@ from itertools import pairwise
 import mpmath as mp
 import pytest
 
-from gravlume_research.checks.bl_mino import (
-    MINIMUM_WITNESS_DIGITS,
+from gravlume_research.checks.bl_mino._certification import (
     _build_critical_curve_precision_certificate,
     _build_negative_spin_precision_certificate,
+)
+from gravlume_research.checks.bl_mino._critical_curve import (
     _critical_curve_corpus_witness,
-    _negative_spin_surface_witness,
-    _source_edge_corpus_witness,
+)
+from gravlume_research.checks.bl_mino._model import (
+    MINIMUM_WITNESS_DIGITS,
     _UnsupportedWitnessError,
+)
+from gravlume_research.checks.bl_mino._negative_spin import (
+    _negative_spin_surface_witness,
+)
+from gravlume_research.checks.bl_mino._source_edge import (
+    _source_edge_corpus_witness,
 )
 
 

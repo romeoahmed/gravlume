@@ -19,7 +19,7 @@ Hamilton–Jacobi separability 与第四常数来自 [Carter 1968](https://doi.o
 
 ## 2. 与 Cartesian KS reference 的独立性
 
-可复算实现为 [`bl_mino.py`](scripts/src/gravlume_research/checks/bl_mino.py)。它：
+可复算实现为 [`bl_mino`](scripts/src/gravlume_research/checks/bl_mino/) proof package。它：
 
 - 不导入 `gravlume-domain`、`gravlume-reference` 或 renderer；
 - 不读取 Rust reference outcome、GPU record、texture 或 fixture expected；
