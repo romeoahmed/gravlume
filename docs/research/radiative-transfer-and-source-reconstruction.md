@@ -15,13 +15,14 @@
    element 都符合 WGSL 布局。`vec3<f32>` 的 size 是 12 byte、alignment 是 16 byte，放进 array
    后 stride 是 16 byte；它不能用来获得 12 B/pixel 的 host ABI。
 5. footprint 必须对 source map 而非 tone-mapped RGB 求导，并在完全相同的 termination/source chart/turning or winding branch 上才有效。critical curve、caustic、chart seam 与 branch change 应触发真实重采样，不能跨界插值。
-6. Carlson symmetric forms 适合具名 root topology 内的 terminal accelerator 或 CPU oracle，不是完整 geodesic solver。root classification、turning count、积分反演、$t/\phi$ 极点项和 source event 仍是必要工作；near-degenerate、near-axis、near-extreme 与 unsupported branch 必须回退 Cartesian Kerr–Schild。
+6. Carlson symmetric forms 适合具名 root topology 内的 terminal accelerator 或 CPU oracle，不是完整 geodesic solver。后续已有 [research-only exact classifier 与 positive-real oracle](carlson-kerr-oracle.md)，但 production root routing、积分反演、$t/\phi$ 极点项和 source event 仍是必要工作；near-degenerate、near-axis、near-extreme 与 unsupported branch 必须回退 Cartesian Kerr–Schild。
 
 > **后续采用记录：** scalar slab、diluted-blackbody boxcar bands、v3 fixtures、最小 branch key、
 > 五射线 surface footprint、tagged scene-linear radiance capture 与有界单样本 record 已按保守边界落地；后续又采用固定单槽 production ticket/completion seam、lifecycle cancel-drain 与 desktop consumer。当前契约与证据见
 > [`physics.md`](../physics.md#7-frequency-与-radiative-transfer)、[`validation.md`](../validation.md#32-surface-observable)、
 > [`reference-implementation.md`](../reference-implementation.md)、[`gpu-renderer.md`](../gpu-renderer.md)和[production inspection 决策](on-demand-sample-inspection.md)；
-> 连续字段质量基线、production reconstruction 与 Carlson accelerator 仍未实现。
+> 连续字段质量基线、production reconstruction 与 production Carlson accelerator 仍未实现；
+> KA-1/2 的 high-precision/root-topology 研究前置已单独闭合。
 
 ## 1. 问题、方法与当前差距
 
@@ -70,7 +71,7 @@ profile meaning、输入与 tolerance 均未改变，符合[验证合同的 orac
 | GPU surface                           | [`geodesic_integration.wgsl`](../../crates/gravlume-render/src/shaders/geodesic_integration.wgsl) 产生 invocation-local sample；plan-specific surface shader 完成 bolometric 或 spectral/slab transport；production 单槽 inspection 已有完整 branch key 与 published-texel separation，test capture 另有 finite-difference Jacobian                                                                                                                          | production 没有 semantic/footprint map、branch-aware reconstruction 或 multi-image/near-critical convergence evidence |
 | execution seam                        | [`trace.rs`](../../crates/gravlume-render/src/trace.rs) 的 `TracePlan` 是私有 sealed 分支                                                                                                                                                                                                                                                                                                                                                                   | 不需要为尚不存在的第二 consumer 提前公开 solver trait                                                                 |
 | appearance/reconstruction             | [渲染设计](../rendering.md)定义 trace → transport → reconstruct 的准入边界                                                                                                                                                                                                                                                                                                                                                                                | production 仍只持久化 `RGBA16F`；source-space reconstruction 尚未实现                                                 |
-| analytic acceleration                 | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino                                                                                                                                                                                                                                                                                                                                                                    | 尚无 root-aware Carlson implementation 或 accepted-domain classifier                                                  |
+| analytic acceleration                 | [GPU acceleration ledger](gpu-geodesic-acceleration.md) 已否决 fixed-step numerical Mino；[Kerr/Carlson oracle](carlson-kerr-oracle.md)已闭合 research-only exact topology 与 positive-real reduction                                                                                                                                                                                                                                                          | 尚无 production root-aware Carlson terminal implementation、Rust/WGSL classifier 或 complete-observable consumer      |
 
 ## 2. Invariant radiative transfer
 

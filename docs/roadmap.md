@@ -73,6 +73,12 @@ near-axis/near-extreme 已有只认证 conservative rejection 的 condition repo
 
 解析或半解析路径只服务 pure Kerr、已分类 root topology 与 terminal observable。优先顺序是 high-precision/CPU oracle、root classifier、terminal solver、GPU bake-off；Cartesian Kerr–Schild 始终定义 unsupported/uncertain domain。
 
+前两层的 pure-Kerr 研究证书已经闭合：exact rational classifier 覆盖 I--IV、Ia/Ib、正负 spin 与
+degenerate/domain fallback，positive-real Carlson oracle 通过 defining integrals、identities 与
+precision doubling，见[研究记录](research/carlson-kerr-oracle.md)。它只把下一开放工作推进到受限
+terminal solver 与 production routing；没有实现 Rust/WGSL method、完整 observable agreement 或性能
+bake-off。
+
 Fixed-step reciprocal-Mino candidate 已被 terminal phase 反例否决；恢复它需要新的 phase-error certificate，而不是更小的经验步长。Carlson/elliptic 路线也不能从“存在闭式解”推导出 WGSL `f32` 稳定性。
 
 **退出条件：**
