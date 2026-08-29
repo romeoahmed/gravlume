@@ -13,6 +13,11 @@
 的 precision-doubling 归一化、finite 检查与 digit-budget gate。它不拥有物理方程，也不允许一个
 proof object 的证据替代另一个 proof object。
 
+每个 `checks` module/package 只把 `run()` 留给 CLI；测试若必须 mutation 某个证明对象，应从所属的
+underscore proof module 导入最小 private seam。`_binary32`、`_interval_f32` 与 `_sympy` 是已有
+多个真实消费者的共享私有实现，不为命名一致性增加转发 façade。pytest 使用 `importlib` import mode
+与统一 strict mode，使测试按已安装 `src` package 解析，并把未知配置和 marker 当作错误。
+
 依赖职责保持窄而明确：
 
 | 依赖       | 职责                                                                             |
@@ -103,7 +108,7 @@ Named scientific cases 使用 deterministic example 和独立高精度 expectati
 
 - [uv project layout](https://docs.astral.sh/uv/concepts/projects/layout/) 与 [uv build backend](https://docs.astral.sh/uv/concepts/build-backend/)：`src` package、entry point 和 build compatibility range；
 - [uv locking and upgrading](https://docs.astral.sh/uv/concepts/projects/sync/) 与 [dependency resolution](https://docs.astral.sh/uv/concepts/resolution/)：抽象要求、精确 lock、直接/传递依赖、既有版本偏好、兼容解析、升级与 override 语义；
-- [pytest `approx`](https://docs.pytest.org/en/stable/reference/reference.html#pytest-approx)、[`raises`](https://docs.pytest.org/en/stable/reference/reference.html#pytest-raises) 与 [parametrization](https://docs.pytest.org/en/stable/how-to/parametrize.html)：数值、异常和参数化 assertion；
+- [pytest good integration practices](https://docs.pytest.org/en/stable/explanation/goodpractices.html)、[`approx`](https://docs.pytest.org/en/stable/reference/reference.html#pytest-approx)、[`raises`](https://docs.pytest.org/en/stable/reference/reference.html#pytest-raises) 与 [parametrization](https://docs.pytest.org/en/stable/how-to/parametrize.html)：`src` layout、`importlib` import mode、数值、异常和参数化 assertion；
 - [Hypothesis strategy adaptation](https://hypothesis.readthedocs.io/en/latest/tutorial/adapting-strategies.html)、[`example`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.example) 与 [settings](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.settings)：由输入域和具名边界构造性质测试；
 - [NumPy scalar types](https://numpy.org/doc/stable/user/basics.types.html)、[`ndarray.view`](https://numpy.org/doc/stable/reference/generated/numpy.ndarray.view.html)、[`nextafter`](https://numpy.org/doc/stable/reference/generated/numpy.nextafter.html) 与 [`errstate`](https://numpy.org/doc/stable/reference/generated/numpy.errstate.html)：固定宽度 binary32 和浮点错误处理 scope；
 - [SymPy best practices](https://docs.sympy.org/latest/explanation/best-practices.html) 与 [mpmath documentation](https://mpmath.org/doc/current/)：exact construction、符号/数值边界和 arbitrary precision；

@@ -4,7 +4,7 @@ import argparse
 from collections.abc import Sequence
 from importlib import import_module
 
-CHECK_MODULES = {
+_CHECK_MODULES = {
     "bl-mino-surface": "gravlume_research.checks.bl_mino",
     "kerr-capture": "gravlume_research.checks.kerr_capture",
     "kerr-elliptic": "gravlume_research.checks.kerr_elliptic",
@@ -16,16 +16,11 @@ CHECK_MODULES = {
 }
 
 
-def _run_check(name: str) -> None:
-    module = import_module(CHECK_MODULES[name])
-    module.run()
-
-
 def main(arguments: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run one independent Gravlume research check."
     )
-    parser.add_argument("check", choices=CHECK_MODULES)
+    parser.add_argument("check", choices=_CHECK_MODULES)
     options = parser.parse_args(arguments)
-    _run_check(options.check)
+    import_module(_CHECK_MODULES[options.check]).run()
     return 0

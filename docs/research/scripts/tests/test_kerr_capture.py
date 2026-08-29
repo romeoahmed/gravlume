@@ -10,9 +10,9 @@ from gravlume_research._binary32 import (
     next_down,
 )
 from gravlume_research.checks.kerr_capture import (
-    BernsteinSample,
-    check_interval_bernstein,
-    check_interval_primitives,
+    _BernsteinSample,
+    _check_interval_bernstein,
+    _check_interval_primitives,
 )
 
 FINITE_BINARY32 = st.floats(
@@ -30,7 +30,7 @@ BOUNDED_BINARY32 = st.floats(
     width=32,
 )
 BERNSTEIN_SAMPLES = st.builds(
-    BernsteinSample,
+    _BernsteinSample,
     leading=BOUNDED_BINARY32,
     quadratic=BOUNDED_BINARY32,
     linear=BOUNDED_BINARY32,
@@ -47,12 +47,12 @@ BERNSTEIN_SAMPLES = st.builds(
 @example(left=MAX_FINITE, right=-MAX_FINITE)
 @given(left=FINITE_BINARY32, right=FINITE_BINARY32)
 def test_interval_primitives_enclose_exact_results(left: float, right: float) -> None:
-    check_interval_primitives(left, right)
+    _check_interval_primitives(left, right)
 
 
 @settings(deadline=None, derandomize=True, max_examples=5_000)
 @example(
-    sample=BernsteinSample(
+    sample=_BernsteinSample(
         leading=0.0,
         quadratic=MIN_SUBNORMAL,
         linear=-MIN_SUBNORMAL,
@@ -63,6 +63,6 @@ def test_interval_primitives_enclose_exact_results(left: float, right: float) ->
 )
 @given(sample=BERNSTEIN_SAMPLES)
 def test_interval_bernstein_coefficients_enclose_exact_results(
-    sample: BernsteinSample,
+    sample: _BernsteinSample,
 ) -> None:
-    check_interval_bernstein(sample)
+    _check_interval_bernstein(sample)

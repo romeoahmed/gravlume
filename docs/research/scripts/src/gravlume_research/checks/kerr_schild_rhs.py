@@ -11,7 +11,7 @@ import sympy as sp
 from .._sympy import require_equal, require_matrix_equal
 
 
-def verify_sigma_identity() -> None:
+def _verify_sigma_identity() -> None:
     radial_square, oblate_offset = sp.symbols("u A", nonzero=True, real=True)
     spin_vertical_square = radial_square * (radial_square - oblate_offset)
     sigma_from_radius = radial_square + spin_vertical_square / radial_square
@@ -25,7 +25,7 @@ def verify_sigma_identity() -> None:
     )
 
 
-def verify_geometry_gradients() -> None:
+def _verify_geometry_gradients() -> None:
     oblate_offset, sigma = sp.symbols("B Sigma", nonzero=True, real=True)
     spin, z = sp.symbols("a z", real=True)
     x, y = sp.symbols("x y", real=True)
@@ -65,7 +65,7 @@ def verify_geometry_gradients() -> None:
     )
 
 
-def null_derivative_contractions(
+def _null_derivative_contractions(
     branch_sign: int,
 ) -> tuple[sp.ImmutableMatrix, sp.ImmutableMatrix]:
     radius, spin, scale = sp.symbols("r a scale", nonzero=True, real=True)
@@ -138,9 +138,9 @@ def null_derivative_contractions(
     return coordinate_wise, factorized
 
 
-def verify_factorization() -> None:
+def _verify_factorization() -> None:
     for branch_sign in (-1, 1):
-        coordinate_wise, factorized = null_derivative_contractions(branch_sign)
+        coordinate_wise, factorized = _null_derivative_contractions(branch_sign)
         require_matrix_equal(
             coordinate_wise,
             factorized,
@@ -148,7 +148,7 @@ def verify_factorization() -> None:
         )
 
 
-def verify_schwarzschild_limit() -> None:
+def _verify_schwarzschild_limit() -> None:
     radius = sp.symbols("r", nonzero=True, real=True)
     x, y, z = sp.symbols("x y z", real=True)
     momentum_x, momentum_y, momentum_z = sp.symbols("p_x p_y p_z", real=True)
@@ -163,7 +163,7 @@ def verify_schwarzschild_limit() -> None:
     require_matrix_equal(factorized, expected, "Schwarzschild radial projector")
 
 
-def verify_reduced_hamiltonian() -> None:
+def _verify_reduced_hamiltonian() -> None:
     coordinates = sp.symbols("x y z", real=True)
     momentum = sp.ImmutableMatrix(sp.symbols("p_x p_y p_z", real=True))
     energy = sp.symbols("E", real=True)
@@ -219,7 +219,7 @@ def verify_reduced_hamiltonian() -> None:
     )
 
 
-def verify_axis_regular_carter_invariant() -> None:
+def _verify_axis_regular_carter_invariant() -> None:
     radius, spin, energy = sp.symbols("r a E", nonzero=True, real=True)
     x, y, z = sp.symbols("x y z", real=True)
     momentum_x, momentum_y, momentum_z = sp.symbols("p_x p_y p_z", real=True)
@@ -271,7 +271,7 @@ def verify_axis_regular_carter_invariant() -> None:
     )
 
 
-def verify_kerr_newman_radial_potential() -> None:
+def _verify_kerr_newman_radial_potential() -> None:
     radius, mass, spin, charge = sp.symbols("r M a q_e", real=True)
     energy, angular_momentum, carter = sp.symbols("E L_z Q", real=True)
     separation = (angular_momentum - spin * energy) ** 2 + carter
@@ -290,7 +290,7 @@ def verify_kerr_newman_radial_potential() -> None:
     require_equal(potential, expanded, "Kerr-Newman radial quartic")
 
 
-def verify_cubic_hermite_event_interpolant() -> None:
+def _verify_cubic_hermite_event_interpolant() -> None:
     theta, step = sp.symbols("theta h", nonzero=True, real=True)
     coordinate = sp.symbols("lambda", real=True)
     coefficients = sp.symbols("c0:5", real=True)
@@ -346,14 +346,14 @@ def verify_cubic_hermite_event_interpolant() -> None:
 
 
 def run() -> None:
-    verify_sigma_identity()
-    verify_geometry_gradients()
-    verify_factorization()
-    verify_schwarzschild_limit()
-    verify_reduced_hamiltonian()
-    verify_axis_regular_carter_invariant()
-    verify_kerr_newman_radial_potential()
-    verify_cubic_hermite_event_interpolant()
+    _verify_sigma_identity()
+    _verify_geometry_gradients()
+    _verify_factorization()
+    _verify_schwarzschild_limit()
+    _verify_reduced_hamiltonian()
+    _verify_axis_regular_carter_invariant()
+    _verify_kerr_newman_radial_potential()
+    _verify_cubic_hermite_event_interpolant()
     print("Sigma discriminant identity: PASS")
     print("Sigma and Kerr-Schild scalar gradients: PASS")
     print("Both Kerr-Schild branch contractions: PASS")

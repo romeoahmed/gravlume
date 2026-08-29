@@ -32,12 +32,12 @@ from .._binary32 import (
 from .._interval_f32 import IntervalF32, exact_fraction, interval_contains
 from .._sympy import require_polynomial_equal
 
-type ExactScalar = sp.Expr | Fraction
-type ExactCoefficients = tuple[ExactScalar, ExactScalar, ExactScalar, ExactScalar]
+type _ExactScalar = sp.Expr | Fraction
+type _ExactCoefficients = tuple[_ExactScalar, _ExactScalar, _ExactScalar, _ExactScalar]
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BernsteinSample:
+class _BernsteinSample:
     leading: float
     quadratic: float
     linear: float
@@ -47,7 +47,7 @@ class BernsteinSample:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class KerrRadialModel:
+class _KerrRadialModel:
     radius: sp.Symbol
     spin: sp.Symbol
     energy: sp.Symbol
@@ -67,7 +67,7 @@ class KerrRadialModel:
         )
 
 
-def build_radial_model() -> KerrRadialModel:
+def _build_radial_model() -> _KerrRadialModel:
     radius, spin, energy, angular_momentum, carter = sp.symbols("r a E L Q", real=True)
     delta = radius**2 - 2 * radius + spin**2
     shifted_momentum = angular_momentum - spin * energy
@@ -86,7 +86,7 @@ def build_radial_model() -> KerrRadialModel:
         separated, expanded, generators, "separated Kerr radial potential"
     )
 
-    return KerrRadialModel(
+    return _KerrRadialModel(
         radius=radius,
         spin=spin,
         energy=energy,
@@ -97,7 +97,7 @@ def build_radial_model() -> KerrRadialModel:
     )
 
 
-def verify_normalized_form(model: KerrRadialModel) -> None:
+def _verify_normalized_form(model: _KerrRadialModel) -> None:
     impact, normalized_carter = sp.symbols("b eta", real=True)
     normalized = model.potential.xreplace(
         {
@@ -120,11 +120,11 @@ def verify_normalized_form(model: KerrRadialModel) -> None:
     )
 
 
-def bernstein_coefficients(
-    power_coefficients: ExactCoefficients,
-    lower: ExactScalar,
-    width: ExactScalar,
-) -> tuple[ExactScalar, ...]:
+def _bernstein_coefficients(
+    power_coefficients: _ExactCoefficients,
+    lower: _ExactScalar,
+    width: _ExactScalar,
+) -> tuple[_ExactScalar, ...]:
     leading, quadratic, linear, constant = power_coefficients
     lower_squared = lower**2
     width_squared = width**2
@@ -145,9 +145,9 @@ def bernstein_coefficients(
     )
 
 
-def verify_bernstein_transform(model: KerrRadialModel) -> None:
+def _verify_bernstein_transform(model: _KerrRadialModel) -> None:
     lower, width, parameter = sp.symbols("lo h t", real=True)
-    coefficients = bernstein_coefficients(model.coefficients, lower, width)
+    coefficients = _bernstein_coefficients(model.coefficients, lower, width)
     basis = tuple(
         math.comb(4, index) * parameter**index * (1 - parameter) ** (4 - index)
         for index in range(5)
@@ -172,7 +172,7 @@ def verify_bernstein_transform(model: KerrRadialModel) -> None:
     )
 
 
-def check_interval_primitives(left: float, right: float) -> None:
+def _check_interval_primitives(left: float, right: float) -> None:
     left_interval = IntervalF32.point(left)
     right_interval = IntervalF32.point(right)
     exact_left = exact_fraction(left)
@@ -191,7 +191,7 @@ def check_interval_primitives(left: float, right: float) -> None:
             )
 
 
-def interval_bernstein_coefficients(
+def _interval_bernstein_coefficients(
     power_coefficients: tuple[IntervalF32, IntervalF32, IntervalF32, IntervalF32],
     lower: IntervalF32,
     width: IntervalF32,
@@ -232,11 +232,11 @@ def interval_bernstein_coefficients(
     )
 
 
-def check_interval_bernstein(sample: BernsteinSample) -> None:
+def _check_interval_bernstein(sample: _BernsteinSample) -> None:
     leading_value = round_binary32(abs(sample.leading) + MIN_SUBNORMAL)
     lower_value = abs(sample.lower)
     width_value = round_binary32(abs(sample.width) + round_binary32(0.001))
-    intervals = interval_bernstein_coefficients(
+    intervals = _interval_bernstein_coefficients(
         (
             IntervalF32.point(leading_value),
             IntervalF32.point(sample.quadratic),
@@ -246,7 +246,7 @@ def check_interval_bernstein(sample: BernsteinSample) -> None:
         IntervalF32.point(lower_value),
         IntervalF32.point(width_value),
     )
-    exact = bernstein_coefficients(
+    exact = _bernstein_coefficients(
         (
             exact_fraction(leading_value),
             exact_fraction(sample.quadratic),
@@ -266,7 +266,7 @@ def check_interval_bernstein(sample: BernsteinSample) -> None:
             )
 
 
-def verify_packed_horizon_bounds() -> None:
+def _verify_packed_horizon_bounds() -> None:
     witnessed_nearest_rounding_failure = False
     for spin_bits in (0x0000_0000, 0x3F00_0000, 0x3F4C_CCCD, 0x3F7D_70A4, 0x3F7F_FFFF):
         spin = binary32_from_bits(spin_bits)
@@ -302,7 +302,7 @@ def verify_packed_horizon_bounds() -> None:
         raise AssertionError("horizon samples did not witness nearest > exact")
 
 
-def verify_precondition_mutations(model: KerrRadialModel) -> None:
+def _verify_precondition_mutations(model: _KerrRadialModel) -> None:
     substitutions = {
         model.radius: sp.Rational(5, 2),
         model.spin: sp.Rational(4, 5),
@@ -341,7 +341,7 @@ def verify_precondition_mutations(model: KerrRadialModel) -> None:
             )
 
 
-def verify_segment_removal_witness() -> None:
+def _verify_segment_removal_witness() -> None:
     segment_count = 12
     omitted = 5
     center = Fraction(2 * omitted + 1, 2 * segment_count)
@@ -351,7 +351,7 @@ def verify_segment_removal_witness() -> None:
             continue
         lower = Fraction(index, segment_count)
         width = Fraction(1, segment_count)
-        coefficients = bernstein_coefficients(
+        coefficients = _bernstein_coefficients(
             (
                 Fraction(0),
                 Fraction(1),
@@ -370,18 +370,18 @@ def verify_segment_removal_witness() -> None:
 
 
 def run() -> None:
-    model = build_radial_model()
-    verify_normalized_form(model)
-    verify_bernstein_transform(model)
+    model = _build_radial_model()
+    _verify_normalized_form(model)
+    _verify_bernstein_transform(model)
     for left, right in (
         (0.0, -0.0),
         (MIN_SUBNORMAL, -MIN_SUBNORMAL),
         (MIN_NORMAL, -next_down(MIN_NORMAL)),
         (MAX_FINITE, -MAX_FINITE),
     ):
-        check_interval_primitives(left, right)
-    check_interval_bernstein(
-        BernsteinSample(
+        _check_interval_primitives(left, right)
+    _check_interval_bernstein(
+        _BernsteinSample(
             leading=0.0,
             quadratic=MIN_SUBNORMAL,
             linear=-MIN_SUBNORMAL,
@@ -390,9 +390,9 @@ def run() -> None:
             width=0.0,
         )
     )
-    verify_packed_horizon_bounds()
-    verify_precondition_mutations(model)
-    verify_segment_removal_witness()
+    _verify_packed_horizon_bounds()
+    _verify_precondition_mutations(model)
+    _verify_segment_removal_witness()
     print(
         "PASS_INTERVAL_MODEL: exact Kerr quartic, quartic-to-Bernstein "
         "identity, deterministic strict-evaluator f32 boundaries, packed-horizon "

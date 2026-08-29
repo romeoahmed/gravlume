@@ -6,10 +6,10 @@ import sympy as sp
 
 from .._sympy import require_equal, require_zero
 
-BASELINE_STEP_FACTOR = sp.Rational(3, 4)
-STEP_FACTORS = (
+_BASELINE_STEP_FACTOR = sp.Rational(3, 4)
+_STEP_FACTORS = (
     sp.Rational(5, 8),
-    BASELINE_STEP_FACTOR,
+    _BASELINE_STEP_FACTOR,
     sp.Rational(13, 16),
     sp.Rational(27, 32),
     sp.Rational(219, 256),
@@ -22,7 +22,7 @@ STEP_FACTORS = (
 )
 
 
-def lie_derivative(
+def _lie_derivative(
     vector_field: sp.MatrixBase,
     expression: sp.MatrixBase,
     variables: tuple[sp.Symbol, ...],
@@ -40,7 +40,7 @@ def lie_derivative(
     )
 
 
-def substitute_state(
+def _substitute_state(
     vector_field: sp.MatrixBase,
     variables: tuple[sp.Symbol, ...],
     state: sp.MatrixBase,
@@ -51,7 +51,7 @@ def substitute_state(
     )
 
 
-def fifth_order_coefficient(expression: sp.Expr, step: sp.Symbol) -> sp.Expr:
+def _fifth_order_coefficient(expression: sp.Expr, step: sp.Symbol) -> sp.Expr:
     truncated = sp.series(expression, step, 0, 6).removeO()
     polynomial = sp.Poly(truncated, step)
     for order in range(5):
@@ -62,7 +62,7 @@ def fifth_order_coefficient(expression: sp.Expr, step: sp.Symbol) -> sp.Expr:
     return leading
 
 
-def verify_rk4_local_order() -> tuple[sp.Expr, ...]:
+def _verify_rk4_local_order() -> tuple[sp.Expr, ...]:
     # x'=v, v'=A*x+B*x^2+C*x^3 contains the radial subsystem. The polar
     # subsystem is its B=0 specialization, so one proof covers both cores.
     position, velocity = sp.symbols("x velocity", real=True)
@@ -79,18 +79,18 @@ def verify_rk4_local_order() -> tuple[sp.Expr, ...]:
     derivative = vector_field
     for order in range(1, 6):
         exact += step**order * derivative / factorial(order)
-        derivative = lie_derivative(vector_field, derivative, variables)
+        derivative = _lie_derivative(vector_field, derivative, variables)
 
     first = vector_field
-    second = substitute_state(vector_field, variables, state + step * first / 2)
-    third = substitute_state(vector_field, variables, state + step * second / 2)
-    fourth = substitute_state(vector_field, variables, state + step * third)
+    second = _substitute_state(vector_field, variables, state + step * first / 2)
+    third = _substitute_state(vector_field, variables, state + step * second / 2)
+    fourth = _substitute_state(vector_field, variables, state + step * third)
     rk4 = state + step * (first + 2 * second + 2 * third + fourth) / 6
 
-    return tuple(fifth_order_coefficient(component, step) for component in exact - rk4)
+    return tuple(_fifth_order_coefficient(component, step) for component in exact - rk4)
 
 
-def verify_cubic_hermite_order() -> sp.Expr:
+def _verify_cubic_hermite_order() -> sp.Expr:
     step, fraction = sp.symbols("step fraction", real=True)
     derivatives = sp.symbols("y0:6", real=True)
     exact = sum(
@@ -122,17 +122,17 @@ def verify_cubic_hermite_order() -> sp.Expr:
     return leading
 
 
-def print_factor_tradeoffs() -> None:
+def _print_factor_tradeoffs() -> None:
     print("factor,ideal_work_vs_0.75,truncation_envelope_vs_0.75")
-    for factor in STEP_FACTORS:
-        work = (BASELINE_STEP_FACTOR / factor).evalf(12)
-        truncation = ((factor / BASELINE_STEP_FACTOR) ** 4).evalf(12)
+    for factor in _STEP_FACTORS:
+        work = (_BASELINE_STEP_FACTOR / factor).evalf(12)
+        truncation = ((factor / _BASELINE_STEP_FACTOR) ** 4).evalf(12)
         print(f"{factor},{work},{truncation}")
 
 
 def run() -> None:
-    local_defect = verify_rk4_local_order()
-    hermite_defect = verify_cubic_hermite_order()
+    local_defect = _verify_rk4_local_order()
+    hermite_defect = _verify_cubic_hermite_order()
     print("RK4 polynomial-core defect starts at step^5: PASS")
     print(f"radial/polar leading coefficients: {list(local_defect)}")
     print("Cubic Hermite interior defect starts at step^4: PASS")
@@ -141,5 +141,5 @@ def run() -> None:
         "Global smooth-trajectory envelope is O(factor^4); "
         "ideal work is Theta(1/factor)."
     )
-    print_factor_tradeoffs()
+    _print_factor_tradeoffs()
     print("RESULT=PASS")

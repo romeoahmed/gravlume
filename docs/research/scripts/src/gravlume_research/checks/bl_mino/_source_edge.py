@@ -8,6 +8,8 @@ from ._geometry import (
     _separated_initial_state,
 )
 from ._model import (
+    _ESCAPE_RADIUS_M,
+    _RESIDUAL_GUARD_DIGITS,
     _SOURCE_EDGE_AZIMUTH_WINDING,
     _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS,
     _SOURCE_EDGE_ESCAPE_PIXELS,
@@ -17,11 +19,9 @@ from ._model import (
     _SOURCE_EDGE_POLAR_TURNINGS,
     _SOURCE_EDGE_RADIAL_TURNINGS,
     _SURFACE_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL,
+    _SURFACE_INNER_RADIUS_M,
+    _SURFACE_OUTER_RADIUS_M,
     _SURFACE_TERMINAL,
-    ESCAPE_RADIUS_M,
-    RESIDUAL_GUARD_DIGITS,
-    SURFACE_INNER_RADIUS_M,
-    SURFACE_OUTER_RADIUS_M,
     _EscapeWitness,
     _SourceEdgeCaseWitness,
     _SourceEdgeCorpusWitness,
@@ -63,7 +63,7 @@ def _compute_source_edge_escape_witness(
         initial_mu,
     )
     radial = _build_radial_motion(geometry, separated, precision_digits)
-    escape_radius = mp.mpf(ESCAPE_RADIUS_M)
+    escape_radius = mp.mpf(_ESCAPE_RADIUS_M)
     (
         terminal_mu_magnitude,
         first_crossing_duration,
@@ -81,7 +81,7 @@ def _compute_source_edge_escape_witness(
         geometry.radius,
         first_crossing_duration,
         precision_digits,
-        mp.mpf(SURFACE_OUTER_RADIUS_M),
+        mp.mpf(_SURFACE_OUTER_RADIUS_M),
         geometry.radius,
     )
     path = _integrate_path_observables(
@@ -265,7 +265,7 @@ def _validate_surface_witness(witness: _SurfaceWitness) -> None:
             "witness contains a non-real or non-finite value"
         )
     if not (
-        SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= SURFACE_OUTER_RADIUS_M
+        _SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= _SURFACE_OUTER_RADIUS_M
     ):
         raise _UnsupportedWitnessError("crossing lies outside the canonical surface")
     positive_fields = (
@@ -288,10 +288,10 @@ def _validate_surface_witness(witness: _SurfaceWitness) -> None:
     with mp.workdps(witness.precision_digits):
         residual_limit = mp.power(
             10,
-            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+            _RESIDUAL_GUARD_DIGITS - witness.precision_digits,
         )
         if any(residual < 0 or residual >= residual_limit for residual in residuals):
-            certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
+            certified_digits = witness.precision_digits - _RESIDUAL_GUARD_DIGITS
             raise _UnsupportedWitnessError(
                 "equation residual does not retain the required "
                 f"{certified_digits} decimal digits"
@@ -347,10 +347,10 @@ def _validate_escape_witness(witness: _EscapeWitness) -> None:
         raise _UnsupportedWitnessError(
             "escape witness contains a non-real or non-finite value"
         )
-    if witness.escape_radius_m != ESCAPE_RADIUS_M:
+    if witness.escape_radius_m != _ESCAPE_RADIUS_M:
         raise _UnsupportedWitnessError("escape witness uses the wrong terminal radius")
     if not (
-        SURFACE_OUTER_RADIUS_M
+        _SURFACE_OUTER_RADIUS_M
         < witness.first_equatorial_crossing_radius_m
         < witness.escape_radius_m
     ):
@@ -373,7 +373,7 @@ def _validate_escape_witness(witness: _EscapeWitness) -> None:
     with mp.workdps(witness.precision_digits):
         residual_limit = mp.power(
             10,
-            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+            _RESIDUAL_GUARD_DIGITS - witness.precision_digits,
         )
         direction_norm_squared = mp.fsum(
             component**2 for component in witness.escape_direction_xyz
@@ -417,7 +417,7 @@ def _validate_escape_witness(witness: _EscapeWitness) -> None:
             witness.chart_primitive_residual,
         )
         if any(residual < 0 or residual >= residual_limit for residual in residuals):
-            certified_digits = witness.precision_digits - RESIDUAL_GUARD_DIGITS
+            certified_digits = witness.precision_digits - _RESIDUAL_GUARD_DIGITS
             raise _UnsupportedWitnessError(
                 "escape equation residual does not retain the required "
                 f"{certified_digits} decimal digits"

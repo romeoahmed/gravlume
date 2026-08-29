@@ -14,17 +14,17 @@ import sympy as sp
 from .._binary32 import round_binary32
 from .._sympy import require_equal
 
-ORACLE_PRECISION_DIGITS = 80
-SECOND_RADIATION_CONSTANT_M_K_DECIMAL = "0.014387768775039337"
-BANDS_NM = (
+_ORACLE_PRECISION_DIGITS = 80
+_SECOND_RADIATION_CONSTANT_M_K_DECIMAL = "0.014387768775039337"
+_BANDS_NM = (
     ("red", 600, 700),
     ("green", 500, 600),
     ("blue", 400, 500),
 )
-ORACLE_TEMPERATURES_K = (1000, 3000, 5778, 6000, 10_000)
+_ORACLE_TEMPERATURES_K = (1000, 3000, 5778, 6000, 10_000)
 
 
-def verify_blackbody_redshift_identity() -> None:
+def _verify_blackbody_redshift_identity() -> None:
     frequency, temperature, ratio = sp.symbols("nu T g", finite=True, positive=True)
 
     def planck_shape(nu: sp.Expr, temp: sp.Expr) -> sp.Expr:
@@ -43,7 +43,7 @@ def verify_blackbody_redshift_identity() -> None:
     )
 
 
-def verify_homogeneous_slab_identities() -> None:
+def _verify_homogeneous_slab_identities() -> None:
     incoming, source, first_depth, second_depth = sp.symbols(
         "I S tau_1 tau_2", finite=True, nonnegative=True
     )
@@ -83,7 +83,7 @@ def _dimensionless_planck_bounds(
     lower_nm: int | mp.mpf,
     upper_nm: int | mp.mpf,
 ) -> tuple[mp.mpf, mp.mpf]:
-    second_radiation_constant = mp.mpf(SECOND_RADIATION_CONSTANT_M_K_DECIMAL)
+    second_radiation_constant = mp.mpf(_SECOND_RADIATION_CONSTANT_M_K_DECIMAL)
     nanometers_to_meters = mp.mpf("1e-9")
     return (
         second_radiation_constant
@@ -93,7 +93,7 @@ def _dimensionless_planck_bounds(
     )
 
 
-def planck_band_fraction(
+def _planck_band_fraction(
     temperature_kelvin: mp.mpf,
     lower_nm: int | mp.mpf,
     upper_nm: int | mp.mpf,
@@ -105,7 +105,7 @@ def planck_band_fraction(
     return integral / (mp.pi**4 / 15)
 
 
-def planck_tail(dimensionless_frequency: mp.mpf) -> mp.mpf:
+def _planck_tail(dimensionless_frequency: mp.mpf) -> mp.mpf:
     x = dimensionless_frequency
     exponential = mp.exp(-x)
     return (
@@ -116,7 +116,7 @@ def planck_tail(dimensionless_frequency: mp.mpf) -> mp.mpf:
     )
 
 
-def planck_band_fraction_fast(
+def _planck_band_fraction_fast(
     temperature_kelvin: mp.mpf,
     lower_nm: int | mp.mpf,
     upper_nm: int | mp.mpf,
@@ -124,10 +124,10 @@ def planck_band_fraction_fast(
     lower_x, upper_x = _dimensionless_planck_bounds(
         temperature_kelvin, lower_nm, upper_nm
     )
-    return (planck_tail(lower_x) - planck_tail(upper_x)) / (mp.pi**4 / 15)
+    return (_planck_tail(lower_x) - _planck_tail(upper_x)) / (mp.pi**4 / 15)
 
 
-def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
+def _verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
     minimum_log2 = mp.mpf(-8)
     intervals_per_octave = mp.mpf(128)
     grid: list[tuple[float, ...]] = []
@@ -137,10 +137,10 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
             tuple(
                 round_binary32(
                     float(
-                        mp.log(planck_band_fraction_fast(temperature, lower, upper), 2)
+                        mp.log(_planck_band_fraction_fast(temperature, lower, upper), 2)
                     )
                 )
-                for _, lower, upper in BANDS_NM
+                for _, lower, upper in _BANDS_NM
             )
         )
 
@@ -150,8 +150,8 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
     for index in range(4096):
         coordinate = mp.mpf(index) + mp.mpf("0.5")
         temperature = mp.power(2, minimum_log2 + coordinate / intervals_per_octave)
-        for channel, (_, lower, upper) in enumerate(BANDS_NM):
-            expected = planck_band_fraction_fast(temperature, lower, upper)
+        for channel, (_, lower, upper) in enumerate(_BANDS_NM):
+            expected = _planck_band_fraction_fast(temperature, lower, upper)
             interpolated_log2 = mp.mpf(grid[index][channel]) + mp.mpf("0.5") * (
                 mp.mpf(grid[index + 1][channel]) - mp.mpf(grid[index][channel])
             )
@@ -161,8 +161,8 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
             if expected >= relative_floor:
                 worst_visible_relative = max(worst_visible_relative, error / expected)
 
-    direct = planck_band_fraction(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
-    fast = planck_band_fraction_fast(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
+    direct = _planck_band_fraction(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
+    fast = _planck_band_fraction_fast(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
     if not mp.almosteq(direct, fast, rel_eps=mp.mpf("1e-70")):
         raise AssertionError(f"Planck tail formula mismatch: {direct - fast}")
     if worst_absolute > mp.mpf("3e-6"):
@@ -177,29 +177,29 @@ def verify_log_temperature_lut() -> tuple[mp.mpf, mp.mpf]:
     return worst_absolute, worst_visible_relative
 
 
-def verify_scaled_low_temperature_spectrum() -> tuple[mp.mpf, ...]:
+def _verify_scaled_low_temperature_spectrum() -> tuple[mp.mpf, ...]:
     temperature = mp.mpf(220)
     bolometric_intensity = mp.mpf("1e38")
     bands = tuple(
-        bolometric_intensity * planck_band_fraction_fast(temperature, lower, upper)
-        for _, lower, upper in BANDS_NM
+        bolometric_intensity * _planck_band_fraction_fast(temperature, lower, upper)
+        for _, lower, upper in _BANDS_NM
     )
     if bands[0] <= 1 or bands[1] <= mp.mpf("1e-5"):
         raise AssertionError(f"low-temperature diluted spectrum lost scale: {bands}")
     return bands
 
 
-def verify_high_precision_oracles() -> list[tuple[int, tuple[mp.mpf, ...]]]:
+def _verify_high_precision_oracles() -> list[tuple[int, tuple[mp.mpf, ...]]]:
     total = mp.quad(lambda x: x**3 / mp.expm1(x), [0, 1, 4, 12, mp.inf])
     expected_total = mp.pi**4 / 15
     if not mp.almosteq(total, expected_total, rel_eps=mp.mpf("1e-75")):
         raise AssertionError(f"Planck normalization mismatch: {total - expected_total}")
 
     rows: list[tuple[int, tuple[mp.mpf, ...]]] = []
-    for temperature in ORACLE_TEMPERATURES_K:
+    for temperature in _ORACLE_TEMPERATURES_K:
         fractions = tuple(
-            planck_band_fraction(mp.mpf(temperature), lower, upper)
-            for _, lower, upper in BANDS_NM
+            _planck_band_fraction(mp.mpf(temperature), lower, upper)
+            for _, lower, upper in _BANDS_NM
         )
         if not all(mp.isfinite(value) and value > 0 for value in fractions):
             raise AssertionError(
@@ -211,7 +211,7 @@ def verify_high_precision_oracles() -> list[tuple[int, tuple[mp.mpf, ...]]]:
     return rows
 
 
-def verify_cancellation_sensitive_weight() -> None:
+def _verify_cancellation_sensitive_weight() -> None:
     optical_depth = 2.0**-55
     naive = 1.0 - math.exp(-optical_depth)
     stable = -math.expm1(-optical_depth)
@@ -225,15 +225,15 @@ def verify_cancellation_sensitive_weight() -> None:
         )
 
 
-def print_surface_transport_fixture_oracles() -> None:
+def _print_surface_transport_fixture_oracles() -> None:
     radius = mp.mpf("19.6506789846041094")
     ratio = mp.mpf("0.953264138194626409")
     vacuum_intensity = mp.mpf("0.0235057486961945464")
     emitted_temperature = mp.mpf(6000) / (radius / 6) ** mp.mpf("0.75")
     observed_temperature = ratio * emitted_temperature
     incoming_bands = tuple(
-        vacuum_intensity * planck_band_fraction(observed_temperature, lower, upper)
-        for _, lower, upper in BANDS_NM
+        vacuum_intensity * _planck_band_fraction(observed_temperature, lower, upper)
+        for _, lower, upper in _BANDS_NM
     )
     cases = (
         ("vacuum", mp.mpf(0), mp.mpf(0), None),
@@ -255,8 +255,8 @@ def print_surface_transport_fixture_oracles() -> None:
         if emission_temperature is not None:
             emission_bands = tuple(
                 integrated_emission
-                * planck_band_fraction(emission_temperature, lower, upper)
-                for _, lower, upper in BANDS_NM
+                * _planck_band_fraction(emission_temperature, lower, upper)
+                for _, lower, upper in _BANDS_NM
             )
         observed_bands = tuple(
             incoming * transmittance + emission
@@ -270,13 +270,13 @@ def print_surface_transport_fixture_oracles() -> None:
 
 
 def run() -> None:
-    with mp.workdps(ORACLE_PRECISION_DIGITS):
-        verify_blackbody_redshift_identity()
-        verify_homogeneous_slab_identities()
-        rows = verify_high_precision_oracles()
-        verify_cancellation_sensitive_weight()
-        lut_absolute, lut_visible_relative = verify_log_temperature_lut()
-        scaled_low_temperature = verify_scaled_low_temperature_spectrum()
+    with mp.workdps(_ORACLE_PRECISION_DIGITS):
+        _verify_blackbody_redshift_identity()
+        _verify_homogeneous_slab_identities()
+        rows = _verify_high_precision_oracles()
+        _verify_cancellation_sensitive_weight()
+        lut_absolute, lut_visible_relative = _verify_log_temperature_lut()
+        scaled_low_temperature = _verify_scaled_low_temperature_spectrum()
 
         print("I_nu/nu^3 blackbody shift and bolometric g^4 identities: PASS")
         print("Homogeneous-slab limits and partition invariance: PASS")
@@ -294,5 +294,5 @@ def run() -> None:
         for temperature, fractions in rows:
             values = ",".join(mp.nstr(value, 24) for value in fractions)
             print(f"{temperature},{values}")
-        print_surface_transport_fixture_oracles()
+        _print_surface_transport_fixture_oracles()
         print("RESULT=PASS")

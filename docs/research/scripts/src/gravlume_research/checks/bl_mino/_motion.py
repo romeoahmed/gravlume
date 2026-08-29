@@ -19,8 +19,8 @@ from ._model import (
     _CRITICAL_CAPTURE_PIXEL,
     _CRITICAL_SURFACE_PIXEL,
     _OUTGOING_CHART_SIGN,
-    SURFACE_INNER_RADIUS_M,
-    SURFACE_OUTER_RADIUS_M,
+    _SURFACE_INNER_RADIUS_M,
+    _SURFACE_OUTER_RADIUS_M,
     _CaptureRadialMotion,
     _CriticalPoint,
     _InitialRay,
@@ -103,7 +103,7 @@ def _build_radial_motion(
             "radial root topology has no exterior turning point"
         )
     turning = max(turning_candidates)
-    if turning >= SURFACE_OUTER_RADIUS_M:
+    if turning >= _SURFACE_OUTER_RADIUS_M:
         raise _UnsupportedWitnessError(
             "radial turning precedes the canonical source edge"
         )
@@ -409,7 +409,7 @@ def _solve_source_radius(
         polar_mino_duration,
         precision_digits,
         radial.turning,
-        mp.mpf(SURFACE_OUTER_RADIUS_M),
+        mp.mpf(_SURFACE_OUTER_RADIUS_M),
     )
 
 
@@ -723,7 +723,7 @@ def _surface_transfer_observables(
         * (1 - angular_velocity * separated.impact)
     )
     frequency_ratio = initial_ray.observer_frequency / emitter_frequency
-    emitted_intensity = (source_radius / SURFACE_INNER_RADIUS_M) ** -3
+    emitted_intensity = (source_radius / _SURFACE_INNER_RADIUS_M) ** -3
     return _TransferObservables(
         frequency_ratio=frequency_ratio,
         emitted_intensity=emitted_intensity,

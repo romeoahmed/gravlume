@@ -20,12 +20,12 @@ from ._model import (
     _CRITICAL_SURFACE_PIXEL,
     _CRITICAL_SURFACE_POLAR_TURNINGS,
     _HORIZON_TERMINAL,
+    _RESIDUAL_GUARD_DIGITS,
     _SOURCE_EDGE_INITIAL_POLAR_SIDE,
     _SOURCE_EDGE_RADIAL_TURNINGS,
+    _SURFACE_INNER_RADIUS_M,
+    _SURFACE_OUTER_RADIUS_M,
     _SURFACE_TERMINAL,
-    RESIDUAL_GUARD_DIGITS,
-    SURFACE_INNER_RADIUS_M,
-    SURFACE_OUTER_RADIUS_M,
     _CriticalCurveCaseWitness,
     _CriticalCurveCorpusWitness,
     _CriticalSurfaceWitness,
@@ -93,8 +93,8 @@ def _compute_critical_surface_witness(
         geometry.radius,
         second_crossing_duration,
         precision_digits,
-        mp.mpf(SURFACE_INNER_RADIUS_M),
-        mp.mpf(SURFACE_OUTER_RADIUS_M),
+        mp.mpf(_SURFACE_INNER_RADIUS_M),
+        mp.mpf(_SURFACE_OUTER_RADIUS_M),
     )
     path = _integrate_path_observables(
         geometry,
@@ -128,7 +128,7 @@ def _compute_critical_surface_witness(
         ),
         first_equatorial_crossing_radius_m=first_crossing_radius,
         first_crossing_below_surface_margin_m=(
-            mp.mpf(SURFACE_INNER_RADIUS_M) - first_crossing_radius
+            mp.mpf(_SURFACE_INNER_RADIUS_M) - first_crossing_radius
         ),
         radial_turning_above_horizon_margin_m=radial.turning - horizon,
         source_radius_m=source_radius,
@@ -222,7 +222,7 @@ def _compute_horizon_witness(
         horizon_mino_duration=capture_mino_duration,
         first_equatorial_crossing_radius_m=first_crossing_radius,
         first_crossing_below_surface_margin_m=(
-            mp.mpf(SURFACE_INNER_RADIUS_M) - first_crossing_radius
+            mp.mpf(_SURFACE_INNER_RADIUS_M) - first_crossing_radius
         ),
         horizon_after_first_crossing_mino_margin=horizon_after_first_crossing,
         horizon_radius_m=radial.horizon,
@@ -343,8 +343,10 @@ def _validate_critical_surface_witness(witness: _CriticalSurfaceWitness) -> None
             "critical surface witness contains a non-real or non-finite value"
         )
     if not (
-        witness.first_equatorial_crossing_radius_m < SURFACE_INNER_RADIUS_M
-        and SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= SURFACE_OUTER_RADIUS_M
+        witness.first_equatorial_crossing_radius_m < _SURFACE_INNER_RADIUS_M
+        and _SURFACE_INNER_RADIUS_M
+        <= witness.source_radius_m
+        <= _SURFACE_OUTER_RADIUS_M
     ):
         raise _UnsupportedWitnessError(
             "critical surface crossings do not certify the named event order"
@@ -371,12 +373,12 @@ def _validate_critical_surface_witness(witness: _CriticalSurfaceWitness) -> None
     with mp.workdps(witness.precision_digits):
         residual_limit = mp.power(
             10,
-            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+            _RESIDUAL_GUARD_DIGITS - witness.precision_digits,
         )
         margin_residual = abs(
             witness.first_crossing_below_surface_margin_m
             - (
-                mp.mpf(SURFACE_INNER_RADIUS_M)
+                mp.mpf(_SURFACE_INNER_RADIUS_M)
                 - witness.first_equatorial_crossing_radius_m
             )
         )
@@ -477,7 +479,7 @@ def _validate_horizon_witness(witness: _HorizonWitness) -> None:
     if not (
         witness.horizon_radius_m
         < witness.first_equatorial_crossing_radius_m
-        < SURFACE_INNER_RADIUS_M
+        < _SURFACE_INNER_RADIUS_M
     ):
         raise _UnsupportedWitnessError(
             "horizon witness does not certify the first non-surface crossing"
@@ -504,7 +506,7 @@ def _validate_horizon_witness(witness: _HorizonWitness) -> None:
         expected_horizon = mp.mpf(8) / 5
         residual_limit = mp.power(
             10,
-            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+            _RESIDUAL_GUARD_DIGITS - witness.precision_digits,
         )
         horizon_residual = abs(witness.horizon_radius_m - expected_horizon)
         event_residual = abs(
@@ -521,7 +523,7 @@ def _validate_horizon_witness(witness: _HorizonWitness) -> None:
         margin_residual = abs(
             witness.first_crossing_below_surface_margin_m
             - (
-                mp.mpf(SURFACE_INNER_RADIUS_M)
+                mp.mpf(_SURFACE_INNER_RADIUS_M)
                 - witness.first_equatorial_crossing_radius_m
             )
         )

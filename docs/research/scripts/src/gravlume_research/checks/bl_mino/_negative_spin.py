@@ -14,11 +14,11 @@ from ._model import (
     _NEGATIVE_SPIN_PIXEL,
     _NEGATIVE_SPIN_ROOT_CLASS,
     _OUTGOING_CHART_SIGN,
+    _RESIDUAL_GUARD_DIGITS,
     _SOURCE_EDGE_INITIAL_POLAR_SIDE,
+    _SURFACE_INNER_RADIUS_M,
+    _SURFACE_OUTER_RADIUS_M,
     _SURFACE_TERMINAL,
-    RESIDUAL_GUARD_DIGITS,
-    SURFACE_INNER_RADIUS_M,
-    SURFACE_OUTER_RADIUS_M,
     _NegativeSpinSurfaceWitness,
     _SeparatedState,
     _UnsupportedWitnessError,
@@ -126,8 +126,8 @@ def _negative_spin_surface_witness(
             radial_turning_radius_m=radial.turning,
             radial_turning_above_horizon_margin_m=radial.turning - horizon,
             source_radius_m=source_radius,
-            source_inner_margin_m=source_radius - SURFACE_INNER_RADIUS_M,
-            source_outer_margin_m=SURFACE_OUTER_RADIUS_M - source_radius,
+            source_inner_margin_m=source_radius - _SURFACE_INNER_RADIUS_M,
+            source_outer_margin_m=_SURFACE_OUTER_RADIUS_M - source_radius,
             source_azimuth_unwrapped_rad=path.terminal_azimuth_unwrapped,
             source_azimuth_rad=path.terminal_azimuth,
             emitter_angular_velocity_per_m=_circular_emitter_angular_velocity(
@@ -320,7 +320,7 @@ def _validate_negative_spin_surface_witness(
             * (1 - expected_angular_velocity * witness.impact_parameter)
         )
         expected_emitted_intensity = (
-            witness.source_radius_m / SURFACE_INNER_RADIUS_M
+            witness.source_radius_m / _SURFACE_INNER_RADIUS_M
         ) ** -3
         expected_observed_intensity = (
             expected_emitted_intensity * expected_frequency_ratio**4
@@ -353,11 +353,11 @@ def _validate_negative_spin_surface_witness(
             ),
             (
                 witness.source_inner_margin_m,
-                witness.source_radius_m - SURFACE_INNER_RADIUS_M,
+                witness.source_radius_m - _SURFACE_INNER_RADIUS_M,
             ),
             (
                 witness.source_outer_margin_m,
-                SURFACE_OUTER_RADIUS_M - witness.source_radius_m,
+                _SURFACE_OUTER_RADIUS_M - witness.source_radius_m,
             ),
             (
                 witness.source_azimuth_rad,
@@ -383,7 +383,7 @@ def _validate_negative_spin_surface_witness(
             )
         residual_limit = mp.power(
             10,
-            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+            _RESIDUAL_GUARD_DIGITS - witness.precision_digits,
         )
         relation_residuals = tuple(
             abs(actual - expected) / max(mp.mpf(1), abs(expected))
