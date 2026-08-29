@@ -1,11 +1,11 @@
 # 渲染算法、适用边界与研究门槛
 
-本文把黑洞图像拆成 geometry、transport、sampling/reconstruction 和 display 四类问题。它规定算法边界与准入原则；当前实现证据见 [GPU renderer](gpu-renderer.md)，实验过程和性能数据见 [research](research/README.md)。外部论文或作者实现只支持其明确的 spacetime、source、observer、precision 和 hardware domain；任何方法进入 Gravlume 前都必须通过项目自己的 observable contract。
+本文把黑洞图像拆成 geometry、transport、sampling/reconstruction 和 display 四类问题，并定义候选算法的准入、fallback 与证据原则。它不描述当前完成度，也不排列路线图优先级；当前实现见 [GPU 证据](gpu-renderer.md)，未完成工作的顺序见[能力路线](roadmap.md)，实验过程与性能数据见 [research](research/README.md)。外部论文或作者实现只支持其明确的 spacetime、source、observer、precision 和 hardware domain；任何方法进入 Gravlume 前都必须通过项目自己的 observable contract。
 
 ## 1. 决策原则
 
-1. **生产顺序是 Schwarzschild → Kerr → Kerr 专用加速；Kerr–Newman 是 research geometry。** Kerr 是解析轨迹、transfer map 和观测解释的主干，显著净电荷没有默认产品优先级所需的天体证据。
-2. **GPU Cartesian Kerr–Schild `f32` tracer 是数值基线。** CPU `f64` reference 与之独立；analytic/LUT 不能成为唯一路径。
+1. **通用 Cartesian Kerr–Schild 路径定义 fallback。** Schwarzschild/Kerr 专用 analytic、LUT 或 transfer-map 路径只能作为受限 accelerator；Kerr–Newman 保持 research geometry，显著净电荷没有默认产品优先级所需的天体证据。
+2. **CPU reference 与 GPU numerical baseline 保持独立。** analytic/LUT 不能成为唯一正确路径，也不能绕过相同 observable budget。
 3. **先让几何语义可审计，再谈重建。** termination、branch/parity、source anchor、travel time、frequency ratio 和 source-space footprint 是 adaptive/filter/temporal 的输入；逻辑合同不等于默认常驻全帧缓冲。
 4. **表面 transfer map 可高价值复用，体传输必须谨慎。** scalar volume 和 Stokes transport 需要沿有序路径重积；不能把一张源坐标纹理冒充所有介质。
 5. **fast-light/slow-light 是 source 数据语义。** slow-light 需要 emission time、snapshot revision、插值与 out-of-domain policy。
@@ -77,15 +77,15 @@ artifact 或 extent-scaled diagnostic plane。当前能力与限制见 [GPU Rend
 
 默认相机从 observer 沿 negative affine direction 回溯，因此 GPU renderer 选择 outgoing Kerr–Schild。Bozzola、Chan 与 Paschalidis 对该传播方向证明 ingoing chart 在过去视界形成 coordinate barrier，而 outgoing chart 给出数值正则的光线；这不是精度旋钮，而是算法定义域选择：[Phys. Rev. D 108, 084004 (2023)](https://doi.org/10.1103/PhysRevD.108.084004)。两 chart 的 public spin 都是固定右手 Cartesian orientation 中的物理 $a=J/M$；outgoing 只把 oblate spatial twist 取为 $-a$，不能把整个 spacetime 或 UI 参数解释成 $-a$。versioned ingoing reference fixture 保持原语义，不能静默换 chart。
 
-production KS kernel 使用精确约化后的六维 dynamic phase：每 ray 保存常量 $E=-p_t$，将
-$(t',x',y',z')$ 作为一个 `vec4` 做 RK4 权重，coordinate time 只累计相对 increment。geometry
-直接复用 discriminant-root $\Sigma$、$1/r$、$1/(r^2+a^2)$，Hamilton force 只计算
-$J_\ell^{\mathsf T}p$，不构造 full null Jacobian。Carter diagnostic 使用无 axis seam、且不借
-null constraint 的 Cartesian 形式；event guard 仅在证明 cubic 单调且 derivative 有条件下做
-Hermite refinement。完整公式与形式化证明见
-[KS RK4 reduction](research/kerr-schild-rk4-reduction.md)。
+数值基线可以采用经过证明的代数约化减少重复 geometry 工作，但不能改变连续方程、event ordering、
+travel time 或诊断语义。具体采用状态见 [GPU 证据](gpu-renderer.md#数值基线)；六维 dynamic phase、
+contracted null Jacobian、Cartesian Carter 表达式和受限 Hermite event refinement 的形式化证明见
+[KS RK4 reduction](research/kerr-schild-rk4-reduction.md)。本设计不冻结 WGSL lane packing、内部 helper
+或 pass 数量。
 
-GPU 候选先比较固定 RK4 + 几何/量化 step 与少量有界 embedded tier。每 ray 的完全自适应 DP5(4) 容易产生 accept/reject 发散；它优先属于 CPU reference。选择基于 GPU milliseconds 对 observable error 曲线，不基于“阶数更高”的名字。
+任何 GPU integrator 候选都必须比较完整 GPU milliseconds 对 observable error/fallback 曲线，不能只按
+方法阶数、局部 residual 或预估 divergence 选择。完全自适应 accept/reject 可能产生 lane divergence，
+但是否值得量化 tier、embedded estimate 或 retry 只能由目标 workload 证明。
 
 ### 3.2 Schwarzschild 专用路径
 
@@ -116,9 +116,10 @@ Carter separability、Carlson elliptic forms、analytic geodesics，以及 [AART
 Kerr–Newman exterior 有 Mino-time 显式解，可用于 CPU semi-analytic reference 或固定参数 LUT。[Wang–Lee–Lin 2022](https://arxiv.org/abs/2208.11906) 但 WGSL 内同时实现完整 elliptic functions、root branches、任意近场 observer 与 horizon crossing 风险很高。
 
 产品策略：domain/reference 保留 $q_e$ 和 sub/extreme/superextreme 分类；GPU 通用路径用 Kerr–Schild。
-neutral photon 在严格亚极端受限域可先用 outward-rounded Bernstein coefficient 证明径向势在
-$[r_+,r_{obs}]$ 严格为正并直接判定 capture；证书不确定、near-extreme、axis 或无 horizon 时仍
-走通用 KS。analytic KN 只有独立 fixture、误差与产品场景证明价值后再实现。
+历史 outward-rounded Bernstein certificate 只证明受限区间内的径向势符号，不能产生完整 travel-time
+observable，相关 production shortcut 已撤出。未来 Kerr–Newman classifier 即使保留严格证书，也必须
+继续计算或独立验证完整 terminal observable，并在 certificate 不确定、near-extreme、axis 或无 horizon
+时回退通用 KS；细节见 [GPU 加速账本](research/gpu-geodesic-acceleration.md#53-interval-kerr-capture-历史实验已撤出)。
 
 ## 4. Kerr 解析与 Mino 路径的边界
 
@@ -188,11 +189,11 @@ J=\frac{\partial y}{\partial s}
 \]
 
 从 $J$ 的 singular values/ellipse 推导 texture LOD、anisotropy 与 refine signal。surface branch key
-v1 包含 initial polar side、radial turning count、equatorial crossing count 与 signed azimuth winding；
-crossing 只在 accepted、且位于 terminal fraction 之前时提交。当前五射线 footprint 固定同一
-Observation/generation 与 equatorial source chart，并先要求 termination、ambiguity 与该 key 一致，
-再求 $J$ 和 parity；否则返回 discontinuity。未来 reconstruction 还必须在邻域间比较已求得的
-parity、source kind/chart 与 generation，不能跨边界求一个巨大梯度。
+至少包含 initial polar side、radial turning count、equatorial crossing count 与 signed azimuth winding；
+crossing 只在 accepted、且位于 terminal fraction 之前时提交。任一 footprint 估计都必须先证明邻域的
+termination、ambiguity、branch、source chart 与 generation 相容，再求 $J$ 和 parity；否则返回
+discontinuity。具体 estimator、ray count 与适用域只在
+[Reference 证据](reference-implementation.md)和 [GPU 证据](gpu-renderer.md)维护。
 
 escape sky 使用 seam-aware spherical/cubemap differential；surface disk 使用局部 tangent chart；volume footprint 还取决于沿路径的 beam/medium scale，不能由最终单点 Jacobian 完整表达。
 
@@ -300,7 +301,7 @@ WGSL 没有可作为完整防线的 core `isFinite` 工作流。实现先在运�
 ### 9.2 具名策略
 
 - 所有距离先除以 $M$，状态维持 $O(1)$；
-- 选条件较好的 state，如 reciprocal radius，而非在远场计算大多项式相消；
+- 选择条件较好的 algebra/state，避免远场大多项式相消；任何 reciprocal state 仍须通过完整 terminal observable，而不是从局部条件数推断可接受；
 - 正 quadratic root 使用稳定公式；
 - horizon/extremal 的 $\Delta$ 用参数状态选择 factored/nonnegative form；
 - event 定位使用 bracket/residual，不用“刚好跨过就算命中”；
@@ -335,14 +336,14 @@ WGSL 没有可作为完整防线的 core `isFinite` 工作流。实现先在运�
 
 ## 11. 发行前最低算法矩阵
 
-| 能力                   | 必须比较                                                 | 未通过时                                  |
-| ---------------------- | -------------------------------------------------------- | ----------------------------------------- |
-| GPU trace              | CPU reference 的 termination/source/frequency/error      | 降低 extent/提高 refine；不能隐藏 failure |
-| spatial reconstruction | full-resolution fields，不只 PSNR                        | 扩大真实 trace 区域                       |
-| temporal               | no-history reference + branch-aware fields               | 限制 stationary 或关闭                    |
-| dynamic resolution     | fixed-resolution quality/performance                     | 固定分辨率                                |
-| LUT/analytic           | Cartesian KS in-domain/out-of-domain                     | 不进入 resolved plan                      |
-| scalar volume          | analytic slab + step/tolerance sequence                  | 限制 surface/vacuum                       |
-| polarization           | direct parallel transport/analytic slab/independent code | 不发行该能力                              |
+| 能力                   | 必须比较                                                            | 未通过时                                              |
+| ---------------------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
+| GPU trace              | CPU reference 的 termination/branch/source/frequency/time/radiance/error | 收窄适用域、提高 refine 或 fallback；不能隐藏 failure |
+| spatial reconstruction | full-resolution fields，不只 PSNR                                   | 扩大真实 trace 区域                                   |
+| temporal               | no-history reference + branch-aware fields                          | 限制 stationary 或关闭                                |
+| dynamic resolution     | fixed-resolution quality/performance                                | 固定分辨率                                            |
+| LUT/analytic           | Cartesian KS in-domain/out-of-domain                                | 不进入 resolved plan                                  |
+| scalar volume          | analytic slab + step/tolerance sequence                             | 限制 surface/vacuum                                   |
+| polarization           | direct parallel transport/analytic slab/independent code            | 不发行该能力                                          |
 
 任何 accelerator 只有在适用域可检查、错误可观察，并相对数值基线满足同一 observable budget 时才能进入 resolved plan。完整依赖顺序与退出条件见[路线图](roadmap.md)。

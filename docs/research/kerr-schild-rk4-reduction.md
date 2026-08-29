@@ -37,13 +37,13 @@
 
 本文只补现有 ledger 中尚未形式化的 **KS RK4 单步代数与 event root**，不重做以下工作：
 
-| 已有结论                                                                                                                  | 本文处理方式                                            |
-| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| outgoing KS、8×8、endpoint reuse 与 committed-only singularity 已采用；map/interval 已撤出                     | 保留历史证据，不把旧性能数字当当前授权                  |
-| numerical reciprocal-Mino fixed-step 因 terminal travel-time 反例被拒绝                                                   | 不恢复，不再扫描 fixed Mino factor                      |
-| pure-Kerr elliptic/Carlson terminal solver 是独立高收益路线                                                               | 不实现 special functions；只定义它与 KS fallback 的边界 |
-| wavefront/subgroup 需要 active-ratio 证据                                                                                 | 不引入 backend-specific queue 或 subgroup 假设          |
-| atomic full-frame publication 与 HDR presentation                                                                         | 不变；所有 candidate 仍一次发布完整 generation          |
+| 已有结论                                                                               | 本文处理方式                                            |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| outgoing KS、8×8、endpoint reuse 与 committed-only singularity 已采用；map/interval 已撤出 | 保留历史证据，不把旧性能数字当当前授权                  |
+| numerical reciprocal-Mino fixed-step 因 terminal travel-time 反例被拒绝               | 不恢复，不再扫描 fixed Mino factor                      |
+| pure-Kerr elliptic/Carlson terminal solver 是独立高收益路线                             | 不实现 special functions；只定义它与 KS fallback 的边界 |
+| wavefront/subgroup 需要 active-ratio 证据                                             | 不引入 backend-specific queue 或 subgroup 假设          |
+| atomic full-frame publication 与 HDR presentation                                     | 不变；所有 candidate 仍一次发布完整 generation          |
 
 Cartesian KS 对 GPU 友好的主要原因不是“公式短”，而是 horizon/axis regularity、rank-one
 metric 与可合并的 RHS 数据流。GRay2 给出 Cartesian KS metric、隐式 oblate radius，并证明
@@ -520,7 +520,7 @@ Carter-separated radial potential 为
 Wang–Lee–Lin 的 Eq. (33)–(36) 给出相同 quartic coefficients。
 [Kerr–Newman geodesics](https://arxiv.org/pdf/2208.11906)
 
-因此 current Kerr interval Bernstein certificate 的结构不需 quartic root solve；只需让 constant
+因此历史 Kerr interval Bernstein certificate 的结构不需 quartic root solve；只需让 constant
 coefficient、outer horizon
 
 \[
@@ -672,11 +672,11 @@ UI 与 publication 的整帧 wall latency。
 
 ## 10. 接口与 fallback 边界
 
-这些约化应该停留在 shader-private deep module，不扩大 Rust public API：
+这些约化保留在 shader-private deep module，不扩大 Rust public API：
 
-- `TerminalMap` 仍只承诺 branch/direction/time 等 terminal observable；
-- `PathSampler` 未来需要 ordered checkpoints，不能由 6D terminal fast path 伪造；
-- `DiagnosticCapture` 保留现有记录语义；若内部不再动态积分 \(p_t\)，energy drift 应明确写为构造上
+- terminal-map accelerator 只承诺 branch/direction/time 等 terminal observable；
+- 未来 path sampling 需要 ordered checkpoints，不能由 6D terminal fast path 伪造；
+- diagnostic capture 保留现有记录语义；若内部不再动态积分 \(p_t\)，energy drift 应明确写为构造上
   exact zero，而不是删除字段或改变 record ABI；
 - 历史 interval capture、未来 elliptic terminal solver 与任意 heuristic 都只能返回
   `accepted terminal` 或 machine-readable `fallback`，fallback 从 validated camera initial state

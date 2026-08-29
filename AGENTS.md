@@ -1,11 +1,17 @@
 # Repository Instructions
 
-These instructions apply to the entire workspace. More specific `AGENTS.md` or `AGENTS.override.md` files take precedence within their directories.
+These instructions apply to the entire workspace. More specific `AGENTS.md` or
+`AGENTS.override.md` files take precedence within their directories.
 
 ## Sources of truth
 
-- `Cargo.toml` and `Cargo.lock` define toolchain, dependency, and feature facts.
-- `docs/product.md`, `docs/physics.md`, `docs/validation.md`, `docs/architecture.md`, and `docs/platform.md` are normative contracts.
+- `Cargo.toml` and `Cargo.lock` define Rust toolchain, dependency, and feature facts.
+- `docs/research/scripts/pyproject.toml` defines the Python research environment's abstract
+  requirements; `docs/research/scripts/uv.lock` defines its exact resolution.
+- `docs/product.md`, `docs/physics.md`, `docs/validation.md`, `docs/architecture.md`, and
+  `docs/platform.md` are normative contracts.
+- `docs/rendering.md` defines algorithm admission and fallback policy; `docs/roadmap.md` orders
+  unfinished work without claiming it is implemented.
 - `docs/reference-implementation.md` and `docs/gpu-renderer.md` describe evidence that exists now.
 - `docs/research/` records experiments and decisions; it never defines production behavior by itself.
 
@@ -22,13 +28,15 @@ Gravlume is a Rust 2024 native desktop workspace:
 - `gravlume-desktop`: the winit/egui composition root;
 - root package: process entry point only.
 
-Keep WGSL beside its Rust consumer in `crates/gravlume-render/src/shaders/`. Do not introduce a solver trait, render graph, compatibility layer, or public seam until a second real consumer exists.
+Keep WGSL beside its Rust consumer in `crates/gravlume-render/src/shaders/`. Do not introduce a
+solver trait, render graph, compatibility layer, or public seam until a second real consumer exists.
 
 ## Change workflow
 
 1. Read the applicable contract and inspect `git status` before editing.
 2. Preserve unrelated staged and unstaged work; never overwrite user changes.
-3. Prefer root-cause changes at the smallest stable seam. Breaking changes are allowed when they make the model clearer and all consumers migrate together.
+3. Prefer root-cause changes at the smallest stable seam. Breaking changes are allowed when they
+   make the model clearer and all consumers migrate together.
 4. Update the authoritative documentation in the same change as behavior or contract changes.
 5. Run verification proportional to risk; Cargo commands require elevated sandbox execution.
 
@@ -40,7 +48,12 @@ cargo test --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-Use `GRAVLUME_SMOKE_ONCE=1 cargo run --locked` for native lifecycle, surface, publication, and timing changes. Run `cargo tree -e features` after dependency or target-feature changes.
+Use `GRAVLUME_SMOKE_ONCE=1 cargo run --locked` for native lifecycle, surface, publication, and
+timing changes. Run `cargo tree -e features` after dependency or target-feature changes.
+
+For changes under `docs/research/scripts/`, use the locked Python commands and scientific witnesses
+defined in `docs/research/python-research-tooling.md`; pytest does not replace the end-to-end
+witnesses.
 
 ## Rust and WGSL
 

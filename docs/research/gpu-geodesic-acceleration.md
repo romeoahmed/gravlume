@@ -19,7 +19,7 @@ terminal 与 direction，漏掉验证合同的 `1e-3 M` travel-time observable�
 
 已完成的顺序是：production/capture ABI 瘦身 → 2D/global coherence 与 interval 实验 → outgoing-KS/BL exact seam → numerical-Mino 否决 → branch-aware shadow coverage → 完整 observable 复核后撤出 map/interval。下一步算法主线是完整解析/半解析 Kerr terminal solver；只有 aggregate long-tail 证据支持时才做 wavefront/subgroup。BS3(2) fixed-step 探针仍未证明价值。
 
-## 1. 基线环境与当前成本模型
+## 1. 研究基线与成本根因
 
 研究基线的 lockfile 当时固定 `wgpu/wgpu-core/wgpu-hal/wgpu-types/Naga 30.0.0`、`bytemuck 1.25.2`、`glam 0.33.3`、`egui/egui-wgpu 0.36.1`、`pollster 1.0.1` 与 `winit 0.30.13`；当前依赖以 [`Cargo.lock`](../../Cargo.lock) 为准。macOS 只启用 wgpu Metal，Windows/Linux 只启用 Vulkan；当前 device 只请求 `TIMESTAMP_QUERY`。[workspace manifest](../../Cargo.toml) [render manifest](../../crates/gravlume-render/Cargo.toml) [capability baseline](../../crates/gravlume-render/src/capabilities.rs)
 
@@ -35,11 +35,11 @@ terminal 与 direction，漏掉验证合同的 `1e-3 M` travel-time observable�
 
 当前 production ABI 只有 trace uniform、HDR storage texture 与 dispatch uniform；四个 record plane 仅由 test-only capture 注入。新 generation 分配 candidate HDR、UI 与 shadow edge queue，上一张完整 scene 独立持有，完成后直接提升 candidate texture view。删除 global map 后，3840×2160 的 cold、active 与 completed transactional rebuild 都通过 256 MiB 逻辑 gate；synthetic oversized plan 仍在分配前返回 typed rejection。该账本不包含 surface drawable、driver heap 或 alignment，也不冒充实测总显存。
 
-建议把资源合同拆成两个明确产品，而不是让测试字段支配每帧资源：
+采用的资源决策是把 presentation 与 diagnostic capture 分开，而不是让测试字段支配每帧资源：
 
-- `PresentationTrace`：只产生画面所需的 HDR 或 compact semantic map，加 O(1) 大小的 termination/step/drift histogram；
-- `DiagnosticCapture`：按显式请求分配三个 f32/u32 plane，继续服务 GPU 合同、科学诊断和 readback；
-- 若未来 source 重建确实需要 direction/branch，应给 presentation 定义自己的最小、误差受检格式，不能把 48 B/pixel 测试记录原样常驻。
+- production trace 只创建画面与既定 refinement 实际消费的资源；
+- test-only diagnostic capture 按显式请求临时创建完整 scientific planes 并做有界 readback；
+- 若未来 source 重建确实需要 direction/branch，应按真实 consumer 定义最小、误差受检格式，不能把历史 `48 B/pixel` 测试记录原样常驻。
 
 这项主要修复 resize/VRAM，而非承诺 6× 算力提升；但它给 fallback queue、semantic map 或 wavefront state 留出真实预算，也减少 terminal store traffic。完整 diagnostic capture 仍是验证工具，不能删除其语义。
 
@@ -118,14 +118,14 @@ conservative fast solver ── accepted ──► terminal/appearance output
 
 ### 2.5 当前演示与未来交互的适配
 
-| workload                                      | 最合适路线                                                        | 不应外推                                                |
-| --------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------- |
+| workload                                      | 最合适路线                                                   | 不应外推                                                |
+| --------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------- |
 | 当前固定 `a=0.8`、近场 observer、analytic sky | full Cartesian KS；研究 pure-Kerr elliptic terminal fast path | AART equatorial grid、Schwarzschild LUT                 |
-| 只改 sky/appearance/HDR                       | 复用 terminal map，重跑 appearance pass                           | 重新追完整 geodesic                                     |
-| 未来移动 camera/FOV/spin                      | 每 generation 重跑 analytic + KS fallback                         | 固定 observer LUT/旧 transfer map                       |
-| 未来 Kerr–Newman/超极端参数                   | 通用 KS baseline；analytic KN 独立受限 variant                    | 把 pure-Kerr root classifier 扩大命名即复用             |
-| 未来 surface                                  | terminal map 加 source anchor/branch/frequency                    | 只缓存 tone-mapped RGB                                  |
-| 未来 volume/slow-light                        | `PathSampler`/checkpoints 与 retarded time                        | 只有 terminal elliptic result 却声称支持 path transport |
+| 只改 sky/appearance/HDR                       | 复用 terminal map，重跑 appearance pass                      | 重新追完整 geodesic                                     |
+| 未来移动 camera/FOV/spin                      | 每 generation 重跑 analytic + KS fallback                    | 固定 observer LUT/旧 transfer map                       |
+| 未来 Kerr–Newman/超极端参数                   | 通用 KS baseline；analytic KN 独立受限 variant               | 把 pure-Kerr root classifier 扩大命名即复用             |
+| 未来 surface                                  | terminal map 加 source anchor/branch/frequency               | 只缓存 tone-mapped RGB                                  |
+| 未来 volume/slow-light                        | ordered checkpoints 与 retarded time                         | 只有 terminal elliptic result 却声称支持 path transport |
 
 因此当前“scene 不变时不重复追迹”应与“参数变化后快速得到新完整 generation”分开计时；前者是 cache hit，后者才检验 solver 是否达到交互预算。
 
@@ -178,7 +178,7 @@ Metal 原生 pipeline 明确把 [`threadExecutionWidth`](https://developer.apple
 
 当时的 production 先用独立 escape-map pass 在全局 4-pixel grid 上追踪每个共享 node 一次，把 Horizon/Escape tag 与 octahedral-quantized Escape direction 压成一个 `u32`；trace pass 再让每个 8×8 tile 读自己的 `3×3` stencil。九点必须全部 Escape，且四边中点与中心相对归一化整 tile corner direction 的 chord residual 不超过 `min(半像素角, 3.0e-4 rad)`，整 tile 才以同一 3×3 stencil 的四个 4×4 子格做连续分片双线性 direction reconstruction。其他 tile 执行原始逐像素 KS，并复用 tile 内四个 node。两个 pass 位于同一 command buffer 的独立 compute usage scope；同步依据是 wgpu 的资源转换，不是 backend 私有 barrier。
 
-1280×720 全像素合同要求 FP16 terminal tag 全等，并对所有 reconstructed Escape 比较未 tone-map 的 direction。Apple M5/Metal 两次 32 对位置对称 `ABBA/BAAB` A/B 相对 workgroup-local 路径分别为 `-37.941%`、CI `[-41.091%, -34.885%]` 与 `-27.923%`、CI `[-32.350%, -23.353%]`；初始 `2.0e-4` 准入重建 `621,084` 个 Escape pixels。把内部 residual 门限预注册为 `2.5e-4 rad` 后，相对原门限的 16/32 对分别改善 `10.432%`（CI `[-16.384%, -5.848%]`）和 `6.551%`（CI `[-11.095%, -2.015%]`），直接 full-KS gate 重建 `653,604` pixels，最大 chord² `9.251701e-8`。在相同 3×3 nodes 上改用分片重建，把同一 accepted set 的最大 full-KS chord² 降到 `2.320720e-8`；利用该余量把内部 gate 一次性扩大到仍低于最终合同的 `3.0e-4 rad`，重建 `677,064` pixels，最大 chord² `2.348202e-8`，并相对 2.5e-4 整 tile 双线性再改善 `4.775%`、CI `[-5.683%, -3.957%]`。全部方案均保持 921,600 个 branch 全等，最终预算是 `3.82e-4 rad` 对应的 `1.45924e-7` chord²；spin/near-field/far-field/near-axis 参数矩阵通过，因此 production 采用 3.0e-4 分片方案。16×16 tile 用同一 gate 的 32 对实验为 `-0.221%`、CI `[-4.717%, +4.762%]`，故恢复 8×8。这里保留 4% 历史布局收益、19% local transfer、28–38% global map、6–10% 初次门限改进与 4.8% 分片改进的理由相同：置信区间、重复方向、正确性和复杂度一起判断，不设机械倍数门槛。
+1280×720 全像素合同要求 FP16 terminal tag 全等，并对所有 reconstructed Escape 比较未 tone-map 的 direction。Apple M5/Metal 两次 32 对位置对称 `ABBA/BAAB` A/B 相对 workgroup-local 路径分别为 `-37.941%`、CI `[-41.091%, -34.885%]` 与 `-27.923%`、CI `[-32.350%, -23.353%]`；初始 `2.0e-4` 准入重建 `621,084` 个 Escape pixels。把内部 residual 门限预注册为 `2.5e-4 rad` 后，相对原门限的 16/32 对分别改善 `10.432%`（CI `[-16.384%, -5.848%]`）和 `6.551%`（CI `[-11.095%, -2.015%]`），直接 full-KS gate 重建 `653,604` pixels，最大 chord² `9.251701e-8`。在相同 3×3 nodes 上改用分片重建，把同一 accepted set 的最大 full-KS chord² 降到 `2.320720e-8`；利用该余量把内部 gate 一次性扩大到仍低于最终合同的 `3.0e-4 rad`，重建 `677,064` pixels，最大 chord² `2.348202e-8`，并相对 2.5e-4 整 tile 双线性再改善 `4.775%`、CI `[-5.683%, -3.957%]`。全部方案均保持 921,600 个 branch 全等，最终预算是 `3.82e-4 rad` 对应的 `1.45924e-7` chord²；spin/near-field/far-field/near-axis 参数矩阵通过，因此当时 production 采用 3.0e-4 分片方案。该路径后来因缺失 travel time 撤出。16×16 tile 用同一 gate 的 32 对实验为 `-0.221%`、CI `[-4.717%, +4.762%]`，故恢复 8×8。这里保留 4% 历史布局收益、19% local transfer、28–38% global map、6–10% 初次门限改进与 4.8% 分片改进的理由相同：置信区间、重复方向、正确性和复杂度一起判断，不设机械倍数门槛。
 
 global map 稳定后又单独测试“8×8 workgroup 不变、四个 workgroup 共享一个 16×16 coarse transfer cell”，避免把旧 256-lane workgroup 的否决机械外推。它通过全像素 branch gate，最大 direction chord² `4.365467e-8` 仍在预算内，但 16 对相对 8×8 cell **慢 `29.126%`**、CI `[+24.004%, +34.100%]`；更稀 node 带来的节省被更低 reconstruction acceptance 与 fallback 成本压过。候选已完全移除，production 不增加 cell-size override。
 
@@ -193,7 +193,7 @@ R(r)=E^2r^4+\left[-2Ea(L-aE)-((L-aE)^2+Q)\right]r^2
 +2((L-aE)^2+Q)r-a^2Q.
 \]
 
-若 backward ray 初始向内，且能证明 `R(r)>0` 覆盖 `[r_+,r_obs]`，就不存在外部 radial turning point，可直接判定 Horizon。实现不求四次方程的根，而是把区间分成 12 段；每段 degree-4 power coefficients 转为 Bernstein coefficients，只有全部向外扩张 interval 的下界严格为正才接受。`IntervalF32` 以 `vec2<lower,upper>` 表示，在每个 WGSL `+/-/*` 后通过 bit reinterpretation 建立优化屏障并向外扩一 ULP，near-zero/FTZ 扩到最小 normal；`E/Lz/Q/r_obs` 再用相对 `2^-12` envelope 包住 host→shader 与初值/invariant seam。Kerr–Newman 只在 constant coefficient 增加 exact `-q_e²[(Lz-aE)²+Q]` interval。任一非有限、near-extreme、`|a|>0.9`、`r_obs>256M`、near-axis、径向导数 margin 不足或区间条件失败都回退完整 KS。[WGSL floating-point evaluation](https://www.w3.org/TR/WGSL/#floating-point-evaluation)
+若 backward ray 初始向内，且能证明 `R(r)>0` 覆盖 `[r_+,r_obs]`，就不存在外部 radial turning point。被撤出的 prototype 不求四次方程的根，而是把区间分成 12 段；每段 degree-4 power coefficients 转为 Bernstein coefficients，只有全部向外扩张 interval 的下界严格为正才接受。`IntervalF32` 以 `vec2<lower,upper>` 表示，在每个 WGSL `+/-/*` 后通过 bit reinterpretation 建立优化屏障并向外扩一 ULP，near-zero/FTZ 扩到最小 normal；`E/Lz/Q/r_obs` 再用相对 `2^-12` envelope 包住 host→shader 与初值/invariant seam。Kerr–Newman 只在 constant coefficient 增加 exact `-q_e²[(Lz-aE)²+Q]` interval。任一非有限、near-extreme、`|a|>0.9`、`r_obs>256M`、near-axis、径向导数 margin 不足或区间条件失败都回退完整 KS。[WGSL floating-point evaluation](https://www.w3.org/TR/WGSL/#floating-point-evaluation)
 
 [可复现实现](scripts/src/gravlume_research/checks/kerr_capture.py)用 SymPy exact algebra 验证 Kerr quartic 与 quartic→Bernstein 恒等式；pytest 中的 Hypothesis 原生 binary32 strategy 生成、收缩 strict-f32 primitive/Bernstein enclosure 反例，显式 examples 固定 signed zero、subnormal、normal 边界与最大 finite。检查另覆盖 packed-horizon seam 和 mutation witnesses。属性测试补充数值实现，不替代符号证明；版本与执行政策见[统一 Python 研究工具链](python-research-tooling.md)。[Hypothesis `@given`](https://hypothesis.readthedocs.io/en/latest/reference/api.html#hypothesis.given) [32-bit float strategy](https://hypothesis.readthedocs.io/en/latest/reference/strategies.html#hypothesis.strategies.floats)
 
@@ -290,7 +290,9 @@ scratch 只有一个 atomic count 和 bounded `u32` edge list。refine 将两者
 
 4K shadow capacity 是 `48,000` indices：按 16-byte 最小 binding size 计算为 `192,016 B`。删除 global node map 后，每个 sky candidate 只保留该 shadow scratch；cold、active 与 completed 4K transactional rebuild 都通过 `256 MiB`。资源计划仍在分配前拒绝 synthetic oversized plan；这只是不包含 driver heap/alignment 的项目 core-resource admission，不声称是实测总显存。
 
-一个可维护的接口应区分 `TerminalMap`、`PathSampler` 与 `DiagnosticCapture`：sky/surface appearance 只消费 terminal direction/branch/time，volume 需要有序 path checkpoints，科学验证需要 f32 records。不能为了让一份 analytic terminal solver 看似通用而伪造 volume path，也不能为了测试 capture 让 presentation 常驻全部记录。
+这轮实验确认三种消费边界必须分开：sky/surface appearance 只消费 terminal
+direction/branch/time，volume 需要有序 path checkpoints，科学验证需要 f32 records。不能为了让
+analytic terminal solver 看似通用而伪造 volume path，也不能为了测试 capture 让 presentation 常驻全部记录。
 
 ## 7. 候选实验优先级
 

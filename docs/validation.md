@@ -77,6 +77,12 @@ P=\begin{pmatrix}
 - dense output 负责 event bracket/localization；
 - sample 外层可用专用 Rayon pool，单条轨迹保持确定顺序，结果按 input index 排列。
 
+accepted step 若让已 armed event 跨符号，必须用上述 dense output 在
+$\theta\in[0,1]$ 内建立 bracket，再以有界 bisection 收缩到 policy 的 affine tolerance；不得在
+bracket 外 extrapolate。最后选择 residual 较小的 bracket endpoint。每个候选独立报告 affine
+parameter、localized state、bracket width、函数尺度与 normalized residual，再按
+[数学物理的 terminal semantics](physics.md#6-event-与-terminal-semantics)选择最早 event。
+
 CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 
 1. exact algebra/special limits；
@@ -88,19 +94,22 @@ CPU `f64` 不是绝对 ground truth。reference ladder 至少包含：
 
 ## 2. 最低 fixture 矩阵
 
-| 类别                   | 必须覆盖                                                                                                                                                       |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| algebra                | radius quadratic、$l^2=0$、metric inverse、horizon roots、special limits                                                                                       |
-| observer               | Minkowski tetrad、boost、ergoregion rejection、Fermi–Walker analytic cases                                                                                     |
-| Schwarzschild          | weak deflection $4M/b$、photon sphere $3M$、shadow $\sqrt{27}M$、near-critical escape/capture pairs                                                            |
-| Kerr                   | prograde/retrograde equatorial paths、axis/pole、published trajectories、Carter drift                                                                          |
-| Kerr–Newman            | $q_e\to0$、RN、extremal/superextremal classification、exterior orbit samples                                                                                   |
-| events                 | escape/horizon/disk/singularity/step exhaustion、same-step competing event                                                                                     |
-| radiation              | vacuum, pure absorption, constant slab, $g^3/g^4$, blackbody temperature shift                                                                                 |
-| polarization           | orthonormal screen basis、gauge transform、parallel transport、EVPA                                                                                            |
-| numerical conditioning | raw-radius 与 reciprocal-radius candidate reproducer：完整初值、step/update/event/termination、浮点模式、checkpoints、high-precision oracle 与 expected branch |
+| 类别                   | 必须覆盖                                                                                                                     |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| algebra                | radius quadratic、$l^2=0$、metric inverse、horizon roots、special limits                                                     |
+| observer               | Minkowski tetrad、boost、ergoregion rejection、Fermi–Walker analytic cases                                                   |
+| Schwarzschild          | weak deflection $4M/b$、photon sphere $3M$、shadow $\sqrt{27}M$、near-critical escape/capture pairs                          |
+| Kerr                   | prograde/retrograde equatorial paths、axis/pole、published trajectories、Carter drift                                        |
+| Kerr–Newman            | $q_e\to0$、RN、extremal/superextremal classification、exterior orbit samples                                                 |
+| events                 | escape/horizon/disk/singularity/step exhaustion、same-step competing event                                                   |
+| radiation              | vacuum、pure absorption、constant slab、$g^3/g^4$、blackbody temperature shift                                               |
+| polarization           | orthonormal screen basis、gauge transform、parallel transport、EVPA                                                          |
+| numerical conditioning | axis/equator/ring-near/far-field/near-extreme 尺度，overflow/underflow 与 radicand/denominator guards，独立 state/step convergence |
 
 每个 fixture 写明 schema、coordinate/chart、signature、mass normalization、initial observer/frame、photon orientation、solver/precision、expected observable、tolerance 和 source。没有这些 metadata 的图像不是科学 fixture。
+
+被否决的 state representation 或 fast path 只在对应 research record 保存 reproducer 与恢复条件，
+不因历史实验存在就进入最低 fixture 矩阵。
 
 第 3–7 节定义首个 machine-readable schema、Reference Policy、默认 Observation 与具名阈值。
 

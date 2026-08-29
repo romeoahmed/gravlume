@@ -1,6 +1,6 @@
 # 数学物理合同
 
-本文固定 Gravlume 的符号、连续模型和可观测量。任何实现若采用另一 chart 或状态表示，必须显式转换到这里定义的 observable 再比较。本文不记录 shader 布局、离散积分选择或实验性能；这些内容分别属于[架构](architecture.md)、[验证合同](validation.md)和[研究记录](research/README.md)。
+本文固定 Gravlume 的符号、连续模型和跨实现 observable semantics。任何实现若采用另一 chart、状态或代数约化，必须显式转换到这里定义的 observable 再比较。本文可以给出数学等价的约化，但不定义离散积分器、Validation Profile、GPU ABI 或实验性能；这些内容分别属于[验证合同](validation.md)、[架构合同](architecture.md)和[研究记录](research/README.md)。
 
 ## 1. 约定
 
@@ -72,9 +72,9 @@ u=
 }
 \]
 
-因此 GPU radius solver 直接把 discriminant root 解释为 $\Sigma$，不重新形成
-$a^2z^2/r^2$。该形式在 $r=0$ branch disk 上仍有限，只有 ring 本身令 $\Sigma=0$；CPU
-reference 保留独立 residual reconstruction 作为不同舍入路径的 oracle。
+因此数值实现可以直接把 discriminant root 解释为 $\Sigma$，不重新形成
+$a^2z^2/r^2$。该形式在 $r=0$ branch disk 上仍有限，只有 ring 本身令 $\Sigma=0$；独立
+reference 仍须用不同舍入路径重建 residual，避免同一代数错误同时污染被测路径与 oracle。
 
 隐式微分给出
 
@@ -210,7 +210,8 @@ H(x,p)=\frac12g^{\mu\nu}p_\mu p_\nu=0,
 \dot p_t=0.
 \]
 
-GPU 与 CPU 分别实现同一闭式右端，不使用 finite difference。令
+数值基线必须直接实现同一闭式右端，不用 finite difference 近似 metric derivative；CPU reference
+与 GPU renderer 保持独立计算图。令
 
 \[
 A=r^2+a^2,\qquad D=r^4+a^2z^2,\qquad
@@ -266,7 +267,7 @@ C=\frac{(s x-2r\ell_x)p_x+(s y-2r\ell_y)p_y}{K}
 \boxed{\mathbf w=\mathbf e+C\nabla r}.
 \]
 
-stationarity 允许 GPU state 只动态保存 $(\mathbf x,\mathbf p)$ 和每 ray 常量
+stationarity 允许等价的 reduced state 只动态保存 $(\mathbf x,\mathbf p)$ 和每 ray 常量
 $E=-p_t$。写 $q=E+\boldsymbol\ell\cdot\mathbf p$，精确 reduced system 是
 
 \[
@@ -279,10 +280,11 @@ E'&=0.
 \end{aligned}}
 \]
 
-RK4 用同四个 stages 累计相对 coordinate-time increment；GPU `RhsResult` 把
-$(t',x',y',z')$ 打包为一个 `vec4`，但 state 不保存 absolute $t$。任一 denominator guard 在
-求值前触发 typed numerical failure，不能以 clamp 改写方程。完整 Jacobian与 contracted form、
-$l^2=0$、rank-one inverse 及 reduced Hamiltonian 已用精确符号代数独立复算。[A]
+离散实现必须用与空间状态相同的 stages/accepted steps 累计相对 coordinate-time increment，不能在
+terminal 后补一个不相容的时间近似。任一 denominator guard 在求值前触发 typed numerical failure，
+不能以 clamp 改写方程。具体 RK policy 与 GPU packing 分别由[验证合同](validation.md)和
+[GPU 实现证据](gpu-renderer.md)记录；完整 Jacobian、contracted form、$l^2=0$、rank-one inverse
+及 reduced Hamiltonian 已用精确符号代数独立复算。[A]
 
 stationarity 给出 $E=-p_t$，axisymmetry 给出 $L_z=xp_y-yp_x$。第 2.2 节的
 chart-handed oblate coordinates 与同一个 physical-spin Kerr–Newman BL chart 局部满足
@@ -307,7 +309,7 @@ p_\theta=\cot\theta(xp_x+yp_y)-r\sin\theta\,p_z,
 \left(\frac{L_z^2}{\sin^2\theta}-a^2E^2\right).
 \]
 
-GPU 数值实现不构造 $\theta,\phi$。令
+为避免 axis coordinate seam，可以不构造 $\theta,\phi$。令
 
 \[
 \varpi^2=x^2+y^2,\quad D=r^2+a^2,\quad
@@ -328,9 +330,9 @@ $H=0$ 的全域式
 
 该式在轴线上可直接代入
 $\mathcal Q=(r^2+a^2)(p_x^2+p_y^2)-a^2E^2$，没有 epsilon、分支或坐标 seam；
-$a=0$ 时精确化为 $\mathcal Q=L_x^2+L_y^2=L^2-L_z^2$。GPU 从 scaled geometry 的
-cached reciprocals 形成 $(z^2/r^2,\varpi^2/D)$，避免远场先形成大平方。CPU reference 保留
-独立 trigonometric/axis 形式作为 oracle。常数来自 Hamilton–Jacobi separability，见
+$a=0$ 时精确化为 $\mathcal Q=L_x^2+L_y^2=L^2-L_z^2$。数值实现应从有界尺度和已受检的
+reciprocal 形成 $(z^2/r^2,\varpi^2/D)$，避免远场先形成大平方；独立 reference 保留
+trigonometric/axis 形式作为不同计算图的 oracle。常数来自 Hamilton–Jacobi separability，见
 [Carter 1968](https://doi.org/10.1103/PhysRev.174.1559)；两形式、axis 与 Schwarzschild limit
 均已用符号代数验证。[P][A]
 
@@ -437,7 +439,8 @@ numerical baseline 的 event function 固定如下；$R_{\rm esc}$、$D_{\rm gua
 
 初始点恰在某 event surface 时，该 event 必须先离开一个 profile 规定的 arming band，再允许反向 crossing；这使“从 escape sphere 入射、转向后返回”的 fixture 不会在 $\lambda=0$ 立即终止。step exhaustion、non-finite、非法 radicand/denominator 与 reject exhaustion 是 terminal conditions，不伪装成连续根。
 
-reference 的 accepted step 若对 armed event 跨符号，使用[验证合同第 1 节](validation.md#1-cpu-reference-方法) dense output 在 $\theta\in[0,1]$ 内 bracket，并以 safeguarded Brent/bisection 定位；不得在 bracket 外 extrapolate。报告 event affine parameter、state、bracket width、函数尺度与 normalized residual。保证收敛的 bracketed 方法见 [Brent 1971/1973](https://maths-people.anu.edu.au/~brent/pub/pub006.html)。[P]
+离散求解器只能在已证明的 sign-change bracket 内定位 event，不得在 accepted step 外 extrapolate；
+具体 dense output、root method、tolerance 与报告字段由[验证合同第 1 节](validation.md#1-cpu-reference-方法)定义。
 
 若同一步跨多个 event，选择 affine traversal 上最早者。候选的 localized affine parameter 在 `event_tie_tolerance` 内时，结果携带全部 candidate 和 ambiguity flag；稳定序列化顺序为 singularity/chart → horizon → emitter → escape，但该顺序不能删除 ambiguity。turning point 是动力学状态，不与 terminal event 混用。GPU 近似事件定位必须与 reference event observable 比较，而不是只比最终颜色。
 
@@ -503,9 +506,10 @@ $\pi^4/15$ 后乘 bolometric intensity。它不是 CIE color matching function�
 tristimulus；三通道之和通常小于 bolometric intensity。blackbody slab emission 用自己的温度将
 $E$ 分配到同一组 observer-frame bands，再逐 band 应用上式。
 
-当前 scalar slab 是上述解析边界模型。空间变化的 $j_\nu,\alpha_\nu$ 仍必须按 local
+`homogeneous-scalar-slab-v1` 只定义上述解析边界模型。空间变化的 $j_\nu,\alpha_\nu$ 必须按 local
 $\nu=-p\cdot u$ 在 accepted path samples 上求值并以 invariant coefficient 有序累计；不得把
-这个 terminal operator 外推成已实现的 volume GRRT。
+这个 terminal operator 外推成 volume GRRT。当前实现范围分别见 [Reference 证据](reference-implementation.md)
+与 [GPU 证据](gpu-renderer.md)。
 
 ## 8. Equatorial circular emitter 与 disk 边界
 

@@ -64,7 +64,6 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 
 - [Dormand–Prince 1980](https://doi.org/10.1016/0771-050X%2880%2990013-3) 与 [Shampine 1986](https://doi.org/10.1090/S0025-5718-1986-0815836-3)；
 - [SciPy RK45 source](https://github.com/scipy/scipy/blob/v1.18.0/scipy/integrate/_ivp/rk.py) 作为维护实现的系数对照；
-- [Brent 的 bracketed root 文献页](https://maths-people.anu.edu.au/~brent/pub/pub006.html)；
 - [Serde container attributes](https://serde.rs/container-attrs.html)、[`toml::from_str`](https://docs.rs/toml/1.1.4/toml/fn.from_str.html)与 [`rayon::ThreadPool`](https://docs.rs/rayon/1.12.0/rayon/struct.ThreadPool.html)。
 
 精确依赖版本仍以 `Cargo.lock` 为准。
