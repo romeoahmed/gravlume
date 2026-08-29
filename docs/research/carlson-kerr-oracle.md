@@ -10,7 +10,8 @@ fixture schema 或质量阈值；这些权威合同仍分别以[数学物理](..
 isolation、Carlson defining integrals、minimal identities 与 120/180 位复算关闭 pure-Kerr
 nonextremal、分离裕量明确的研究切片；不能据此宣称 WGSL `f32`、真实 GPU、近极端、
 principal-value/complex Carlson 或完整 terminal solver 已闭合。正式实现与测试见
-[`kerr_elliptic.py`](scripts/src/gravlume_research/checks/kerr_elliptic.py)和
+[`_topology.py`](scripts/src/gravlume_research/checks/kerr_elliptic/_topology.py)、
+[`_carlson.py`](scripts/src/gravlume_research/checks/kerr_elliptic/_carlson.py)和
 [`test_kerr_elliptic.py`](scripts/tests/test_kerr_elliptic.py)。
 
 ## 1. 起始缺口与实现边界
