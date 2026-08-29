@@ -284,6 +284,42 @@ class _CarlsonCertificate:
     rd_full_permutation_delta: mp.mpf
     kerr_radial_reduction_residual: mp.mpf
 
+    def __post_init__(self) -> None:
+        """Reject any record that could make the scientific witness false-pass."""
+
+        if (
+            self.low_precision_digits != LOW_PRECISION_DIGITS
+            or self.high_precision_digits != HIGH_PRECISION_DIGITS
+            or self.required_stable_digits != REQUIRED_STABLE_DIGITS
+        ):
+            raise AssertionError("Carlson certificate precision contract changed")
+        with mp.workdps(self.high_precision_digits + 20):
+            guard = mp.power(10, -self.required_stable_digits)
+            pass_metrics = (
+                ("definition residual", self.maximum_definition_residual),
+                ("identity residual", self.maximum_identity_residual),
+                ("precision delta", self.maximum_normalized_delta),
+                ("RD x-y symmetry residual", self.rd_xy_symmetry_residual),
+                ("Kerr radial reduction residual", self.kerr_radial_reduction_residual),
+            )
+            for name, value in pass_metrics:
+                if not mp.isfinite(value) or not 0 <= value < guard:
+                    raise AssertionError(
+                        f"Carlson certificate {name} lost its stable-digit budget"
+                    )
+
+            # RD is symmetric only in x and y.  This named full permutation is a
+            # negative control, not another identity residual.
+            # Source: https://dlmf.nist.gov/19.21.ii
+            minimum_negative_control = mp.mpf(1) / 100
+            if (
+                not mp.isfinite(self.rd_full_permutation_delta)
+                or self.rd_full_permutation_delta <= minimum_negative_control
+            ):
+                raise AssertionError(
+                    "Carlson certificate lost its RD non-symmetry negative control"
+                )
+
 
 def _named_topology_cases() -> tuple[_TopologyCase, ...]:
     one = Fraction(1)
@@ -1358,9 +1394,6 @@ def _build_carlson_certificate() -> _CarlsonCertificate:
             mp.elliprd(x, y, z),
         )
         kerr_reduction = _kerr_radial_reduction_residual()
-        guard = mp.power(10, -REQUIRED_STABLE_DIGITS)
-        if maximum_delta >= guard:
-            raise AssertionError("Carlson certificate lost its stable-digit budget")
         return _CarlsonCertificate(
             low_precision_digits=LOW_PRECISION_DIGITS,
             high_precision_digits=HIGH_PRECISION_DIGITS,
@@ -1433,6 +1466,14 @@ def run() -> None:
     print(
         "carlson.maximum_normalized_delta="
         f"{_scientific(carlson.maximum_normalized_delta)}"
+    )
+    print(
+        "carlson.rd_xy_symmetry_residual="
+        f"{_scientific(carlson.rd_xy_symmetry_residual)}"
+    )
+    print(
+        "carlson.rd_full_permutation_delta="
+        f"{_scientific(carlson.rd_full_permutation_delta)}"
     )
     print(
         "carlson.kerr_radial_reduction_residual="

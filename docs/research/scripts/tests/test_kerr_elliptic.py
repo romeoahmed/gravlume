@@ -198,6 +198,22 @@ def test_carlson_oracle_does_not_treat_rd_as_fully_symmetric() -> None:
     assert certificate.rd_full_permutation_delta > mp.mpf("0.01")
 
 
+def test_carlson_certificate_rejects_any_failed_pass_metric() -> None:
+    certificate = _build_carlson_certificate()
+    invalid_metrics = {
+        "maximum_definition_residual": mp.mpf("1"),
+        "maximum_identity_residual": mp.mpf("1"),
+        "maximum_normalized_delta": mp.mpf("1"),
+        "rd_xy_symmetry_residual": mp.mpf("1"),
+        "rd_full_permutation_delta": mp.mpf("0"),
+        "kerr_radial_reduction_residual": mp.mpf("1"),
+    }
+
+    for field, invalid_value in invalid_metrics.items():
+        with pytest.raises(AssertionError, match="Carlson certificate"):
+            replace(certificate, **{field: invalid_value})
+
+
 def test_carlson_oracle_rejects_negative_p_without_principal_value_policy() -> None:
     with pytest.raises(_UnsupportedCarlsonError, match="principal-value"):
         _carlson_definition(
