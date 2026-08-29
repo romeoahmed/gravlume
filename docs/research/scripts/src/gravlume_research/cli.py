@@ -9,6 +9,7 @@ CHECK_MODULES = {
     "kerr-capture": "gravlume_research.checks.kerr_capture",
     "kerr-schild-map": "gravlume_research.checks.kerr_schild_map",
     "kerr-schild-rhs": "gravlume_research.checks.kerr_schild_rhs",
+    "kerr-support": "gravlume_research.checks.kerr_support",
     "mino-step": "gravlume_research.checks.mino_step",
     "scalar-transport": "gravlume_research.checks.scalar_transport",
 }

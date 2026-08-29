@@ -150,7 +150,9 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
   [负自旋研究记录](research/negative-spin-continuous-witness.md)与
   [reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#57-surface-full-ks-的-binary32-phase-边界)。
 - Near-critical/high-winding 的独立 BL/Mino pair 已有 research-only 证书，但 GPU/reference
-  structured ladder 尚未闭合；near-axis 与 near-extreme 也仍缺对应 GPU/reference evidence。
+  structured ladder 尚未闭合；near-axis/near-extreme 已有 research-only conservative fallback
+  condition report，但仍缺 production classifier routing 与对应 GPU/reference evidence，见
+  [fallback 证书](research/near-axis-extreme-fallback.md)。
 - RK4 v2 只对具名 source-edge band 条件重追；当前没有 near-critical、axis、near-extreme 或一般
   `Uncertain` ray 的第二种 science-quality GPU policy。
 - CPU surface footprint 与 test-only GPU ordinary-region 证据已经存在，但 production 不持久化 source/Jacobian map，也没有 branch-aware reconstruction、multi-image/near-critical ladder 或 texture filtering consumer。
