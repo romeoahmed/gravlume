@@ -25,9 +25,7 @@ from itertools import pairwise
 import mpmath as mp
 import sympy as sp
 
-LOW_PRECISION_DIGITS = 120
-HIGH_PRECISION_DIGITS = 180
-REQUIRED_STABLE_DIGITS = 80
+from .._precision import _SCIENTIFIC_PRECISION, _PrecisionEvidence
 
 _ROOT_SEPARATION_LIMIT = "1e-40"
 _CARLSON_CANCELLATION_LIMIT = "1e40"
@@ -152,7 +150,7 @@ class _TopologyReport:
         with mp.workdps(self.precision_digits + 20):
             if (
                 not self.name
-                or self.precision_digits < REQUIRED_STABLE_DIGITS
+                or self.precision_digits < _SCIENTIFIC_PRECISION.required_digits
                 or len(self.polynomial_coefficients) != 5
                 or self.polynomial_coefficients[0] != 1
                 or len(self.ordered_real_roots) != len(self.real_root_multiplicities)
@@ -232,10 +230,7 @@ class _TopologyReport:
 class _TopologyCertificate:
     """Named topology corpus reconstructed at two decimal precisions."""
 
-    low_precision_digits: int
-    high_precision_digits: int
-    required_stable_digits: int
-    maximum_normalized_delta: mp.mpf
+    precision: _PrecisionEvidence
     false_acceptance_count: int
     reports: tuple[_TopologyReport, ...]
 
@@ -256,7 +251,7 @@ class _CarlsonDifferenceReport:
     decision: _CarlsonDecision
 
     def __post_init__(self) -> None:
-        if self.precision_digits < REQUIRED_STABLE_DIGITS:
+        if self.precision_digits < _SCIENTIFIC_PRECISION.required_digits:
             raise _UnsupportedCarlsonError("insufficient working precision")
         if self.cancellation_ratio < 1 or self.normalized_identity_residual < 0:
             raise _UnsupportedCarlsonError("invalid cancellation report")
@@ -274,12 +269,9 @@ class _CarlsonDifferenceReport:
 class _CarlsonCertificate:
     """Positive-real definition, identity, and Kerr-reduction certificate."""
 
-    low_precision_digits: int
-    high_precision_digits: int
-    required_stable_digits: int
+    precision: _PrecisionEvidence
     maximum_definition_residual: mp.mpf
     maximum_identity_residual: mp.mpf
-    maximum_normalized_delta: mp.mpf
     rd_xy_symmetry_residual: mp.mpf
     rd_full_permutation_delta: mp.mpf
     kerr_radial_reduction_residual: mp.mpf
@@ -287,26 +279,20 @@ class _CarlsonCertificate:
     def __post_init__(self) -> None:
         """Reject any record that could make the scientific witness false-pass."""
 
-        if (
-            self.low_precision_digits != LOW_PRECISION_DIGITS
-            or self.high_precision_digits != HIGH_PRECISION_DIGITS
-            or self.required_stable_digits != REQUIRED_STABLE_DIGITS
-        ):
+        if self.precision.policy is not _SCIENTIFIC_PRECISION:
             raise AssertionError("Carlson certificate precision contract changed")
-        with mp.workdps(self.high_precision_digits + 20):
-            guard = mp.power(10, -self.required_stable_digits)
+        with mp.workdps(self.precision.policy.high_digits + 20):
             pass_metrics = (
                 ("definition residual", self.maximum_definition_residual),
                 ("identity residual", self.maximum_identity_residual),
-                ("precision delta", self.maximum_normalized_delta),
                 ("RD x-y symmetry residual", self.rd_xy_symmetry_residual),
                 ("Kerr radial reduction residual", self.kerr_radial_reduction_residual),
             )
             for name, value in pass_metrics:
-                if not mp.isfinite(value) or not 0 <= value < guard:
-                    raise AssertionError(
-                        f"Carlson certificate {name} lost its stable-digit budget"
-                    )
+                self.precision.policy.require_metric(
+                    value,
+                    subject=f"Carlson certificate {name}",
+                )
 
             # RD is symmetric only in x and y.  This named full permutation is a
             # negative control, not another identity residual.
@@ -804,7 +790,7 @@ def _topology_precision_delta(
     high_reports: tuple[_TopologyReport, ...],
 ) -> mp.mpf:
     deltas: list[mp.mpf] = []
-    with mp.workdps(HIGH_PRECISION_DIGITS + 20):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits + 20):
         for low, high in zip(low_reports, high_reports, strict=True):
             discrete_low = (
                 low.topology_id,
@@ -884,10 +870,11 @@ def _build_topology_certificate() -> _TopologyCertificate:
 
     cases = _named_topology_cases()
     low_reports = tuple(
-        _build_topology_report(case, LOW_PRECISION_DIGITS) for case in cases
+        _build_topology_report(case, _SCIENTIFIC_PRECISION.low_digits) for case in cases
     )
     high_reports = tuple(
-        _build_topology_report(case, HIGH_PRECISION_DIGITS) for case in cases
+        _build_topology_report(case, _SCIENTIFIC_PRECISION.high_digits)
+        for case in cases
     )
     false_acceptance_count = 0
     for case, report in zip(cases, high_reports, strict=True):
@@ -911,14 +898,11 @@ def _build_topology_certificate() -> _TopologyCertificate:
         ):
             false_acceptance_count += 1
     maximum_delta = _topology_precision_delta(low_reports, high_reports)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
-        if maximum_delta >= mp.power(10, -REQUIRED_STABLE_DIGITS):
-            raise AssertionError("topology certificate lost its stable-digit budget")
     return _TopologyCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
+        precision=_SCIENTIFIC_PRECISION.certify_delta(
+            maximum_delta,
+            subject="topology certificate",
+        ),
         false_acceptance_count=false_acceptance_count,
         reports=high_reports,
     )
@@ -1059,7 +1043,7 @@ def _homogeneity_residual(
     scale: str,
     degree: str,
 ) -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         arguments = _parse_real_arguments(argument_strings)
         scale_value = mp.mpf(scale)
         base = _evaluate_library(kind, arguments)
@@ -1072,7 +1056,7 @@ def _homogeneity_residual(
 
 
 def _rf_duplication_residual() -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         x, y, z = mp.mpf("0.5"), mp.mpf("1.25"), mp.mpf("2.75")
         root_x, root_y, root_z = mp.sqrt(x), mp.sqrt(y), mp.sqrt(z)
         duplication = root_x * root_y + root_y * root_z + root_z * root_x
@@ -1083,7 +1067,7 @@ def _rf_duplication_residual() -> mp.mpf:
 
 
 def _rd_duplication_residual(*, include_additive_term: bool) -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         x, y, z = mp.mpf("0.5"), mp.mpf("1.25"), mp.mpf("2.75")
         root_x, root_y, root_z = mp.sqrt(x), mp.sqrt(y), mp.sqrt(z)
         duplication = root_x * root_y + root_y * root_z + root_z * root_x
@@ -1096,7 +1080,7 @@ def _rd_duplication_residual(*, include_additive_term: bool) -> mp.mpf:
 
 
 def _rj_duplication_residual(*, include_rc_correction: bool) -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         x, y, z, p = (
             mp.mpf("0.5"),
             mp.mpf("1.25"),
@@ -1116,7 +1100,7 @@ def _rj_duplication_residual(*, include_rc_correction: bool) -> mp.mpf:
 
 
 def _rc_duplication_residual() -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         x, y = mp.mpf("0.5"), mp.mpf("1.25")
         duplication = 2 * mp.sqrt(x * y) + y
         left = mp.elliprc(x, y)
@@ -1194,22 +1178,29 @@ def _definition_vector(precision_digits: int) -> tuple[mp.mpf, ...]:
     return tuple(values)
 
 
-def _carlson_precision_delta() -> mp.mpf:
-    low = _definition_vector(LOW_PRECISION_DIGITS)
-    high = _definition_vector(HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS + 20):
-        return max(
-            _normalized_residual(low_value - high_value, high_value)
-            for low_value, high_value in zip(low, high, strict=True)
-        )
+def _carlson_precision_evidence() -> _PrecisionEvidence:
+    low = _definition_vector(_SCIENTIFIC_PRECISION.low_digits)
+    high = _definition_vector(_SCIENTIFIC_PRECISION.high_digits)
+    return _SCIENTIFIC_PRECISION.certify_pairs(
+        zip(low, high, strict=True),
+        subject="Carlson definition corpus",
+    )
 
 
 def _maximum_definition_residual() -> mp.mpf:
-    with mp.workdps(HIGH_PRECISION_DIGITS + 20):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits + 20):
         residuals = []
         for kind, arguments in _definition_cases():
-            direct = _carlson_definition(kind, arguments, HIGH_PRECISION_DIGITS)
-            library = _library_from_strings(kind, arguments, HIGH_PRECISION_DIGITS)
+            direct = _carlson_definition(
+                kind,
+                arguments,
+                _SCIENTIFIC_PRECISION.high_digits,
+            )
+            library = _library_from_strings(
+                kind,
+                arguments,
+                _SCIENTIFIC_PRECISION.high_digits,
+            )
             residuals.append(_normalized_residual(direct - library, library))
         return max(residuals)
 
@@ -1231,7 +1222,7 @@ def _positive_diagonal_bound_residual(
 
 
 def _carlson_identity_residuals() -> tuple[mp.mpf, ...]:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         x, y, z, p = (
             mp.mpf("0.5"),
             mp.mpf("1.25"),
@@ -1311,7 +1302,7 @@ def _carlson_identity_residuals() -> tuple[mp.mpf, ...]:
             x="0.5",
             y="1.25",
             p="1.75",
-            precision_digits=HIGH_PRECISION_DIGITS,
+            precision_digits=_SCIENTIFIC_PRECISION.high_digits,
         )
         residuals.append(difference_report.normalized_identity_residual)
         return tuple(residuals)
@@ -1320,7 +1311,7 @@ def _carlson_identity_residuals() -> tuple[mp.mpf, ...]:
 def _kerr_radial_reduction_residual() -> mp.mpf:
     report = _build_topology_certificate().report("class-i-ib-inward")
     root_1, _, _, root_4 = report.ordered_real_roots
-    with mp.workdps(HIGH_PRECISION_DIGITS + 20):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits + 20):
         endpoint = report.initial_radius
         extent = endpoint - root_4
         gap_a = root_4 - root_1
@@ -1331,8 +1322,10 @@ def _kerr_radial_reduction_residual() -> mp.mpf:
         z = 1 / extent + 1 / gap_c
         rf = _carlson_definition(
             _CarlsonKind.RF,
-            tuple(mp.nstr(value, HIGH_PRECISION_DIGITS) for value in (x, y, z)),
-            HIGH_PRECISION_DIGITS,
+            tuple(
+                mp.nstr(value, _SCIENTIFIC_PRECISION.high_digits) for value in (x, y, z)
+            ),
+            _SCIENTIFIC_PRECISION.high_digits,
         )
         reduced = 2 * rf / mp.sqrt(gap_a * gap_b * gap_c)
 
@@ -1349,10 +1342,10 @@ def _kerr_radial_reduction_residual() -> mp.mpf:
         rj = _carlson_definition(
             _CarlsonKind.RJ,
             tuple(
-                mp.nstr(value, HIGH_PRECISION_DIGITS)
+                mp.nstr(value, _SCIENTIFIC_PRECISION.high_digits)
                 for value in (x, y, z, pole_argument)
             ),
-            HIGH_PRECISION_DIGITS,
+            _SCIENTIFIC_PRECISION.high_digits,
         )
         reduced_third_kind = reduced / pole_gap - 2 * rj / (
             3 * pole_gap**2 * mp.sqrt(gap_a * gap_b * gap_c)
@@ -1379,11 +1372,11 @@ def _kerr_radial_reduction_residual() -> mp.mpf:
 def _build_carlson_certificate() -> _CarlsonCertificate:
     """Build the positive-real definition and identity certificate."""
 
-    with mp.workdps(HIGH_PRECISION_DIGITS + 20):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits + 20):
         maximum_definition = _maximum_definition_residual()
         identity_residuals = _carlson_identity_residuals()
         maximum_identity = max(identity_residuals)
-        maximum_delta = _carlson_precision_delta()
+        precision = _carlson_precision_evidence()
         x, y, z = mp.mpf("0.5"), mp.mpf("1.25"), mp.mpf("2.75")
         rd_xy = _normalized_residual(
             mp.elliprd(x, y, z) - mp.elliprd(y, x, z),
@@ -1395,12 +1388,9 @@ def _build_carlson_certificate() -> _CarlsonCertificate:
         )
         kerr_reduction = _kerr_radial_reduction_residual()
         return _CarlsonCertificate(
-            low_precision_digits=LOW_PRECISION_DIGITS,
-            high_precision_digits=HIGH_PRECISION_DIGITS,
-            required_stable_digits=REQUIRED_STABLE_DIGITS,
+            precision=precision,
             maximum_definition_residual=maximum_definition,
             maximum_identity_residual=maximum_identity,
-            maximum_normalized_delta=maximum_delta,
             rd_xy_symmetry_residual=rd_xy,
             rd_full_permutation_delta=rd_full,
             kerr_radial_reduction_residual=kerr_reduction,
@@ -1408,7 +1398,7 @@ def _build_carlson_certificate() -> _CarlsonCertificate:
 
 
 def _scientific(value: mp.mpf, digits: int = 12) -> str:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         return mp.nstr(value, digits, strip_zeros=False)
 
 
@@ -1418,12 +1408,13 @@ def run() -> None:
     print(f"python={platform.python_version()}")
     print(
         "precision="
-        f"{LOW_PRECISION_DIGITS},{HIGH_PRECISION_DIGITS} "
-        f"stable_digits>={REQUIRED_STABLE_DIGITS}"
+        f"{_SCIENTIFIC_PRECISION.low_digits},"
+        f"{_SCIENTIFIC_PRECISION.high_digits} "
+        f"stable_digits>={_SCIENTIFIC_PRECISION.required_digits}"
     )
     print(
         "topology.maximum_normalized_delta="
-        f"{_scientific(topology.maximum_normalized_delta)}"
+        f"{_scientific(topology.precision.maximum_normalized_delta)}"
     )
     print(f"topology.false_acceptance_count={topology.false_acceptance_count}")
     for report in topology.reports:
@@ -1465,7 +1456,7 @@ def run() -> None:
     )
     print(
         "carlson.maximum_normalized_delta="
-        f"{_scientific(carlson.maximum_normalized_delta)}"
+        f"{_scientific(carlson.precision.maximum_normalized_delta)}"
     )
     print(
         "carlson.rd_xy_symmetry_residual="

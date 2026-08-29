@@ -5,7 +5,6 @@ from dataclasses import replace
 import mpmath as mp
 
 from gravlume_research.checks.kerr_support import (
-    REQUIRED_STABLE_DIGITS,
     _build_support_certificate,
     _classify_support,
     _SupportDecision,
@@ -32,9 +31,9 @@ def test_support_classifier_rejects_conditioning_margin_inside_error_bound() -> 
 def test_named_conditioning_corpus_has_zero_false_acceptance() -> None:
     certificate = _build_support_certificate()
 
-    assert certificate.maximum_normalized_delta < mp.power(
+    assert certificate.precision.maximum_normalized_delta < mp.power(
         10,
-        -REQUIRED_STABLE_DIGITS,
+        -certificate.precision.policy.required_digits,
     )
     assert certificate.false_acceptance_count == 0
     assert certificate.report("regular-control").decision is (

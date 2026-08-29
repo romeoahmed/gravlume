@@ -8,7 +8,6 @@ import pytest
 
 from gravlume_research.checks.bl_mino import (
     MINIMUM_WITNESS_DIGITS,
-    REQUIRED_STABLE_DIGITS,
     _build_critical_curve_precision_certificate,
     _build_negative_spin_precision_certificate,
     _critical_curve_corpus_witness,
@@ -121,9 +120,9 @@ def test_higher_order_certificate_rejects_unwrapped_phase_mutation() -> None:
 def test_critical_curve_precision_doubling_retains_required_digits() -> None:
     certificate = _build_critical_curve_precision_certificate()
 
-    assert certificate.maximum_normalized_delta < mp.power(
+    assert certificate.precision.maximum_normalized_delta < mp.power(
         10,
-        -REQUIRED_STABLE_DIGITS,
+        -certificate.precision.policy.required_digits,
     )
     assert tuple(case.witness.terminal for case in certificate.witness.cases) == (
         "equatorial-surface",
@@ -151,9 +150,9 @@ def test_negative_spin_precision_doubling_retains_fields_and_topology() -> None:
     certificate = _build_negative_spin_precision_certificate()
     witness = certificate.witness
 
-    assert certificate.maximum_normalized_delta < mp.power(
+    assert certificate.precision.maximum_normalized_delta < mp.power(
         10,
-        -REQUIRED_STABLE_DIGITS,
+        -certificate.precision.policy.required_digits,
     )
     assert witness.pixel == (62, 7)
     assert witness.terminal == "equatorial-surface"

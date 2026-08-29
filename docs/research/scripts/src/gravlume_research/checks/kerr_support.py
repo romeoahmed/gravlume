@@ -17,10 +17,7 @@ from fractions import Fraction
 import mpmath as mp
 
 from .._interval_f32 import IntervalF32, exact_fraction, interval_contains
-
-LOW_PRECISION_DIGITS = 120
-HIGH_PRECISION_DIGITS = 180
-REQUIRED_STABLE_DIGITS = 80
+from .._precision import _SCIENTIFIC_PRECISION, _PrecisionEvidence
 
 _AXIS_CONDITION = "axis-chart-denominator"
 _EXTREMALITY_CONDITION = "extremality-gap"
@@ -124,10 +121,7 @@ class _SupportCase:
 class _SupportCertificate:
     """Exact corpus decisions plus a 120/180-digit reproducibility witness."""
 
-    low_precision_digits: int
-    high_precision_digits: int
-    required_stable_digits: int
-    maximum_normalized_delta: mp.mpf
+    precision: _PrecisionEvidence
     false_acceptance_count: int
     reports: tuple[_SupportReport, ...]
 
@@ -295,7 +289,7 @@ def _mp_fraction(value: Fraction, precision_digits: int) -> mp.mpf:
         return mp.mpf(value.numerator) / value.denominator
 
 
-def _precision_delta(reports: tuple[_SupportReport, ...]) -> mp.mpf:
+def _precision_evidence(reports: tuple[_SupportReport, ...]) -> _PrecisionEvidence:
     fractions = tuple(
         value
         for report in reports
@@ -307,13 +301,16 @@ def _precision_delta(reports: tuple[_SupportReport, ...]) -> mp.mpf:
             condition.absolute_error_bound,
         )
     )
-    low = tuple(_mp_fraction(value, LOW_PRECISION_DIGITS) for value in fractions)
-    high = tuple(_mp_fraction(value, HIGH_PRECISION_DIGITS) for value in fractions)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
-        return max(
-            abs(low_value - high_value) / max(mp.mpf(1), abs(high_value))
-            for low_value, high_value in zip(low, high, strict=True)
-        )
+    low = tuple(
+        _mp_fraction(value, _SCIENTIFIC_PRECISION.low_digits) for value in fractions
+    )
+    high = tuple(
+        _mp_fraction(value, _SCIENTIFIC_PRECISION.high_digits) for value in fractions
+    )
+    return _SCIENTIFIC_PRECISION.certify_pairs(
+        zip(low, high, strict=True),
+        subject="support certificate",
+    )
 
 
 def _build_support_certificate() -> _SupportCertificate:
@@ -332,24 +329,15 @@ def _build_support_certificate() -> _SupportCertificate:
             _SupportDecision.FALLBACK
         ):
             false_acceptance_count += 1
-    maximum_delta = _precision_delta(reports)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
-        if maximum_delta >= mp.power(10, -REQUIRED_STABLE_DIGITS):
-            raise AssertionError(
-                "support certificate lost its required precision-doubling digits"
-            )
     return _SupportCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
+        precision=_precision_evidence(reports),
         false_acceptance_count=false_acceptance_count,
         reports=reports,
     )
 
 
 def _scientific(value: Fraction | mp.mpf, digits: int = 12) -> str:
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         converted = (
             mp.mpf(value.numerator) / value.denominator
             if isinstance(value, Fraction)
@@ -363,10 +351,11 @@ def run() -> None:
     print(f"python={platform.python_version()}")
     print(
         "precision="
-        f"{certificate.low_precision_digits},{certificate.high_precision_digits} "
-        f"stable_digits>={certificate.required_stable_digits} "
+        f"{certificate.precision.policy.low_digits},"
+        f"{certificate.precision.policy.high_digits} "
+        f"stable_digits>={certificate.precision.policy.required_digits} "
         "maximum_normalized_delta="
-        f"{_scientific(certificate.maximum_normalized_delta)}"
+        f"{_scientific(certificate.precision.maximum_normalized_delta)}"
     )
     print(f"false_acceptance_count={certificate.false_acceptance_count}")
     for report in certificate.reports:
