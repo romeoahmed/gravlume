@@ -41,6 +41,10 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
   research-only BL/Mino 证书，覆盖 radial double-root 两侧、Surface/Horizon event order、第二次
   equatorial crossing、unwrapped phase 与 winding；它尚未成为 Rust fixture 或 GPU 支持证据。见
   [critical pair 记录](research/critical-curve-surface-capture.md)。
+- 同一 test-only `64×36` profile 的负自旋 `(62,7)` 另有不读取 Rust/GPU 输出的 120/180 位
+  BL/Mino 证书，显式约束 physical spin、outgoing chart、负向 circular-emitter branch、两根
+  scattering topology、source/phase/time/frequency/radiance；它仍不是 Rust fixture 或 structured
+  agreement。见[负自旋记录](research/negative-spin-continuous-witness.md)。
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
@@ -57,8 +61,8 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
 - CPU surface geometry 仍以一个默认 Kerr image neighborhood 为主；固定 outer-edge 九点已有独立
   high-precision terminal/continuous witness，critical surface/capture pair 的高精度研究层也已存在，
-  但对应 Rust regular/strict/GPU ladder 尚未闭合。更广 Kerr–Newman 参数、negative spin continuous、
-  near-axis/near-extreme 以及独立 artifact/Jacobi oracle 仍缺；
+  具名 negative-spin sample 也有独立 continuous witness，但后二者对应的 Rust regular/strict/GPU
+  ladder 均未闭合。更广 Kerr–Newman 参数、near-axis/near-extreme 以及独立 artifact/Jacobi oracle 仍缺；
 - 当前 slab 是 terminal analytic operator，不沿 volume ray 积分变化的 invariant coefficients；它不能
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。

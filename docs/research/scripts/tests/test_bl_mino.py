@@ -10,7 +10,9 @@ from gravlume_research.checks.bl_mino import (
     MINIMUM_WITNESS_DIGITS,
     REQUIRED_STABLE_DIGITS,
     _build_critical_curve_precision_certificate,
+    _build_negative_spin_precision_certificate,
     _critical_curve_corpus_witness,
+    _negative_spin_surface_witness,
     _source_edge_corpus_witness,
     _UnsupportedWitnessError,
 )
@@ -127,3 +129,61 @@ def test_critical_curve_precision_doubling_retains_required_digits() -> None:
         "equatorial-surface",
         "horizon",
     )
+
+
+def test_negative_spin_certificate_rejects_physical_spin_or_emitter_branch_flip() -> (
+    None
+):
+    witness = _negative_spin_surface_witness(
+        precision_digits=MINIMUM_WITNESS_DIGITS,
+    )
+
+    with mp.workdps(witness.precision_digits):
+        assert witness.physical_spin_m == -mp.mpf(4) / 5
+    assert witness.emitter_branch_sign == -1
+    with pytest.raises(_UnsupportedWitnessError):
+        replace(witness, physical_spin_m=-witness.physical_spin_m)
+    with pytest.raises(_UnsupportedWitnessError):
+        replace(witness, emitter_branch_sign=1)
+
+
+def test_negative_spin_precision_doubling_retains_fields_and_topology() -> None:
+    certificate = _build_negative_spin_precision_certificate()
+    witness = certificate.witness
+
+    assert certificate.maximum_normalized_delta < mp.power(
+        10,
+        -REQUIRED_STABLE_DIGITS,
+    )
+    assert witness.pixel == (62, 7)
+    assert witness.terminal == "equatorial-surface"
+    assert witness.radial_root_class == "two-exterior-simple-roots"
+    assert witness.exterior_radial_root_count == 2
+    assert witness.radial_turnings == 1
+    assert witness.polar_turnings == 1
+    assert witness.equatorial_crossings_before_terminal == 0
+    assert witness.azimuth_winding == 0
+    assert witness.radial_turn_mino_duration < witness.source_mino_duration
+    assert witness.radial_classification_margin < 0
+    assert witness.source_inner_margin_m > 0
+    assert witness.source_outer_margin_m > 0
+    assert witness.emitter_angular_velocity_per_m < 0
+    assert witness.frequency_ratio > 0
+    assert witness.observed_bolometric_intensity > 0
+
+
+def test_negative_spin_certificate_rejects_stale_event_margin() -> None:
+    witness = _negative_spin_surface_witness(
+        precision_digits=MINIMUM_WITNESS_DIGITS,
+    )
+
+    with (
+        mp.workdps(witness.precision_digits),
+        pytest.raises(_UnsupportedWitnessError),
+    ):
+        replace(
+            witness,
+            next_crossing_after_source_mino_margin=(
+                witness.next_crossing_after_source_mino_margin + mp.mpf("0.125")
+            ),
+        )

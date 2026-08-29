@@ -1,4 +1,4 @@
-"""Build independent high-precision BL/Mino witnesses for named source-edge rays.
+"""Build independent high-precision BL/Mino witnesses for named Kerr rays.
 
 This research-only module reconstructs the canonical observation from decimal
 physics inputs, maps its photon covector to Boyer--Lindquist constants, and
@@ -13,6 +13,8 @@ Primary mathematical sources:
   https://doi.org/10.1103/PhysRevD.101.044032
 * Mino's affine reparameterization:
   https://doi.org/10.1103/PhysRevD.67.084027
+* Signed equatorial circular-orbit branches:
+  https://doi.org/10.1086/151796
 * Arbitrary-precision quadrature behavior used here:
   https://mpmath.org/doc/1.3.0/calculus/integration.html
 * Verified root finding and polynomial-root conditioning:
@@ -76,6 +78,11 @@ _CRITICAL_EQUATORIAL_CROSSINGS = 1
 _CRITICAL_SURFACE_AZIMUTH_WINDING = 1
 _CRITICAL_CAPTURE_AZIMUTH_WINDING = 0
 _CRITICAL_ROOT_CLASS = "exterior-double-root"
+_NEGATIVE_SPIN_PIXEL = (62, 7)
+_NEGATIVE_SPIN_VIEWPORT_WIDTH = 64
+_NEGATIVE_SPIN_VIEWPORT_HEIGHT = 36
+_NEGATIVE_SPIN_EMITTER_BRANCH_SIGN = -1
+_NEGATIVE_SPIN_ROOT_CLASS = "two-exterior-simple-roots"
 _INGOING_CHART_SIGN = 1
 _OUTGOING_CHART_SIGN = -1
 
@@ -393,6 +400,54 @@ class _CriticalCurveCorpusWitness:
                 raise _UnsupportedWitnessError(
                     "critical double-root residual does not retain the required digits"
                 )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _NegativeSpinSurfaceWitness:
+    """Independent continuous-field certificate for one negative-spin ray."""
+
+    pixel: tuple[int, int]
+    precision_digits: int
+    physical_spin_m: mp.mpf
+    chart_sign: int
+    emitter_branch_sign: int
+    terminal: str
+    initial_polar_side: str
+    radial_root_class: str
+    exterior_radial_root_count: int
+    radial_turnings: int
+    polar_turnings: int
+    equatorial_crossings_before_terminal: int
+    azimuth_winding: int
+    source_mino_duration: mp.mpf
+    radial_turn_mino_duration: mp.mpf
+    source_after_radial_turn_mino_margin: mp.mpf
+    next_crossing_after_source_mino_margin: mp.mpf
+    radial_stationary_radius_m: mp.mpf
+    radial_classification_margin: mp.mpf
+    radial_turning_radius_m: mp.mpf
+    radial_turning_above_horizon_margin_m: mp.mpf
+    source_radius_m: mp.mpf
+    source_inner_margin_m: mp.mpf
+    source_outer_margin_m: mp.mpf
+    source_azimuth_unwrapped_rad: mp.mpf
+    source_azimuth_rad: mp.mpf
+    emitter_angular_velocity_per_m: mp.mpf
+    frequency_ratio: mp.mpf
+    travel_time_m: mp.mpf
+    emitted_bolometric_intensity: mp.mpf
+    observed_bolometric_intensity: mp.mpf
+    energy: mp.mpf
+    impact_parameter: mp.mpf
+    carter_parameter: mp.mpf
+    radial_turning_derivative: mp.mpf
+    polar_turning_derivative: mp.mpf
+    initial_null_residual: mp.mpf
+    mino_constraint_residual: mp.mpf
+    chart_primitive_residual: mp.mpf
+
+    def __post_init__(self) -> None:
+        _validate_negative_spin_surface_witness(self)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -754,6 +809,259 @@ def _validate_surface_witness(witness: _SurfaceWitness) -> None:
             raise _UnsupportedWitnessError(
                 "equation residual does not retain the required "
                 f"{certified_digits} decimal digits"
+            )
+
+
+def _validate_negative_spin_surface_witness(
+    witness: _NegativeSpinSurfaceWitness,
+) -> None:
+    _validate_precision_digits(witness.precision_digits)
+    if witness.pixel != _NEGATIVE_SPIN_PIXEL:
+        raise _UnsupportedWitnessError(
+            "negative-spin witness does not use its pre-registered pixel"
+        )
+    discrete_identity = (
+        (witness.chart_sign, _OUTGOING_CHART_SIGN),
+        (witness.emitter_branch_sign, _NEGATIVE_SPIN_EMITTER_BRANCH_SIGN),
+        (witness.terminal, _SURFACE_TERMINAL),
+        (witness.initial_polar_side, _SOURCE_EDGE_INITIAL_POLAR_SIDE),
+        (witness.radial_root_class, _NEGATIVE_SPIN_ROOT_CLASS),
+        (witness.exterior_radial_root_count, 2),
+        (witness.radial_turnings, 1),
+        (witness.polar_turnings, 1),
+        (witness.equatorial_crossings_before_terminal, 0),
+        (witness.azimuth_winding, 0),
+    )
+    if any(
+        type(actual) is not type(expected) or actual != expected
+        for actual, expected in discrete_identity
+    ):
+        raise _UnsupportedWitnessError(
+            "negative-spin witness does not match its named path identity"
+        )
+
+    continuous_fields = (
+        witness.physical_spin_m,
+        witness.source_mino_duration,
+        witness.radial_turn_mino_duration,
+        witness.source_after_radial_turn_mino_margin,
+        witness.next_crossing_after_source_mino_margin,
+        witness.radial_stationary_radius_m,
+        witness.radial_classification_margin,
+        witness.radial_turning_radius_m,
+        witness.radial_turning_above_horizon_margin_m,
+        witness.source_radius_m,
+        witness.source_inner_margin_m,
+        witness.source_outer_margin_m,
+        witness.source_azimuth_unwrapped_rad,
+        witness.source_azimuth_rad,
+        witness.emitter_angular_velocity_per_m,
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+        witness.impact_parameter,
+        witness.carter_parameter,
+        witness.radial_turning_derivative,
+        witness.polar_turning_derivative,
+        witness.initial_null_residual,
+        witness.mino_constraint_residual,
+        witness.chart_primitive_residual,
+    )
+    if not all(
+        isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
+    ):
+        raise _UnsupportedWitnessError(
+            "negative-spin witness contains a non-real or non-finite value"
+        )
+
+    positive_fields = (
+        witness.source_mino_duration,
+        witness.radial_turn_mino_duration,
+        witness.source_after_radial_turn_mino_margin,
+        witness.next_crossing_after_source_mino_margin,
+        witness.radial_stationary_radius_m,
+        witness.radial_turning_radius_m,
+        witness.radial_turning_above_horizon_margin_m,
+        witness.source_radius_m,
+        witness.source_inner_margin_m,
+        witness.source_outer_margin_m,
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+        witness.carter_parameter,
+        witness.radial_turning_derivative,
+        witness.polar_turning_derivative,
+    )
+    if any(value <= 0 for value in positive_fields):
+        raise _UnsupportedWitnessError(
+            "negative-spin witness contains a non-positive physical margin"
+        )
+    if witness.radial_classification_margin >= 0:
+        raise _UnsupportedWitnessError(
+            "negative-spin witness lacks a certified scattering barrier"
+        )
+    if witness.emitter_angular_velocity_per_m >= 0:
+        raise _UnsupportedWitnessError(
+            "negative-spin witness does not use the negative emitter branch"
+        )
+
+    with mp.workdps(witness.precision_digits):
+        geometry = _negative_spin_geometry()
+        if witness.physical_spin_m != geometry.spin:
+            raise _UnsupportedWitnessError(
+                "negative-spin witness changed the physical Kerr spin"
+            )
+        separated = _SeparatedState(
+            energy=witness.energy,
+            impact=witness.impact_parameter,
+            carter=witness.carter_parameter,
+            radial_velocity=mp.mpf(0),
+            polar_velocity=mp.mpf(0),
+            constraint_residual=witness.mino_constraint_residual,
+        )
+        classification = _classify_radial_barrier(geometry, separated)
+        if len(classification.exterior_roots) != witness.exterior_radial_root_count:
+            raise _UnsupportedWitnessError(
+                "negative-spin witness changed the exterior radial-root count"
+            )
+        initial_mu = mp.cos(geometry.theta)
+        polar = _build_polar_motion(
+            geometry.spin,
+            witness.impact_parameter,
+            witness.carter_parameter,
+            initial_mu,
+        )
+        initial_to_polar_turn = polar.integrate_to_turn(
+            _unit_integrand,
+            initial_mu,
+        )
+        equator_to_polar_turn = polar.integrate_to_turn(
+            _unit_integrand,
+            mp.mpf(0),
+        )
+        expected_source_mino_duration = initial_to_polar_turn + equator_to_polar_turn
+        radial = _build_radial_motion(
+            geometry,
+            separated,
+            witness.precision_digits,
+        )
+        expected_radial_turn_mino_duration = radial.integrate_from_turn(
+            _unit_integrand,
+            geometry.radius,
+        )
+        expected_angular_velocity = _circular_emitter_angular_velocity(
+            geometry,
+            witness.source_radius_m,
+            witness.emitter_branch_sign,
+        )
+        g_tt = -1 + 2 * geometry.mass / witness.source_radius_m
+        g_t_phi = -2 * geometry.mass * geometry.spin / witness.source_radius_m
+        delta = (
+            witness.source_radius_m**2
+            - 2 * geometry.mass * witness.source_radius_m
+            + geometry.spin**2
+        )
+        g_phi_phi = (
+            (witness.source_radius_m**2 + geometry.spin**2) ** 2
+            - geometry.spin**2 * delta
+        ) / witness.source_radius_m**2
+        emitter_time_component = 1 / mp.sqrt(
+            -(
+                g_tt
+                + 2 * expected_angular_velocity * g_t_phi
+                + expected_angular_velocity**2 * g_phi_phi
+            )
+        )
+        expected_frequency_ratio = 1 / (
+            emitter_time_component
+            * witness.energy
+            * (1 - expected_angular_velocity * witness.impact_parameter)
+        )
+        expected_emitted_intensity = (
+            witness.source_radius_m / SURFACE_INNER_RADIUS_M
+        ) ** -3
+        expected_observed_intensity = (
+            expected_emitted_intensity * expected_frequency_ratio**4
+        )
+        horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+        expected_values = (
+            (witness.source_mino_duration, expected_source_mino_duration),
+            (
+                witness.radial_turn_mino_duration,
+                expected_radial_turn_mino_duration,
+            ),
+            (
+                witness.source_after_radial_turn_mino_margin,
+                expected_source_mino_duration - expected_radial_turn_mino_duration,
+            ),
+            (
+                witness.next_crossing_after_source_mino_margin,
+                2 * equator_to_polar_turn,
+            ),
+            (
+                witness.radial_stationary_radius_m,
+                classification.stationary_radius,
+            ),
+            (witness.radial_classification_margin, classification.margin),
+            (witness.radial_turning_radius_m, radial.turning),
+            (radial.turning, max(classification.exterior_roots)),
+            (
+                witness.radial_turning_above_horizon_margin_m,
+                radial.turning - horizon,
+            ),
+            (
+                witness.source_inner_margin_m,
+                witness.source_radius_m - SURFACE_INNER_RADIUS_M,
+            ),
+            (
+                witness.source_outer_margin_m,
+                SURFACE_OUTER_RADIUS_M - witness.source_radius_m,
+            ),
+            (
+                witness.source_azimuth_rad,
+                _wrap_angle(witness.source_azimuth_unwrapped_rad),
+            ),
+            (witness.emitter_angular_velocity_per_m, expected_angular_velocity),
+            (witness.frequency_ratio, expected_frequency_ratio),
+            (witness.emitted_bolometric_intensity, expected_emitted_intensity),
+            (witness.observed_bolometric_intensity, expected_observed_intensity),
+            (witness.radial_turning_derivative, radial.turning_derivative),
+            (witness.polar_turning_derivative, polar.turning_derivative),
+        )
+        if (
+            _azimuth_winding(
+                geometry,
+                witness.source_radius_m,
+                witness.source_azimuth_unwrapped_rad,
+            )
+            != witness.azimuth_winding
+        ):
+            raise _UnsupportedWitnessError(
+                "negative-spin witness changed the signed azimuth winding"
+            )
+        residual_limit = mp.power(
+            10,
+            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+        )
+        relation_residuals = tuple(
+            abs(actual - expected) / max(mp.mpf(1), abs(expected))
+            for actual, expected in expected_values
+        )
+        equation_residuals = (
+            witness.initial_null_residual,
+            witness.mino_constraint_residual,
+            witness.chart_primitive_residual,
+        )
+        if any(
+            residual < 0 or residual >= residual_limit
+            for residual in (*relation_residuals, *equation_residuals)
+        ):
+            raise _UnsupportedWitnessError(
+                "negative-spin relation or equation residual lost certified digits"
             )
 
 
@@ -1301,6 +1609,19 @@ def _critical_curve_geometry() -> _ObservationGeometry:
         chart_azimuth=mp.mpf(0),
         viewport_width=_CRITICAL_VIEWPORT_WIDTH,
         viewport_height=_CRITICAL_VIEWPORT_HEIGHT,
+        vertical_fov=mp.pi / 4,
+    )
+
+
+def _negative_spin_geometry() -> _ObservationGeometry:
+    return _build_observation_geometry(
+        spin=-mp.mpf(4) / 5,
+        chart_sign=_OUTGOING_CHART_SIGN,
+        radius=mp.mpf(12),
+        theta=mp.pi / 3,
+        chart_azimuth=mp.mpf(0),
+        viewport_width=_NEGATIVE_SPIN_VIEWPORT_WIDTH,
+        viewport_height=_NEGATIVE_SPIN_VIEWPORT_HEIGHT,
         vertical_fov=mp.pi / 4,
     )
 
@@ -2194,16 +2515,37 @@ def _escape_position_and_direction(
     return position, traversal_direction
 
 
+def _circular_emitter_angular_velocity(
+    geometry: _ObservationGeometry,
+    source_radius: mp.mpf,
+    branch_sign: int,
+) -> mp.mpf:
+    """Return the signed pure-Kerr equatorial circular-orbit frequency."""
+
+    if type(branch_sign) is not int or branch_sign not in (-1, 1):
+        raise _UnsupportedWitnessError("emitter branch sign must be -1 or 1")
+    circular_root = mp.sqrt(geometry.mass * source_radius)
+    denominator = source_radius**2 + branch_sign * geometry.spin * circular_root
+    if not mp.isfinite(denominator) or denominator <= 0:
+        raise _UnsupportedWitnessError("circular emitter branch is unavailable")
+    return branch_sign * circular_root / denominator
+
+
 def _surface_transfer_observables(
     geometry: _ObservationGeometry,
     initial_ray: _InitialRay,
     separated: _SeparatedState,
     radial: _RadialMotion,
     source_radius: mp.mpf,
+    *,
+    emitter_branch_sign: int,
 ) -> _TransferObservables:
     spin = geometry.spin
-    sqrt_mass = mp.sqrt(geometry.mass)
-    angular_velocity = sqrt_mass / (source_radius ** mp.mpf("1.5") + spin * sqrt_mass)
+    angular_velocity = _circular_emitter_angular_velocity(
+        geometry,
+        source_radius,
+        emitter_branch_sign,
+    )
     g_tt = -1 + 2 * geometry.mass / source_radius
     g_t_phi = -2 * geometry.mass * spin / source_radius
     g_phi_phi = (
@@ -2351,6 +2693,7 @@ def _compute_surface_witness(
         separated,
         radial,
         source_radius,
+        emitter_branch_sign=1,
     )
     return _SurfaceWitness(
         precision_digits=precision_digits,
@@ -2377,6 +2720,120 @@ def _compute_surface_witness(
         mino_constraint_residual=separated.constraint_residual,
         chart_primitive_residual=path.chart_primitive_residual,
     )
+
+
+def _negative_spin_surface_witness(
+    *,
+    precision_digits: int,
+) -> _NegativeSpinSurfaceWitness:
+    """Recompute one pre-registered negative-spin surface ray from inputs."""
+
+    _validate_precision_digits(precision_digits)
+    with mp.workdps(precision_digits):
+        geometry = _negative_spin_geometry()
+        initial_ray = _canonical_initial_ray(geometry, *_NEGATIVE_SPIN_PIXEL)
+        separated = _separated_initial_state(geometry, initial_ray)
+        if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
+            raise _UnsupportedWitnessError(
+                "negative-spin surface witness requires the named outgoing polar branch"
+            )
+        classification = _classify_radial_barrier(geometry, separated)
+        if classification.margin >= 0 or len(classification.exterior_roots) != 2:
+            raise _UnsupportedWitnessError(
+                "negative-spin surface witness lacks the two-root scattering topology"
+            )
+
+        initial_mu = mp.cos(geometry.theta)
+        polar = _build_polar_motion(
+            geometry.spin,
+            separated.impact,
+            separated.carter,
+            initial_mu,
+        )
+        initial_to_polar_turn = polar.integrate_to_turn(
+            _unit_integrand,
+            initial_mu,
+        )
+        equator_to_polar_turn = polar.integrate_to_turn(
+            _unit_integrand,
+            mp.mpf(0),
+        )
+        source_mino_duration = initial_to_polar_turn + equator_to_polar_turn
+
+        radial = _build_radial_motion(geometry, separated, precision_digits)
+        radial_turn_mino_duration = radial.integrate_from_turn(
+            _unit_integrand,
+            geometry.radius,
+        )
+        source_radius = _solve_source_radius(
+            radial,
+            geometry.radius,
+            source_mino_duration,
+            precision_digits,
+        )
+        path = _integrate_path_observables(
+            geometry,
+            polar,
+            radial,
+            initial_mu,
+            source_radius,
+        )
+        transfer = _surface_transfer_observables(
+            geometry,
+            initial_ray,
+            separated,
+            radial,
+            source_radius,
+            emitter_branch_sign=_NEGATIVE_SPIN_EMITTER_BRANCH_SIGN,
+        )
+        horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+        return _NegativeSpinSurfaceWitness(
+            pixel=_NEGATIVE_SPIN_PIXEL,
+            precision_digits=precision_digits,
+            physical_spin_m=geometry.spin,
+            chart_sign=geometry.chart_sign,
+            emitter_branch_sign=_NEGATIVE_SPIN_EMITTER_BRANCH_SIGN,
+            terminal=_SURFACE_TERMINAL,
+            initial_polar_side=_SOURCE_EDGE_INITIAL_POLAR_SIDE,
+            radial_root_class=_NEGATIVE_SPIN_ROOT_CLASS,
+            exterior_radial_root_count=len(classification.exterior_roots),
+            radial_turnings=1,
+            polar_turnings=1,
+            equatorial_crossings_before_terminal=0,
+            azimuth_winding=path.azimuth_winding,
+            source_mino_duration=source_mino_duration,
+            radial_turn_mino_duration=radial_turn_mino_duration,
+            source_after_radial_turn_mino_margin=(
+                source_mino_duration - radial_turn_mino_duration
+            ),
+            next_crossing_after_source_mino_margin=2 * equator_to_polar_turn,
+            radial_stationary_radius_m=classification.stationary_radius,
+            radial_classification_margin=classification.margin,
+            radial_turning_radius_m=radial.turning,
+            radial_turning_above_horizon_margin_m=radial.turning - horizon,
+            source_radius_m=source_radius,
+            source_inner_margin_m=source_radius - SURFACE_INNER_RADIUS_M,
+            source_outer_margin_m=SURFACE_OUTER_RADIUS_M - source_radius,
+            source_azimuth_unwrapped_rad=path.terminal_azimuth_unwrapped,
+            source_azimuth_rad=path.terminal_azimuth,
+            emitter_angular_velocity_per_m=_circular_emitter_angular_velocity(
+                geometry,
+                source_radius,
+                _NEGATIVE_SPIN_EMITTER_BRANCH_SIGN,
+            ),
+            frequency_ratio=transfer.frequency_ratio,
+            travel_time_m=path.travel_time,
+            emitted_bolometric_intensity=transfer.emitted_intensity,
+            observed_bolometric_intensity=transfer.observed_intensity,
+            energy=separated.energy,
+            impact_parameter=separated.impact,
+            carter_parameter=separated.carter,
+            radial_turning_derivative=radial.turning_derivative,
+            polar_turning_derivative=polar.turning_derivative,
+            initial_null_residual=initial_ray.initial_null_residual,
+            mino_constraint_residual=separated.constraint_residual,
+            chart_primitive_residual=path.chart_primitive_residual,
+        )
 
 
 def _compute_critical_surface_witness(
@@ -2435,6 +2892,7 @@ def _compute_critical_surface_witness(
         separated,
         radial,
         source_radius,
+        emitter_branch_sign=1,
     )
     horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
     return _CriticalSurfaceWitness(
@@ -2703,6 +3161,32 @@ _HORIZON_PRECISION_FIELDS = (
     "carter_parameter",
     "polar_turning_derivative",
 )
+_NEGATIVE_SPIN_PRECISION_FIELDS = (
+    "physical_spin_m",
+    "source_mino_duration",
+    "radial_turn_mino_duration",
+    "source_after_radial_turn_mino_margin",
+    "next_crossing_after_source_mino_margin",
+    "radial_stationary_radius_m",
+    "radial_classification_margin",
+    "radial_turning_radius_m",
+    "radial_turning_above_horizon_margin_m",
+    "source_radius_m",
+    "source_inner_margin_m",
+    "source_outer_margin_m",
+    "source_azimuth_unwrapped_rad",
+    "source_azimuth_rad",
+    "emitter_angular_velocity_per_m",
+    "frequency_ratio",
+    "travel_time_m",
+    "emitted_bolometric_intensity",
+    "observed_bolometric_intensity",
+    "energy",
+    "impact_parameter",
+    "carter_parameter",
+    "radial_turning_derivative",
+    "polar_turning_derivative",
+)
 
 
 def _certify_precision_doubling(
@@ -2849,6 +3333,27 @@ def _build_critical_curve_precision_certificate() -> _PrecisionCertificate[
     )
 
 
+def _build_negative_spin_precision_certificate() -> _PrecisionCertificate[
+    _NegativeSpinSurfaceWitness
+]:
+    """Rebuild the named negative-spin surface ray at 120/180 digits."""
+
+    low = _negative_spin_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = _negative_spin_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    with mp.workdps(HIGH_PRECISION_DIGITS):
+        maximum_delta = _certify_precision_doubling(
+            (getattr(low, field), getattr(high, field))
+            for field in _NEGATIVE_SPIN_PRECISION_FIELDS
+        )
+    return _PrecisionCertificate(
+        low_precision_digits=LOW_PRECISION_DIGITS,
+        high_precision_digits=HIGH_PRECISION_DIGITS,
+        required_stable_digits=REQUIRED_STABLE_DIGITS,
+        maximum_normalized_delta=maximum_delta,
+        witness=high,
+    )
+
+
 def _scientific(value: mp.mpf, digits: int = 110) -> str:
     return mp.nstr(value, digits, strip_zeros=False)
 
@@ -2857,7 +3362,8 @@ def _print_path_identity(
     witness: _SurfaceWitness
     | _EscapeWitness
     | _CriticalSurfaceWitness
-    | _HorizonWitness,
+    | _HorizonWitness
+    | _NegativeSpinSurfaceWitness,
 ) -> None:
     print(f"terminal={witness.terminal}")
     print(
@@ -2872,7 +3378,10 @@ def _print_path_identity(
 
 
 def _print_turning_and_residuals(
-    witness: _SurfaceWitness | _EscapeWitness | _CriticalSurfaceWitness,
+    witness: _SurfaceWitness
+    | _EscapeWitness
+    | _CriticalSurfaceWitness
+    | _NegativeSpinSurfaceWitness,
 ) -> None:
     print(f"energy={_scientific(witness.energy)}")
     print(f"impact_parameter={_scientific(witness.impact_parameter)}")
@@ -2894,7 +3403,7 @@ def _print_turning_and_residuals(
 
 
 def _print_surface_observables(
-    witness: _SurfaceWitness | _CriticalSurfaceWitness,
+    witness: _SurfaceWitness | _CriticalSurfaceWitness | _NegativeSpinSurfaceWitness,
     *,
     outer_edge_signed_margin: mp.mpf | None = None,
 ) -> None:
@@ -2911,6 +3420,49 @@ def _print_surface_observables(
     print(
         "observed_bolometric_intensity="
         f"{_scientific(witness.observed_bolometric_intensity)}"
+    )
+
+
+def _print_negative_spin_observables(
+    witness: _NegativeSpinSurfaceWitness,
+) -> None:
+    print(f"physical_spin_m={_scientific(witness.physical_spin_m)}")
+    print(f"chart_sign={witness.chart_sign}")
+    print(f"emitter_branch_sign={witness.emitter_branch_sign}")
+    print(f"radial_root_class={witness.radial_root_class}")
+    print(f"exterior_radial_root_count={witness.exterior_radial_root_count}")
+    print(
+        f"radial_stationary_radius_m={_scientific(witness.radial_stationary_radius_m)}"
+    )
+    print(
+        "radial_classification_margin="
+        f"{_scientific(witness.radial_classification_margin)}"
+    )
+    print(f"radial_turning_radius_m={_scientific(witness.radial_turning_radius_m)}")
+    print(
+        "radial_turning_above_horizon_margin_m="
+        f"{_scientific(witness.radial_turning_above_horizon_margin_m)}"
+    )
+    print(f"source_mino_duration={_scientific(witness.source_mino_duration)}")
+    print(f"radial_turn_mino_duration={_scientific(witness.radial_turn_mino_duration)}")
+    print(
+        "source_after_radial_turn_mino_margin="
+        f"{_scientific(witness.source_after_radial_turn_mino_margin)}"
+    )
+    print(
+        "next_crossing_after_source_mino_margin="
+        f"{_scientific(witness.next_crossing_after_source_mino_margin)}"
+    )
+    print(f"source_inner_margin_m={_scientific(witness.source_inner_margin_m)}")
+    print(f"source_outer_margin_m={_scientific(witness.source_outer_margin_m)}")
+    _print_surface_observables(witness)
+    print(
+        "source_azimuth_unwrapped_rad="
+        f"{_scientific(witness.source_azimuth_unwrapped_rad)}"
+    )
+    print(
+        "emitter_angular_velocity_per_m="
+        f"{_scientific(witness.emitter_angular_velocity_per_m)}"
     )
 
 
@@ -3088,4 +3640,20 @@ def run() -> None:
             _print_turning_and_residuals(case.witness)
         else:
             _print_horizon_observables(case.witness)
+
+    negative_spin_certificate = _build_negative_spin_precision_certificate()
+    negative_spin = negative_spin_certificate.witness
+    print(
+        "negative_spin_surface_precision="
+        f"{negative_spin_certificate.low_precision_digits},"
+        f"{negative_spin_certificate.high_precision_digits} "
+        f"stable_digits>={negative_spin_certificate.required_stable_digits} "
+        "maximum_normalized_delta="
+        f"{_scientific(negative_spin_certificate.maximum_normalized_delta, 12)}"
+    )
+    pixel_x, pixel_y = negative_spin.pixel
+    print(f"case=kerr-negative-spin-outgoing-v1:{pixel_x}:{pixel_y}:0.5:0.5")
+    _print_path_identity(negative_spin)
+    _print_negative_spin_observables(negative_spin)
+    _print_turning_and_residuals(negative_spin)
     print("RESULT=PASS")
