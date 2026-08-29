@@ -334,7 +334,7 @@ equatorial crossings 与 signed winding exact equality。该 matrix 不改变上
 未来 presentation accelerator 不另设宽松容差。任何 analytic/Mino candidate 的 accepted ray 都必须
 通过同一 termination/direction/travel-time gate；potential/reciprocal constraint 只是额外 condition
 signal，不能代替 observable。已拒绝的 fixed-step Mino candidate 正是因为高分辨率 accepted ray 越过
-travel-time budget。现有 [Kerr/Carlson 高精度 oracle](research/carlson-kerr-oracle.md)只关闭 exact
+travel-time budget。现有 [Kerr elliptic 高精度 oracle](research/kerr-elliptic-oracle.md)只关闭 exact
 topology 与 positive-real special-function 研究层；任何后续 production elliptic/Carlson variant 仍至少
 覆盖正/负 spin、近场高绕转、critical 两侧、near-axis、near-extreme 与 unsupported-domain fallback；
 parameter sweep 只属于研究 artifact，不进入常规测试。
@@ -351,7 +351,8 @@ v1 保存 geometry/Observation，v2 保存 neutral surface observable，v3 保�
 修正属于同一 artifact 的勘误，不伪造一个新的物理 profile。勘误必须同时满足：先加入能复现根因的
 独立最小 oracle；在 research record 中保存根因、影响范围与复算命令；原子更新全部消费者；不得借
 勘误放宽 tolerance、扩大 applicability 或更换 intended method。Git history 保留旧值。v3 spectral
-expected 的精度勘误见[辐射传输研究记录](research/radiative-transfer-and-source-reconstruction.md#1-问题方法与当前差距)。
+expected 的精度勘误见
+[辐射传输研究记录](research/radiative-transfer.md#高精度-oracle-与-fixture-勘误)。
 
 不要在文档中维护一份带省略号的伪 schema。具名实例分别见
 [`fixtures/v1`](../crates/gravlume-reference/fixtures/v1/)、

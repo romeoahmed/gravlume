@@ -36,19 +36,19 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - outer-edge center-subpixel 九点 `(640,12..20)` 另由不导入 Rust trace 的 separated BL/Mino research
   witness 重建；120/180 位复算约束 exact path identity、signed classification/event-order margin、Escape
   position/direction/time 与 surface source/frequency/time/radiance，其中 `(640,16)` 与 canonical v2 重合。方法、数字与适用域见
-  [独立 BL/Mino witness](research/high-precision-bl-mino-witness.md)。
+  [Kerr observable corpus](research/kerr-observable-corpus.md)。
 - outgoing Kerr–Schild `64×36` observation 的相邻 `(33,10)/(33,11)` 另有 120/180 位
   research-only BL/Mino 证书，覆盖 radial double-root 两侧、Surface/Horizon event order、第二次
   equatorial crossing、unwrapped phase 与 winding；它尚未成为 Rust fixture 或 GPU 支持证据。见
-  [critical pair 记录](research/critical-curve-surface-capture.md)。
+  [Kerr observable corpus](research/kerr-observable-corpus.md)。
 - 同一 test-only `64×36` profile 的负自旋 `(62,7)` 另有不读取 Rust/GPU 输出的 120/180 位
   BL/Mino 证书，显式约束 physical spin、outgoing chart、负向 circular-emitter branch、两根
   scattering topology、source/phase/time/frequency/radiance；它仍不是 Rust fixture 或 structured
-  agreement。见[负自旋记录](research/negative-spin-continuous-witness.md)。
+  agreement。见 [Kerr observable corpus](research/kerr-observable-corpus.md)。
 - pure-Kerr radial quartic 另有 research-only exact rational I--IV classifier 与 positive-real
   `RF/RC/RD/RJ` defining-integral oracle；它保存 sign-changing root brackets、turn sequence、
   degenerate/domain fallback、120/180 位复算与 actual Ib radial reduction，但不进入 Reference crate，
-  也不是 terminal outcome。见 [Kerr/Carlson 记录](research/carlson-kerr-oracle.md)。
+  也不是 terminal outcome。见 [Kerr elliptic 记录](research/kerr-elliptic-oracle.md)。
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
@@ -76,7 +76,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。
 
-历史 raw-radius/reciprocal-radius `f32` 条件性实验已移入[研究记录](research/mino-step-selection.md)，不属于 reference fixture 合同。
+历史 raw-radius/reciprocal-radius `f32` 条件性实验已移入
+[GPU 加速账本](research/gpu-geodesic-acceleration.md#21-数值-mino-实验为何失败以及为何转向解析路线)，
+不属于 reference fixture 合同。
 
 ## 主要来源
 

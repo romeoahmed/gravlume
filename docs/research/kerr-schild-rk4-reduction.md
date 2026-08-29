@@ -531,7 +531,7 @@ r_+=M+\sqrt{M^2-a^2-q_e^2}
 \((b,\eta)\) 可表示；subextremal horizon 存在；current
 backward radial orientation 是向 horizon 的那一支；对覆盖 \([r_+,r_{obs}]\) 的所有 outward-
 rounded Bernstein segments 均严格证明 \(R>0\)；任何 coefficient、horizon、energy 或 sign
-不确定即 KS fallback。exact extremal、superextremal、charged photon 不在首版支持域。
+不确定即 KS fallback。exact extremal、superextremal、charged photon 不在该 certificate 的支持域。
 
 这项是可证 conservative fast path，但只扩大 Kerr–Newman coverage；默认 pure-Kerr 的
 polynomial 完全不变，因此不能把它记为默认性能优化。
@@ -582,21 +582,7 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research kerr-schild-rhs
 ```
 
-持久化脚本预期输出：
-
-```text
-Sigma discriminant identity: PASS
-Sigma and Kerr-Schild scalar gradients: PASS
-Both Kerr-Schild branch contractions: PASS
-Schwarzschild projector limit: PASS
-Six-dimensional Hamilton system: PASS
-Axis-regular Carter invariant: PASS
-Kerr-Newman radial quartic: PASS
-Cubic Hermite event order: PASS
-RESULT=PASS
-```
-
-持久化 verifier 的 exact checks：
+Verifier 的 exact checks：
 
 1. \(\Sigma^2=B^2+4a^2z^2\) on (6)；
 2. (8)、(9) 与 implicit-radius differentiation 等价；
@@ -643,32 +629,18 @@ R1–R4 的准入依据是 exact identity、定义域、状态/依赖图缩减�
 | events      | horizon、escape、singularity guard、near-tangent bracket、同一步多 surface priority                                    |
 | resolutions | 小型全像素 oracle lattice；720p/1080p/1440p performance；resize invalidation→publish                                   |
 
-每个 accelerated/modified pixel 都沿用 `docs/validation.md`：termination 一致；escape direction
-≤ `3.82e-4 rad`；travel time ≤ `1e-3 M`；null/`E`/`Lz`/Carter drift 各 ≤ `0.05`；event
-position/residual ≤ `5e-3 M`；regular domain 不新增未回退 failure/uncertain。临界或 conditioning
-不确定可以保守回退，不能确定地给错 branch。
+每个 accelerated/modified pixel 都沿用[验证合同](../validation.md#5-验收预算)的 discrete 与
+continuous observable budgets；本页不复制阈值。临界或 conditioning 不确定可以保守回退，不能
+确定地给错 branch。
 
-### 9.2 性能方法
+### 9.2 历史性能结果
 
-1. 数学恒等式、binary32 domain 和 observable contract 先决定是否接受；不为每个局部改写反复
-   ABBA。全部 production 约化完成后，复用 `GpuTimings` 与 Criterion `iter_custom` 只运行一次
-   aggregate confirmation。[wgpu `ComputePass::write_timestamp`](https://docs.rs/wgpu/30.0.0/wgpu/struct.ComputePass.html#method.write_timestamp)
-2. 最终记录 adapter/backend、power mode、revision/dirty state、extent、scene 与 output gate；结果与
-   历史基线比较时明确 DVFS/热状态限制，不把一次计时反过来否定 exact dependency reduction。
-3. 同时记录 invalidation→atomic-publish wall latency；Criterion GPU duration 不包含 submit、wait、
-   map 与 publication，不能替代 resize 体感。
-4. aggregate 至少记录 RHS/geometry evaluations、step p50/p90/p95/p99/max、termination 与 fallback
-   distribution。只有具名 vendor profiler/offline compiler 才能报告 register/occupancy；源码字段数
-   只能是假设。
-5. 当前 macOS/Metal 可跑完整数值/性能 gate；Windows/Linux 在真实 target 前只允许说
-   WGSL/Naga/compile 通过，不得把未运行 Vulkan 当作跨平台性能结论。实现仍保持一份 portable WGSL。
-
-最终累计确认在 2026-08-14 只运行一次：Apple M5/Metal、production `1280×720`、30 个
-Criterion samples/990 次 trace 的 GPU timestamp estimate 为 `14.861 ms`，95% interval
-`[14.824, 14.893] ms`，吞吐约 `62.015 Melem/s`。相对同名保存基线的 time change 为
-`-20.661%`，interval `[-21.693%, -19.560%]`；30 个样本中有 5 个 outlier。这个结果确认累计
-production 点没有整体退化，不把改善比例分摊给某一条恒等式，也不代表包含 resize、surface、
-UI 与 publication 的整帧 wall latency。
+Revision `e59dcbdf` 在 Apple M5/Metal、production `1280×720` workload 上得到 `14.861 ms` GPU
+timestamp estimate，95% interval `[14.824,14.893] ms`；相对当时保存基线为 `-20.661%`，interval
+`[-21.693%,-19.560%]`。它只确认累计约化没有明显整体退化，不能分摊到某条恒等式，也不代表包含
+resize、surface、UI 与 publication 的 wall latency。该历史 artifact 没有保留当前方法要求的全部
+环境 metadata，不能作为现行跨平台性能证据；后续结果必须遵循
+[GPU benchmark 方法](gpu-benchmark-methodology.md)。
 
 ## 10. 接口与 fallback 边界
 

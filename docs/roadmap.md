@@ -28,11 +28,8 @@ Kerr 解析/半解析 terminal solver 是旁路 accelerator：它可以先建立
 关闭了当前 source-edge seed 的 semantic fields；相邻 surface/capture、critical/higher-order pair 与
 一个具名 negative-spin sample 另有独立 BL/Mino 研究证书，但尚未进入对应 Rust/GPU agreement。
 near-axis/near-extreme 已有只认证 conservative rejection 的 condition report，但 production fallback、
-统一 texture gate、质量方法和持久 artifact 仍未闭合，也没有扩大科学支持域。精确证据边界见
-[连续字段 corpus 记录](research/continuous-field-corpus.md)与
-[critical pair 研究记录](research/critical-curve-surface-capture.md)、
-[负自旋研究记录](research/negative-spin-continuous-witness.md)、
-[conditioning fallback 记录](research/near-axis-extreme-fallback.md)。
+统一 texture gate、质量方法和持久 artifact 仍未闭合，也没有扩大科学支持域。分层证书、消费边界
+与剩余缺口统一见 [Kerr observable corpus](research/kerr-observable-corpus.md)。
 
 **交付：**
 
@@ -75,7 +72,7 @@ near-axis/near-extreme 已有只认证 conservative rejection 的 condition repo
 
 前两层的 pure-Kerr 研究证书已经闭合：exact rational classifier 覆盖 I--IV、Ia/Ib、正负 spin 与
 degenerate/domain fallback，positive-real Carlson oracle 通过 defining integrals、identities 与
-precision doubling，见[研究记录](research/carlson-kerr-oracle.md)。它只把下一开放工作推进到受限
+precision doubling，见[研究记录](research/kerr-elliptic-oracle.md)。它只把下一开放工作推进到受限
 terminal solver 与 production routing；没有实现 Rust/WGSL method、完整 observable agreement 或性能
 bake-off。
 

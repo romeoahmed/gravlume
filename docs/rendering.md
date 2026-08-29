@@ -126,10 +126,11 @@ observable，相关 production shortcut 已撤出。未来 Kerr–Newman classif
 解析或半解析 Kerr solver 是受限 accelerator，不是通用数值基线。已经实验过的 fixed-step reciprocal-Mino RK4 candidate 虽能显著减少通用 Kerr–Schild work，却在扩大 reference lattice 后越过正式 travel-time budget，因此不得进入 resolved production plan。potential residual、局部阶数和低分辨率 acceptance 都不能单独约束 terminal phase observable。
 
 具名 root topology 与 positive-real Carlson 的高精度 CPU oracle 已在
-[Kerr/Carlson 研究记录](research/carlson-kerr-oracle.md)闭合；它只接纳分离的 Class Ib 作 further
+[Kerr elliptic 研究记录](research/kerr-elliptic-oracle.md)闭合；它只接纳分离的 Class Ib 作 further
 analysis，不是 terminal solver。后续 production 候选仍必须显式处理 turning branch、near-critical
 conditioning、axis/horizon domain 和 observable error，并在条件不明时回退 Cartesian Kerr–Schild。
-fixed-step 路线的否决证据见 [Mino candidate 研究结论](research/mino-step-selection.md)；chart 与
+fixed-step 路线的否决证据见
+[GPU 加速账本](research/gpu-geodesic-acceleration.md#21-数值-mino-实验为何失败以及为何转向解析路线)；chart 与
 physical-spin seam 见 [KS–BL/Mino 零步映射](research/kerr-schild-mino-map.md)。
 
 ## 5. Surface、volume 与时间
@@ -220,7 +221,9 @@ $\|J\|_F^2-\sqrt{\|J\|_F^4-4\det(J)^2}$ 在 near-degenerate 区域消减；这�
 
 比较三种输入：tone-mapped edge、geometry/status edge、source Jacobian + branch discontinuity。场景至少含 Schwarzschild 高频 sky、Kerr critical curve、薄盘多像和 cubemap seam。以 full-resolution trace 的 source coordinate、termination、branch 和 filtered radiance 为 reference；只有 source method 在同预算下降低 worst-case error 才进入主线。
 
-footprint evidence 本身不授权 production map。候选还必须有定义明确的 filterable source/history consumer，并证明它在完整 transport 后的 scene-linear radiance 上获益。已否决候选及恢复条件只保留在 [source-space reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#7-研究决策与恢复条件)。
+footprint evidence 本身不授权 production map。候选还必须有定义明确的 filterable source/history
+consumer，并证明它在完整 transport 后的 scene-linear radiance 上获益。已否决候选及恢复条件只保留在
+[source-space reconstruction 研究记录](research/source-reconstruction.md#重开条件)。
 
 ## 7. Adaptive sampling 与 active-ray execution
 

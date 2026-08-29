@@ -167,7 +167,7 @@ private TracePlan
 可选 inspection 是 publication 的只读旁路消费者：同一 encoder 产生 fresh record、复制 request
 绑定的一个 published texel，并用 `map_buffer_on_submit` 把 readback 绑定到该 submission。它不修改
 candidate、published texture 或默认 frame resource plan；精确 ABI、copy 顺序与 Metal 证据见
-[按需单样本检查决策](research/on-demand-sample-inspection.md#gpu-protocol-与资源证据)。
+[单样本检查决策](research/sample-inspection.md#gpu-protocol-与资源)。
 
 上一张完整 FP16 scene 跨 resize 保留并 aspect-fit。compute batch 不 acquire surface、不运行 egui、不 present，因此隐藏批次不会以扫描或低分辨率过渡暴露给用户。
 
