@@ -4,7 +4,7 @@
 
 **状态：混合决策账本。** 各实验是否已实现以第 7 节 ledger 与链接的当前合同为准。研究基线为仓库提交 `9dbdb71c0ad325c7c78ca518cbdff528daa2f2fe`，目标是找到能显著降低完整原生分辨率画面延迟、同时保留物理与数值合同的算法路线。本文延续[完整帧原子发布研究](atomic-frame-publication.md)：计算可以分批，画面仍只发布完整 generation；不重新引入可见低分辨率阶段或扫描式 reveal。
 
-**2026-08-28 superseding decision：** escape-direction map reconstruction 把
+**当前纠正：** escape-direction map reconstruction 把
 `GeometricSample.travel_time` 写成零，interval capture 也没有积分 coordinate time；旧全屏 gate 只比较
 terminal 与 direction，漏掉验证合同的 `1e-3 M` travel-time observable。两条路径及专用测试现已删除，
 当前 analytic sky 与 surface 都执行完整 Cartesian KS。下文 A/B 数字仍是历史性能证据，不再表示采用。
@@ -12,7 +12,7 @@ terminal 与 direction，漏掉验证合同的 `1e-3 M` travel-time observable�
 ## 结论
 
 1. 研究起点的默认 1280×720 trace 累计 GPU 时间曾为 `80.5–192.2 ms`。escape-direction map 与 interval capture 的历史 A/B 分别显示 `27.923–37.941%` 和 `5.946–9.156%` 的局部收益，但 gate 漏掉 travel time，因此这些数字不能授权 production，也不构成跨平台 60 FPS 声明。[当前证据](../gpu-renderer.md#适用域与限制) [资源合同](../architecture.md#内存与资源预算)
-2. **三条不完整 fast path 均已否决或撤出**：numerical-Mino 在扩大 lattice 后越过 travel-time budget；escape map 与 interval capture 根本没有产生可信 travel time。可分离结构仍值得研究，但当前 production 直接执行 Cartesian KS。[候选结论](mino-step-selection.md)
+2. **三条不完整 fast path 均已否决或撤出**：numerical-Mino 在扩大 lattice 后越过 travel-time budget；escape map 与 interval capture 根本没有产生可信 travel time。可分离结构仍值得研究，但当前 production 直接执行 Cartesian KS。完整根因见[数值 Mino 结论](#21-数值-mino-实验为何失败以及为何转向解析路线)。
 3. 在现有 Kerr–Schild 路径内，Bogacki–Shampine 3(2) FSAL pair 值得比完整 Dormand–Prince 5(4) 更早试验：首次 4 次、此后每 accepted step 3 次新 RHS，并自带 embedded estimate；但它是三阶方法，是否真的减少总 RHS 只能由 observable gate 和 GPU A/B 决定。[Bogacki–Shampine 原文](https://doi.org/10.1016/0893-9659%2889%2990079-7) [Dormand–Prince 原文](https://doi.org/10.1016/0771-050X%2880%2990013-3)
 4. active-ray wavefront/compaction 不是第一步。它可能回收长尾 inactive lanes，但每轮必须把状态写回显存；在得到 step 分位数和 active-ratio 曲线以前，不能证明收益大于 state traffic 与多 pass 开销。若进入实验，应把完整 RK step 融在单 kernel 内，只在多个 step 的 chunk 边界 compact；不要把四个 RK stage 拆成四个 kernel。[Laine–Karras–Aila 2013](https://research.nvidia.com/sites/default/files/pubs/2013-07_Megakernels-Considered-Harmful/laine2013hpg_paper.pdf) [PBRT v4 wavefront 取舍](https://www.pbr-book.org/4ed/Wavefront_Rendering_on_GPUs/Mapping_Path_Tracing_to_the_GPU)
 5. 截图中的“脏”主要不能先归因于测地线噪声。研究基线的 `analytic_sky` 把经纬周期中央约 90–92% 设为高亮，两项取 `max` 后约 99.2% 天空被额外加上 `2.0` radiance。初次反转 mask 后，实际截图仍显示薄线在临界曲线处被放大为发白的环；当前实现因此进一步换成无 seam、不过曝的低阶球面多项式与局部轴向色标。每像素一个中心样本仍没有 branch-aware coverage，因此真正的 horizon/escape 轮廓抗锯齿是后续 appearance/filtering 问题，不能靠放宽积分误差或模糊几何掩盖。[preview shader](../../crates/gravlume-render/src/shaders/lensing_preview.wgsl)
@@ -66,7 +66,28 @@ Kerr–Newman 也有 Mino-time radial/angular potentials 与显式 elliptic/Jaco
 
 完整解析实现每个像素需要：从近场 tetrad 初值构造 `E,Lz,Q`、分类 quartic roots 与 turning branches、求 elliptic functions、累计 azimuth/time integral、再转换回项目的 outgoing Cartesian Kerr–Schild observable。WGSL 标准 built-ins 不提供 elliptic integrals/Jacobi functions，必须自行实现并验证。[WGSL built-in functions](https://www.w3.org/TR/WGSL/#builtin-functions) 已有 Kerr analytic 实现也说明了边界：Krang 面向 GPU/differentiability，但第一方 README 明确把 observer 限制在 asymptotic infinity；这不是当前 `r_obs=30M` 的 drop-in solver。[Krang source/README](https://github.com/dominic-chang/Krang.jl) Dexter–Agol 的 semi-analytic 方法以 Carlson elliptic integrals化简 Kerr photon orbit，是很好的 CPU/oracle 对照，但其存在同样不等于 WGSL/f32 合同已经成立。[Dexter–Agol 2009](https://arxiv.org/abs/0903.0620)
 
-数值实验曾用 `(u=1/r, u', μ=cosθ, μ')` polynomial RHS 自然越过 turning point，并数值积分 `φ,t`。它确实显著减少 geometry 工作，但 high-resolution reference 证明 potential constraints 不能界定累计 terminal phase。继续收紧一个全局 fixed factor 只会线性增加工作，并不补上证明缺口。因此下一候选直接使用具名 root topology 与 elliptic/Carlson terminal integrals；Cartesian KS 继续承担任何不确定域。
+已删除的 reciprocal-Mino candidate 使用 `(u=1/r, u', μ=cosθ, μ')` 的 cubic polynomial RHS
+自然越过 turning point，并数值积分 `φ,t`。锁定的
+[`mino_step.py`](scripts/src/gravlume_research/checks/mino_step.py)形式化检查证明 classical RK4 local
+defect 从 $h^5$ 开始、cubic Hermite interior defect 从 $h^4$ 开始；在固定平滑轨迹上，步长因子
+$f$ 因而只有 $W(f)=\Theta(f^{-1})$ 与 $e_{global}(f)=O(f^4)$ 的局部模型，不能外推为
+binary32 terminal observable 的全域证书。
+
+候选曾通过低分辨率 strict-DP5(4) matrix 的 `219/256` cases；默认 `1280×720` 本机实验接受
+`775,399/921,600` pixels（`84.136%`），历史 256-pair timing 相对 interval capture + KS 为
+`-35.768%`，95% CI `[-36.390%, -35.189%]`。这证明可分离 polynomial dynamics 有真实性能信号，
+但只覆盖受测 phase/profile。
+
+`320×180` 扩展在 pixel `(175,51)` 找到最小正式反例：travel-time absolute error 约
+`2.661354e-3 M`，超过 `1e-3 M` budget；更早 factor sweep 还出现约 `4.438e-4 rad` 的
+escape-direction error，超过 `3.82e-4 rad` budget。Potential residual 只约束 energy surface，
+winding cutoff 与稀疏 $Cf^4$ fit 都不能界定累计 azimuth/time phase。继续收紧全局 fixed factor
+只会线性增加工作，并不补上证明缺口；production WGSL、pipeline constants、benchmark variants
+与专用 tests 因而全部删除。
+
+该候选只有在新的 phase-error certificate 能先验覆盖完整 accepted domain 时才可重开；增加抽样或
+缩小经验步长不够。下一候选直接使用具名 root topology 与 elliptic/Carlson terminal integrals，
+Cartesian KS 继续承担任何不确定域。复算命令与环境见[统一 Python 研究工具链](python-research-tooling.md)。
 
 ### 2.2 必须封闭的域
 
@@ -82,7 +103,10 @@ Kerr–Newman 也有 Mino-time radial/angular potentials 与显式 elliptic/Jaco
 
 可分离 solver 把 `E,Lz,Q` 当常量，因此“它们没有被更新”不能冒充数值正确性。accepted terminal 必须重建 outgoing KS position/covector，再用独立的现有公式复算 null/`E,Lz,Q` agreement；同时记录 `v_r²-R`、`v_μ²-U`、root separation/condition bucket。任何一项超过安全预算就回退，不能把构造出来的零 drift 当作 confidence。
 
-legacy Mino prototype 曾因 outgoing chart 把 oblate twist 留在 `+a` 而产生最坏 `0.194 rad` escape-direction error；exact SymPy legacy RED 与 corrected Kerr–Newman metric/covector/tangent GREEN 随后封闭了 Gate A/B。修正后的 numerical candidate 在低分辨率 Gate C/D 与 GPU timestamps 上表现很好，却在 `320×180` reference 产生约 `2.661354e-3 M` travel-time error，超过 `1e-3 M` contract。完整正反证据见 [KS–BL seam](kerr-schild-mino-map.md) 与 [Mino candidate conclusion](mino-step-selection.md)。
+legacy Mino prototype 曾因 outgoing chart 把 oblate twist 留在 `+a` 而产生最坏 `0.194 rad`
+escape-direction error；exact SymPy legacy RED 与 corrected Kerr–Newman metric/covector/tangent GREEN
+随后封闭了 chart/spin seam。修正后的 numerical candidate 仍被本节的 high-resolution
+travel-time 反例否决。映射证据见 [KS–BL seam](kerr-schild-mino-map.md)。
 
 ### 2.3 推荐的 GPU 组合，而不是全量替换
 
@@ -149,7 +173,10 @@ GPU ODE 文献证明一 thread 一 independent system 与 adaptive Cash–Karp �
 
 若 BS3(2) 不能同时降低 total GPU time 与 observable error，就删除 variant；不因为“自适应更现代”而保留。
 
-本轮先做了一个受控的 fixed-step 主解探针，而没有把它伪装成完整 embedded variant：base step `0.1` 在 regular fixture 的 travel-time gate 上达到 `1.187e-3 M`，已经超过 `1e-3 M`；缩到 `0.05` 后合同通过，但增加的 step 数没有在噪声较大的 Metal smoke 样本中证明总时间收益。该探针已删除。它不否定带二阶误差估计、量化 tier 与有界 retry/fallback 的完整 E2，但证明“把 RK4 tableau 直接换成三阶公式”不能作为生产优化。
+一个已删除的 fixed-step 主解探针在 base step `0.1` 时越过 regular fixture 的 travel-time gate；
+缩到 `0.05` 后合同通过，但增加的 step 数没有在 Metal smoke samples 中证明总时间收益。它不否定带
+二阶误差估计、量化 tier 与有界 retry/fallback 的完整 embedded candidate，但证明“直接替换 RK4
+tableau”不能作为 production 优化。
 
 ## 4. Symplectic/Hamiltonian 方法为什么暂不进入交互主线
 
@@ -174,15 +201,20 @@ Metal 原生 pipeline 明确把 [`threadExecutionWidth`](https://developer.apple
 
 ### 5.2 Global shared transfer map 历史实验（已撤出）
 
-第一版 workgroup-local transfer 让每个 8×8 tile 独立追 `(0,4,8)²` 九点。它通过全像素 branch/direction gate，并在 Apple M5/Metal 上取得 `-18.809%`、95% CI `[-22.941%, -14.456%]`，但相邻 tile 重复计算边界 node，且九条长 trace 会让其他 lane 等待。它作为可否证中间基线有价值，不再是 production 数据流。
+Workgroup-local baseline 让每个 8×8 tile 独立追 `3×3` nodes；它通过历史 branch/direction gate，
+Apple M5/Metal A/B 为 `-18.809%`，95% CI `[-22.941%,-14.456%]`，但相邻 tile 重复边界 nodes。
+Global variant 改为 4-pixel grid 上每个 node 只追一次，再按 exact branch key 与 conservative direction
+residual 接纳 `3×3` stencil reconstruction。两个 pass 由 command ordering/resource transition 建立
+可见性，不依赖 backend-private barrier。
 
-当时的 production 先用独立 escape-map pass 在全局 4-pixel grid 上追踪每个共享 node 一次，把 Horizon/Escape tag 与 octahedral-quantized Escape direction 压成一个 `u32`；trace pass 再让每个 8×8 tile 读自己的 `3×3` stencil。九点必须全部 Escape，且四边中点与中心相对归一化整 tile corner direction 的 chord residual 不超过 `min(半像素角, 3.0e-4 rad)`，整 tile 才以同一 3×3 stencil 的四个 4×4 子格做连续分片双线性 direction reconstruction。其他 tile 执行原始逐像素 KS，并复用 tile 内四个 node。两个 pass 位于同一 command buffer 的独立 compute usage scope；同步依据是 wgpu 的资源转换，不是 backend 私有 barrier。
+Global variant 相对 local baseline 的两次位置对称 A/B 为 `-37.941%` 与 `-27.923%`，且当时的
+terminal/direction gate 通过；后来发现它把 `GeometricSample.travel_time` 写成零，因此整条路径撤出。
+旧 threshold sweep、accepted-count 调参与临时 shader overrides 不再保留为路线图。
 
-1280×720 全像素合同要求 FP16 terminal tag 全等，并对所有 reconstructed Escape 比较未 tone-map 的 direction。Apple M5/Metal 两次 32 对位置对称 `ABBA/BAAB` A/B 相对 workgroup-local 路径分别为 `-37.941%`、CI `[-41.091%, -34.885%]` 与 `-27.923%`、CI `[-32.350%, -23.353%]`；初始 `2.0e-4` 准入重建 `621,084` 个 Escape pixels。把内部 residual 门限预注册为 `2.5e-4 rad` 后，相对原门限的 16/32 对分别改善 `10.432%`（CI `[-16.384%, -5.848%]`）和 `6.551%`（CI `[-11.095%, -2.015%]`），直接 full-KS gate 重建 `653,604` pixels，最大 chord² `9.251701e-8`。在相同 3×3 nodes 上改用分片重建，把同一 accepted set 的最大 full-KS chord² 降到 `2.320720e-8`；利用该余量把内部 gate 一次性扩大到仍低于最终合同的 `3.0e-4 rad`，重建 `677,064` pixels，最大 chord² `2.348202e-8`，并相对 2.5e-4 整 tile 双线性再改善 `4.775%`、CI `[-5.683%, -3.957%]`。全部方案均保持 921,600 个 branch 全等，最终预算是 `3.82e-4 rad` 对应的 `1.45924e-7` chord²；spin/near-field/far-field/near-axis 参数矩阵通过，因此当时 production 采用 3.0e-4 分片方案。该路径后来因缺失 travel time 撤出。16×16 tile 用同一 gate 的 32 对实验为 `-0.221%`、CI `[-4.717%, +4.762%]`，故恢复 8×8。这里保留 4% 历史布局收益、19% local transfer、28–38% global map、6–10% 初次门限改进与 4.8% 分片改进的理由相同：置信区间、重复方向、正确性和复杂度一起判断，不设机械倍数门槛。
-
-global map 稳定后又单独测试“8×8 workgroup 不变、四个 workgroup 共享一个 16×16 coarse transfer cell”，避免把旧 256-lane workgroup 的否决机械外推。它通过全像素 branch gate，最大 direction chord² `4.365467e-8` 仍在预算内，但 16 对相对 8×8 cell **慢 `29.126%`**、CI `[+24.004%, +34.100%]`；更稀 node 带来的节省被更低 reconstruction acceptance 与 fallback 成本压过。候选已完全移除，production 不增加 cell-size override。
-
-另一个 benchmark-only `16→8` 层级原型先追 8-pixel coarse nodes、分类 16×16 macro，只为不稳定 macro 补追 4-pixel nodes。第一版 full-grid selective dispatch 保持全屏 branch 全等与 direction gate，但两边启用同一 interval capture 后，16 对相对当前 map 仅 `-0.649%`、CI `[-1.982%, +0.781%]`。第二版把每个不稳定 macro 的 16 个非 coarse nodes 压成一个 coherent 4×4 workgroup，并用确定 ownership 消除 shared-node 重复；正确性仍通过，却在 16 对中确定回退 `+8.798%`、CI `[+5.324%, +12.344%]`。空 lane 不是唯一瓶颈，额外分类/dispatch、16-thread workgroup occupancy 与 ownership 分支已经让层级 node 生成失去收益证据；两版均完整移除，不再升级 atomic/indirect queue。
+两个结构反例仍有复用价值：保持 8×8 workgroup 但共享 16×16 coarse cell 时慢 `29.126%`，95% CI
+`[+24.004%,+34.100%]`；`16→8` hierarchical variants 分别得到跨零的 `-0.649%` 和明确回退的
+`+8.798%`。更稀 nodes 没有偿还 acceptance loss、额外 dispatch、ownership 与 occupancy 成本，
+相关实现均已删除。
 
 ### 5.3 Interval Kerr capture 历史实验（已撤出）
 
@@ -206,13 +238,10 @@ uv run --isolated --project docs/research/scripts --locked \
 
 默认 1280×720 接受 `56,937/921,600` pixels（`6.178%`）。在已经采用 global map 后，Apple M5/Metal 两次 32 对增量分别为 `-9.156%`、CI `[-10.733%, -7.707%]` 与 `-5.946%`、CI `[-9.573%, -3.652%]`，branch tags 全等，Escape direction 完全不变。这个 shortcut 只服务当时的 presentation Horizon/color；科学 record capture 仍执行完整 KS。它没有计算 travel time，因此即使 branch gate 与性能 A/B 通过也不能满足完整 terminal observable，现已撤出。
 
-分段数只做一次有界反例实验：`12→8` 不扩大接受域且全像素 gate 仍过，但覆盖从 `56,937` 降到 `51,881`（`5.629%`），16 对增量只剩 `-2.562%`、CI `[-4.423%, -0.299%]`；恢复 12 段后的相邻 16 对为 `-7.472%`、CI `[-10.448%, -5.225%]`。历史实现曾固定 12 段；撤出后不再保留 runtime override 或继续枚举 4/16/24 段。
-
-另一个只会 early-reject、不扩大接受域的候选在 interval 构造前检查 `((L-aE)^2+Q)/E^2≤64`。它保持 `56,937` 接受像素与全部 oracle gate，但 16 对增量只有 `-4.112%`、CI `[-5.280%, -2.654%]`，低于相邻无筛选 12 段的 `-7.472%`；额外 scalar 分支/计算没有被跳过的 interval 工作抵消，故候选已移除。
-
-把 `interval_scale` 从通用 interval multiply 特化为按 scalar 符号只乘两个端点，也通过 strict-f32/SymPy 与 GPU oracle；但 16 对 capture 增量为 `-4.328%`、CI `[-4.790%, -3.833%]`，仍弱于相邻原实现 `-7.472%`。在没有直接 old/new capture 对照证明净改善前，不用源码级乘法计数替代实测，特化已移除。
-
-把 12 个 Bernstein 段从单调 horizon→observer 顺序改成两端交替检查，接受域与 921,600 个 branch 完全不变；但 16 对相对原顺序只有 `+0.152%`、CI `[-1.110%, +1.412%]`。非 capture ray 的实际失败段分布不足以偿还 index 选择，override、额外 pipeline 与实验 API 均已移除。
+四个 bounded microvariants 都未改善完整 candidate：`12→8` segments 降低覆盖并削弱收益；
+normalized-separation early reject 与 sign-specialized interval scale 的额外分支没有偿还 interval work；
+交替 segment order 的 CI 跨零。它们只证明源码 operation count 不能替代 paired GPU evidence，
+对应 overrides、pipelines 与实验 API 均已删除。
 
 单 ray 热循环里，`geometry_at` 过去在 RK2/3/4 中间 stages 也计算 `singularity_measure`，但 RHS 只消费 metric 与空间导数；guard 只在初态、每个 committed endpoint 和 localized terminal state 读取。production 现在只在这些可观察位置计算 guard，中间 stage 跳过。全屏 branch/direction gate 通过，32 对相对相同 transfer+capture baseline 改善 `3.148%`、CI `[-5.713%, -1.390%]`；没有新增状态、资源或 public seam，因此这项小而稳定的收益获准保留。相反，完全关闭 presentation 的 travel-time/metadata 记账只得到 `+0.160%`、CI `[-3.496%, +4.635%]`，候选已移除，科学与展示路径继续共享同一完整 observable policy。
 
@@ -290,41 +319,21 @@ scratch 只有一个 atomic count 和 bounded `u32` edge list。refine 将两者
 
 4K shadow capacity 是 `48,000` indices：按 16-byte 最小 binding size 计算为 `192,016 B`。删除 global node map 后，每个 sky candidate 只保留该 shadow scratch；cold、active 与 completed 4K transactional rebuild 都通过 `256 MiB`。资源计划仍在分配前拒绝 synthetic oversized plan；这只是不包含 driver heap/alignment 的项目 core-resource admission，不声称是实测总显存。
 
-这轮实验确认三种消费边界必须分开：sky/surface appearance 只消费 terminal
+这些实验确认三种消费边界必须分开：sky/surface appearance 只消费 terminal
 direction/branch/time，volume 需要有序 path checkpoints，科学验证需要 f32 records。不能为了让
 analytic terminal solver 看似通用而伪造 volume path，也不能为了测试 capture 让 presentation 常驻全部记录。
 
-## 7. 候选实验优先级
+## 7. 决策摘要
 
-| 顺序 | 实验                                                                                  | 主要假设                                                                                    | 保留门槛                                                                                                                                               | 主要风险                                                                           |
-| ---: | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-|   E0 | production/capture 资源拆分（已实现）；GPU histogram（待做）                          | 48 B/pixel 记录是 resize/VRAM 根因，统计可替代 production readback                          | 1440p 新 generation 核心约 42.2 MiB；完整 diagnostic 仍通过；trace 无显著回退                                                                          | 未来语义字段被误删                                                                 |
-|   E1 | 64×1 vs 8×8 paired A/B（Metal 已采用；Vulkan 待复测）                                 | 二维 cost coherence 可减少 masked lanes                                                     | exact-output gate；Metal 稳定约 4% 的明确小收益获准进入 production                                                                                     | backend 特异、Vulkan 可能不复现                                                    |
-|  E1a | 16×4 physical workgroup / 同一 8×8 logical tile（已拒绝）                             | 相同 64 lanes 下可能改善 occupancy                                                          | 两次 32 对为 `-0.626%`（CI 勉强排零）与 `+0.414%`（CI 跨零）；branch 全等                                                                              | 收益小于顺序偏差且不能复现                                                         |
-|  E1b | 8×8 workgroup-local 3×3 Escape transfer + exact KS fallback（历史基线）               | 稳定天空区域可减少逐像素 ODE                                                                | 三场景全像素 branch/direction gate；Metal `-18.809%`，95% CI `[-22.941%, -14.456%]`                                                                    | 相邻 tile 重复 node；SIMT 等待；已被 E1d 取代                                      |
-|  E1c | 16×16 cooperative tile，保持同一 3×3 stencil/门槛/fallback（已拒绝）                  | 更大的协作 tile 可摊薄 stencil ray                                                          | 三场景全像素 gate 通过；32 对 Metal A/B 为 `-0.221%`，95% CI `[-4.717%, +4.762%]`，落在噪声内，候选已移除                                              | 256-lane 空闲与更低 acceptance 抵消理论 ray reduction                              |
-| E1c2 | 8×8 workgroup + 16×16 global coarse cell（已拒绝）                                    | 保留 occupancy，只减少 global node 密度                                                     | branch/direction gate 通过；16 对 Metal 为 `+29.126%`，CI `[+24.004%, +34.100%]`                                                                       | reconstruction acceptance 下降，fallback 成本远超 node 节省                        |
-|  E1d | 4px packed global node map + 8×8 resolve/fallback（已撤出）                           | 跨 tile 共享 stencil node 并缩短 workgroup 内长 trace 等待                                  | 历史 terminal/direction 与 Metal A/B 通过；未产生 travel time                                                                                         | gate 漏掉完整 terminal observable，源码已删除                                     |
-|  E1e | 12-segment interval Bernstein Kerr capture（已撤出）                                 | 严格正径向势可直接证明无 turning point                                                      | 历史 branch 与 Metal A/B 通过；未计算 travel-time integral                                                                                            | 证书只证明 capture，不能替代完整 observable                                       |
-|  E1f | 8-segment interval capture（已拒绝）                                                  | 更少 coefficient checks 可能抵消覆盖损失                                                    | 全像素 gate 通过；覆盖降至 5.629%，16 对改善仅 2.562%；恢复 12 段为 7.472%                                                                             | 较宽 segment 使 interval lower bound 更难保持严格为正                              |
-|  E1g | normalized separation early-reject（已拒绝）                                          | 高 impact-parameter ray 可跳过 interval coefficient work                                    | 覆盖与 gate 不变；16 对改善 4.112%，弱于无筛选 7.472%                                                                                                  | scalar guard 自身成本与 divergence 抵消节省                                        |
-|  E1h | sign-specialized `interval_scale`（已拒绝）                                           | 两个 endpoint multiply 可替代通用四乘法/minmax                                              | formal/oracle gate 通过；16 对改善 4.328%，弱于相邻原实现 7.472%                                                                                       | 源码 operation count 没转成可归因 GPU 收益                                         |
-| E1h2 | Bernstein segment 两端交替 early-out（已拒绝）                                        | 非 capture ray 可在更有区分力的 segment 更早失败                                            | 921,600 branch 全等；16 对 `+0.152%`、CI `[-1.110%, +1.412%]`                                                                                          | 失败段分布没有证据，index 选择抵消 early-out                                       |
-|  E1i | `16→8` coarse classify + selective fine dispatch（已拒绝）                            | stable macro 跳过 4px fine nodes                                                            | full-grid 16 对 `-0.649%`、CI 跨零；coherent 4×4 fine workgroup 16 对 `+8.798%`、CI `[+5.324%, +12.344%]`；全像素 gate 均通过                          | dispatch/occupancy/ownership 成本；不再升级 queue                                  |
-|  E1j | committed-only singularity guard（已采用）                                            | RK intermediate RHS 不消费 guard observable                                                 | full gate；32 对 `-3.148%`、CI `[-5.713%, -1.390%]`                                                                                                    | 必须继续在 every committed/localized endpoint 计算                                 |
-|  E1k | presentation metadata/travel-time disable（已拒绝）                                   | 未显示字段可减轻寄存器/ALU                                                                  | 32 对 `+0.160%`、CI `[-3.496%, +4.635%]`                                                                                                               | 无稳定收益，且分裂 scientific/presentation policy                                  |
-|  E1l | exact KS RHS factorization（已采用；Vulkan 待复测）                                   | Hamilton force 只需 contracted null Jacobian，不需三个完整 derivative vectors               | SymPy exact；完整 render/GPU gate；研究基线 Naga 30.0.0 不再生成动态 loop/array；Metal 1280×720 从 vector-Jacobian `21.951 ms` 降到 `14.446–14.826 ms` | binary32 非 bitwise；收益只在 Apple M5/Metal 实测                                  |
-|  E1m | direct `Sigma`/gradient + cached reciprocal（已采用）                                 | `Sigma=root`、direct gradient 与 factored `grad f` 都是 exact identity；root 形式定义域更大 | SymPy exact；完整 render/GPU gate；旧局部 A/B 的 `1–2.5%` 波动不再否定更短依赖图                                                                       | binary32 非 bitwise；CPU oracle 保留独立 residual reconstruction                   |
-|  E1n | 6D phase、`vec4<t,x,y,z>` RHS、全域 Carter、Hermite event（已采用）                   | stationarity 精确固定 per-ray `E`；Cartesian Carter 无 axis seam；单调 cubic guard 为四阶   | 持久化 SymPy；coordinate-time translation、axis/Schwarzschild、GPU/reference/event residual gate 全过                                                  | near-tangent/非单调 guard 回 chord；step policy 未随之放宽                         |
-|  E1o | Kerr–Newman interval capture（已撤出）                                                | KN radial quartic 只在常数项增加 `-q_e²[(Lz-aE)²+Q]`                                        | SymPy exact；历史 branch/direction 等价；未计算 travel time                                                                                           | strict certificate 仍不足以形成完整 terminal                                     |
-|   E2 | BS3(2) FSAL + 量化 step + bounded fallback                                            | embedded estimate 能以更少 RHS 达到相同 observable                                          | 全流程 p50/p95 至少 20%；最终 gate 全过                                                                                                                | 三阶需更多 step、reject 分歧                                                       |
-|   E3 | pure-Kerr exterior reciprocal-Mino numerical fast path + inline KS fallback（已拒绝） | polynomial separable RHS 能消除主要 geometry 成本                                           | 默认接受 84.136%；256 对 `-35.768%`，但 320×180 accepted ray travel time 越过合同                                                                      | constraint/winding gate 未界定 terminal phase；实现已删除                          |
-|   E4 | 完整 Kerr elliptic terminal solver + 同一 fallback                                    | root-aware special-function 求值避免几十步 phase accumulation                               | 高精度全 accepted-pixel oracle；相对 interval+KS 有实质收益；复杂度有 fixture 覆盖                                                                     | roots/special functions/近场初值复杂                                               |
-|   E5 | K-step fused wavefront + compaction                                                   | measured long tail 足以覆盖 state traffic                                                   | integrate+compact+args 总 p50/p95 至少 20%，内存仍过项目 gate                                                                                          | 显存、bandwidth、多 pass                                                           |
-|   E6 | subgroup queue build                                                                  | global atomic contention 已成为可测瓶颈                                                     | 各支持 backend 稳定改善、CI 排除零且代码成本受控；baseline variant 保留                                                                                | 宽度/工具链差异                                                                    |
-|   E7 | branch-aware source footprint/reconstruction                                          | 当前视觉问题主要是 sampling；稳定区可少 trace                                               | source/filter quality 与 temporal gate 通过，且总 GPU time下降                                                                                         | caustic false interpolation                                                        |
+| 决定 | 候选 | 依据 |
+| --- | --- | --- |
+| 已采用 | production/capture 资源拆分、真正的 8×8 tile、exact KS RHS/Sigma 约化、6D phase、Cartesian Carter、Hermite event、committed-only guard、shadow coverage | 独立代数/observable gate；局部优化不扩大 public seam |
+| 已撤出 | global transfer map、interval Kerr/Kerr–Newman capture | 历史 branch/direction 与 A/B 通过，但没有可信 travel time |
+| 已拒绝 | numerical fixed-step Mino、16×4/16×16/hierarchical layouts、interval microvariants、metadata/time disable、fixed-step BS3 probe | terminal-phase 反例、收益不可复现或完整 candidate 回归 |
+| 仅在新证据下重开 | embedded BS3、elliptic terminal solver、wavefront/compaction、subgroup queue、source reconstruction | 分别需要 observable error model、high-precision topology/terminal oracle、long-tail telemetry、queue bottleneck 或真实 source consumer |
 
-保留门槛按风险与成本分层，不使用统一百分比：布局或局部、可完整 fallback 的 accelerator，只要位置对称 CI 排除零、收益跨复测稳定、正确性 gate 全过且代码成本低，约 4% 也值得保留；引入新物理 domain、special functions 或大规模持久状态的 E3/E4/E5 则需要显著更高收益来偿还验证与维护面。5% noise threshold 只标记单次 run 的可疑区间，不是硬淘汰线；若 run-to-run noise 更大，先扩大样本并使用交错配对，而不是按一次最好结果决策。
+路线排序只由[能力路线](../roadmap.md)维护。本账本保留候选的正反证据和重开条件，不再给已删除
+variants 编号或维护调参 backlog。
 
 ### 明确延后或否决
 
@@ -335,55 +344,23 @@ analytic terminal solver 看似通用而伪造 volume path，也不能为了测�
 - neural trajectory surrogate 直接给物理结果：没有 near-critical branch 的可证明 worst-case bound；最多做 conservative classifier/hint，错误或低置信必须回到已验证 solver；
 - 直接把 AART/Krang 当近场通用实现：两者的一手来源都限定了更窄的问题域。
 
-## 8. 正确性门槛
+## 8. 准入与验证边界
 
-所有 accelerator 最终输出沿用[validation contract](../validation.md)，不能另设更宽松的“fast mode”：
+所有 accelerator 沿用[验证合同](../validation.md#5-验收预算)的完整 observable budgets 和
+[渲染设计](../rendering.md)的 support/fallback 原则，不能另设宽松 fast mode。Candidate-specific
+evidence 还必须覆盖：
 
-- regular fixture termination 完全一致；regular domain 最终 NumericalFailure/StepExhaustion/未回退 Uncertain 为 0；
-- escape/source direction ≤ `3.82e-4 rad`（当前 0.35 pixel）；
-- travel time ≤ `1e-3 M`；
-- null、E、Lz、Carter 四项 recorded drift 各自 ≤ `0.05`；
-- Frequency Ratio relative error ≤ `2e-3`（当目标 profile 产生该 observable）；
-- surface event position/residual ≤ `5e-3 M`；
-- near-critical paired rays 不得给出错误但“确定”的 branch；安全带内可以回退，最终结果仍必须通过；
-- generation invalidation 后 stale publish 为 0。
+- exact/CAS convention、root/topology 与 state reduction；
+- independent high-precision terminal、phase、turning 与 near-degenerate rejection；
+- accepted-domain classifier 零 false acceptance，fallback 原因 machine-readable；
+- Metal/Vulkan 各自的 real-adapter layout、floating-point、observable 与 total-workload evidence。
 
-### 8.1 解析/Mino 形式化检查
+Metal/Vulkan 不要求 bit identity，但每个 backend 都必须满足同一 observable contract；shader compile
+或 Naga validation 不能替代 runtime evidence。WGSL 允许的 rounding、FTZ、reassociation 与 fusion
+见 [floating-point evaluation](https://www.w3.org/TR/WGSL/#floating-point-evaluation)。性能 artifact
+统一遵循 [GPU benchmark 方法](gpu-benchmark-methodology.md)，本页不维护第二份测量合同。
 
-1. 用 CAS 在 exact rational/symbolic 表达下从 Hamilton–Jacobi potentials 推导项目符号约定；逐项验证 `u=1/r` 变换、二阶势 RHS、`E,Lz,Q` 与 outgoing KS/BL covector Jacobian。
-2. 对 root discriminant/topology 使用 binary64/高精度 oracle 划分安全区；near-multiple roots 生成成对 fixture，证明 classifier 只会保守回退，不会跨类接受。
-3. 以 80-bit 以上数值在 Mino/elliptic 与独立 f64 DP5(4) KS reference 之间比较 checkpoint、turning count、terminal event、direction 与 `t,φ`；不是只比较守恒量。
-4. 变形关系至少覆盖质量尺度、`q_e → -q_e`（neutral photon metric 不变）、spin/image reflection、共同 coordinate-time 平移和 step-halving convergence。
-5. subextreme、near-extreme、exact-extreme、superextreme、near-axis、equatorial、近 horizon observer 与远场分别标注 supported/fallback；不以一个默认 Kerr scene 外推。
-
-### 8.2 GPU 数值与跨后端检查
-
-- 当前 macOS/Metal 可做完整运行 gate；Vulkan 在未运行真实 adapter 前只能完成 compile/Naga/layout 检查，文档必须明确“未运行”，不能把 shader 编译当数值验证；
-- 比较 observable tolerance，不要求 Metal/Vulkan bit identity；WGSL 对 floating-point evaluation、重关联和有限数学有自己的允许范围。[WGSL floating-point evaluation](https://www.w3.org/TR/WGSL/#floating-point-evaluation)
-- 每个 fast-path accepted pixel 都记录 condition/error bucket；测试 capture 能反查为什么接受。fallback 是 machine-readable outcome，不是静默修图；
-- event localization 只在 bracket 内；同一步多 event 保留现有 priority/tie policy；reject 不产生任何已提交副作用。
-
-建议 fixture 场景矩阵：Minkowski/Schwarzschild；默认 `a=0.8,r_obs=30M,FOV=45°`；`a=±0.99`；near-axis；Kerr–Newman charge sweep；sub/extreme/superextreme；critical impact parameter 两侧；720p/1080p/1440p 与 odd extents。性能只跑 representative 子集，物理 gate 跑小而高价值的 deterministic samples。
-
-## 9. 性能测量合同
-
-每份 A/B artifact 固定 target、OS、adapter、driver、power mode、release profile、scene fingerprint、extent、shader/feature variant、warm-up 与样本数，并至少记录：
-
-- invalidation → complete publish 的 CPU wall latency；
-- trace、fast path、queue/compact、fallback、appearance、publication 各 pass GPU p50/p95；
-- ms/megapixel、rays/s、accepted/rejected steps、RHS 与 geometry evaluations/ray；
-- step `p50/p90/p95/p99/max` 与 active ratio by step/chunk；
-- fallback ratio 及其按 root/event/condition 原因分解；
-- termination distribution 与所有 correctness error quantiles/max；
-- steady bytes/pixel、fallback/state queue worst case、resize/rebuild peak；
-- 只有具名 vendor profiler/offline compiler 才能报告 register、occupancy 或 memory traffic；源码推测不能作为完成证据。
-
-旧 GPU ray tracer 的绝对数字不能外推：GRay 与 Odyssey 都展示了 GPU 上大规模单精度 geodesic/RK 可达很高吞吐，但它们使用旧 NVIDIA CUDA 硬件、不同坐标/状态/精度和每 photon-step 指标。[GRay](https://arxiv.org/abs/1303.5057) [Odyssey](https://arxiv.org/abs/1601.02063) 本项目只把它们当架构可行性证据，所有决策以锁定 wgpu 30 的 Metal/Vulkan total-frame A/B 为准。
-
-## 10. 最终建议
-
-短期不要再花主要精力微调 batch。production 中未消费的 48 B/pixel capture planes 已移除，8×8 布局、KS 代数约化与 selective shadow coverage 保留；global packed transfer 和 interval capture 因完整 observable gate 缺口撤出。下一步先补 aggregate step telemetry，并在 Vulkan 目标机复测当前 full-KS shader；不要因为本地 Metal 数字良好就加入 backend-specific 产品分支。
-
-outgoing-KS/BL physical-spin seam Gate A/B 已通过；restricted numerical-Mino Gate C/D 已否决。生产当前以完整 KS 收束，下一项数学主线是 root-aware elliptic/Carlson terminal solver，而不是重做 fixed-factor scan。只有 step histogram 证明剩余长尾明显时才付出 wavefront state 的显存/带宽成本。ray differentials/branch-aware footprint 独立解决更一般的 source aliasing；当前 shadow coverage 只解决 Horizon/Escape 轮廓，不能代替 geodesic correctness。
-
-这条路线把“前沿算法”约束为可失败、可回退、可测量的 accelerator，而不是另起一套无法与现有物理合同对齐的快图模式。
+当前 production 以完整 Cartesian Kerr–Schild 收束，并保留 8×8 layout、exact algebraic reduction
+与 selective shadow coverage。Map、interval 和 numerical-Mino variants 已撤出；elliptic、wavefront、
+subgroup 与 reconstruction 只有满足各自重开条件后才能形成新 candidate。它们必须是可失败、可回退、
+可测量的 accelerator，不能另建无法与现有物理合同对齐的快图模式。

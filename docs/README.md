@@ -25,7 +25,7 @@
 | 修改 native HDR/display      | [平台合同](platform.md) → [架构合同](architecture.md)                            | [native display](../crates/gravlume-native-display/)、[capabilities](../crates/gravlume-render/src/capabilities.rs)、[display](../crates/gravlume-render/src/display.rs)与 [HDR 决策](research/native-hdr-output.md)           |
 | 研究新算法                   | [渲染设计](rendering.md) → [研究索引](research/README.md) → 对应记录             | 独立 oracle、[可复算脚本](research/scripts/)、受影响的 production baseline 与完整 observable gate                                                                                                                       |
 | 修改 Rust 依赖/feature/工具链 | workspace manifests、[`Cargo.lock`](../Cargo.lock)、[平台合同](platform.md)       | `cargo tree -e features` 与三个目标平台的 feature closure                                                                                                                                                                |
-| 修改 Python 研究环境         | [`pyproject.toml`](research/scripts/pyproject.toml) → [Python 工具链](research/python-research-tooling.md) | [`uv.lock`](research/scripts/uv.lock)、六个 scientific witnesses、pytest 与 Ruff                                                                                                                                         |
+| 修改 Python 研究环境         | [`pyproject.toml`](research/scripts/pyproject.toml) → [Python 工具链](research/python-research-tooling.md) | [`uv.lock`](research/scripts/uv.lock)、八个 scientific checks、pytest 与 Ruff                                                                                                                                             |
 
 贡献前始终先读 [AGENTS.md](../AGENTS.md)；它定义仓库工作流、边界和必跑检查。
 

@@ -62,8 +62,8 @@ validated Observation
 Escape-direction map 与 interval capture 在合同复核中一并撤出 production：前者重建时把 travel time
 写成零，后者直接 capture 时不计算 time integral；原测试只比较 terminal/direction，不能证明
 [验证合同](validation.md#53-gpu-renderer-agreement)要求的 `1e-3 M` travel-time gate。Numerical fixed-step
-Mino candidate 也已因 accepted ray 的 travel-time 反例删除。实验与否决证据只在
-[加速研究账本](research/gpu-geodesic-acceleration.md)和 [Mino 决策记录](research/mino-step-selection.md)维护。
+Mino candidate 也已因 accepted ray 的 travel-time 反例删除。实验、否决根因与重开条件统一在
+[加速研究账本](research/gpu-geodesic-acceleration.md)维护。
 
 ### Thin surface transport 与 scientific capture
 
@@ -101,7 +101,7 @@ Mino candidate 也已因 accepted ray 的 travel-time 反例删除。实验与�
   terminal 合法的 source/scene/branch/channel 组合；`NumericalFailure`/`Uncertain` 没有 branch，step
   exhaustion 只有 branch prefix。三种 plan 的 GPU tests 与 production lifecycle tests 覆盖 ABI、非法
   branch protocol、单次消费、cancel-drain、generation mismatch 和两类像素证据分离。精确 protocol、
-  资源和 `8×8 + lane 0` Metal 反例见[采用决策](research/on-demand-sample-inspection.md)与[历史基线](research/bounded-sample-inspection.md)。
+  资源和 `8×8 + lane 0` Metal 反例见[单样本检查决策](research/sample-inspection.md)。
 - `gravlume-desktop` 是首个 consumer：physical client、active extent 与 publication extent 完全一致时，
   画面点击显示同代 texel、typed retrace 与 diagnostics；新 publication、resize 或 suspend 使旧结果
   失效，旧 completion 不能覆盖 `ViewportChanging`。
@@ -147,14 +147,14 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
   Kerr–Newman matrix 目前只准入 terminal/branch exactness。负自旋 `(62,7)` 虽已有独立 120/180 位
   source/phase/transfer 研究证书，但尚未被 Reference regular/strict 与 fresh GPU structured comparison
   消费。其他非 canonical source/time phase 尚未满足同一预算，详见
-  [负自旋研究记录](research/negative-spin-continuous-witness.md)与
-  [reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#57-surface-full-ks-的-binary32-phase-边界)。
+  [Kerr observable corpus](research/kerr-observable-corpus.md)与
+  [reconstruction 研究记录](research/source-reconstruction.md#surface-binary32-phase-边界)。
 - Near-critical/high-winding 的独立 BL/Mino pair 已有 research-only 证书，但 GPU/reference
   structured ladder 尚未闭合；near-axis/near-extreme 已有 research-only conservative fallback
   condition report，但仍缺 production classifier routing 与对应 GPU/reference evidence，见
-  [fallback 证书](research/near-axis-extreme-fallback.md)。
+  [Kerr observable corpus](research/kerr-observable-corpus.md)。
 - Exact I--IV root topology 与 positive-real Carlson 另有
-  [research-only high-precision oracle](research/carlson-kerr-oracle.md)，但 production shader 没有
+  [research-only high-precision oracle](research/kerr-elliptic-oracle.md)，但 production shader 没有
   root classifier、Carlson functions 或 elliptic terminal method；该证书不能外推 WGSL binary32、
   Metal/Vulkan branch/layout、完整 observable agreement 或性能。
 - RK4 v2 只对具名 source-edge band 条件重追；当前没有 near-critical、axis、near-extreme 或一般
@@ -167,7 +167,7 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
   BL/Mino terminal/branch/continuous witness，并通过 CPU regular/strict 与同一 ordered fresh binary32
   comparison；其中与 canonical v2 重合的 `(640,16)` 继续闭合到最终 `RGBA16F`。整个 stencil 仍没有
   统一的最终 texture gate，其余 strata 同样未闭合。精确边界见
-  [连续字段 corpus 记录](research/continuous-field-corpus.md)，因此路线图的质量基线仍开放。
+  [Kerr observable corpus](research/kerr-observable-corpus.md)，因此路线图的质量基线仍开放。
 - Shadow coverage 只处理 capture/escape silhouette，不处理 Escape/escape caustic、source winding 或通用 texture footprint。
 - Windows 与 Wayland 尚无具名目标设备的 runtime HDR/lifecycle 发布矩阵。
 - 项目没有 60 FPS 声明，也没有把逻辑资源账本称为 driver 显存峰值。

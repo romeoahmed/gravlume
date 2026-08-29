@@ -9,8 +9,8 @@
 研究代码以 Python 3.14 为最低版本，采用普通 `src` package 和单一 `gravlume-research` CLI。模块边界按证明对象划分；CLI 只负责选择检查，不把内部函数扩展成通用 scientific API。
 
 各证明模块自行选择 semantic scalar、vector lane、离散 topology 与 residual；共享私有模块
-`gravlume_research._precision` 只实现 [`HP-precision`](roadmap-pure-research-audit.md#统一研究门槛与当前基线)
-的 precision-doubling 归一化、finite 检查与 digit-budget gate。它不拥有物理方程，也不允许一个
+`gravlume_research._precision` 只实现[通用证书门槛](kerr-observable-corpus.md#通用证书门槛)中的
+precision-doubling 归一化、finite 检查与 digit-budget gate。它不拥有物理方程，也不允许一个
 proof object 的证据替代另一个 proof object。
 
 每个 `checks` module/package 只把 `run()` 留给 CLI；测试若必须 mutation 某个证明对象，应从所属的
@@ -74,7 +74,8 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research <check>
 ```
 
-完整 Python gate 必须逐项执行八个 scientific witness；pytest 只验证可独立表述的行为与性质，不能替代这些端到端复算：
+完整 Python gate 必须逐项执行八个 scientific checks；pytest 只验证可独立表述的行为与性质，
+不能替代这些端到端复算：
 
 ```bash
 uv lock --project docs/research/scripts --check

@@ -1,49 +1,51 @@
-# 研究决策记录
+# 研究记录索引
 
-本目录保存可复算的假设、方法、证据和取舍，不定义 production interface。已采用的事实必须回写对应规范/证据文档；已拒绝的候选保留最小反例和恢复条件，避免重复试错。
+本目录保存可复算的研究证据与决策，不定义 production 行为。当前实现与合同分别以
+[Reference 证据](../reference-implementation.md)、[GPU 证据](../gpu-renderer.md)和
+[文档地图](../README.md)列出的规范为准；未完成工作只由[路线图](../roadmap.md)排序。
 
-## 决策索引
+## 已采用的工程决策
 
-| 记录                                                                      | 状态                        | Production 影响                                                                               |
-| ------------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------- |
-| [完整帧原子发布](atomic-frame-publication.md)                             | 已采用                      | 隐藏 candidate、完整 generation 发布；可见 tile/低分辨率阶段已拒绝                            |
-| [GPU geodesic 加速](gpu-geodesic-acceleration.md)                         | 历史/混合账本               | escape map、interval capture 已撤出；KS 约化已采用；其他候选逐项记录                            |
-| [Kerr–Schild RK4 约化](kerr-schild-rk4-reduction.md)                      | 已采用，step policy 仍研究  | reduced Hamiltonian、Carter、Hermite event 已采用；KN interval certificate 已撤出             |
-| [Kerr–Schild ↔ Mino seam](kerr-schild-mino-map.md)                        | 数学 seam 已采用            | physical-spin/chart 修复已进入 domain/WGSL                                                    |
-| [数值 Mino step 选择](mino-step-selection.md)                             | 已拒绝                      | fixed-step candidate 因高分辨率 travel-time 反例删除                                          |
-| [辐射传输与 source 重建](radiative-transfer-and-source-reconstruction.md) | 混合决策                    | scalar slab、spectral fixture 与 footprint 已采用；production reconstruction/Carlson solver 待证 |
-| [有界单样本 GPU 路径审计](bounded-sample-inspection.md)                   | 历史基线                    | 固定 record、exact branch 与 `8×8 + lane 0` Metal witness 被后续 production 采用              |
-| [Production 按需单样本检查](on-demand-sample-inspection.md)               | 已采用，质量域仍开放        | 单槽 ticket/completion、cancel-drain、published texel/retrace 分离与 desktop consumer 已采用  |
-| [连续字段 corpus 首切片](continuous-field-corpus.md)                      | 九点 semantic seed 已闭合   | ordered batch 与九点独立 witness 已采用；texture/artifact 与其余 strata 仍开放                 |
-| [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | 九点 corpus 已采用          | `(640,12..20)` 独立约束 branch、margin、Escape/source/transfer/phase                           |
-| [Critical surface/capture 证书](critical-curve-surface-capture.md)         | P1/P2 研究层已闭合          | 相邻 critical 两侧、event order、higher-order/winding 已有独立证书；Rust/GPU 支持仍开放        |
-| [负自旋连续字段证书](negative-spin-continuous-witness.md)                 | P0 研究层已闭合             | signed spin/chart/emitter branch 与 source/phase/transfer 已独立复算；Rust/GPU agreement 仍开放 |
-| [近轴/近极值 fallback 证书](near-axis-extreme-fallback.md)               | P3 研究层已闭合             | exact/strict-binary32 condition report 保守拒绝病态输入；production routing 仍开放             |
-| [Kerr topology 与 Carlson oracle](carlson-kerr-oracle.md)                | KA-1/2 纯研究层已闭合       | exact root isolation、positive-real Carlson 与 Ib reduction 已认证；terminal/GPU solver 仍开放  |
-| [路线图纯研究任务审计](roadmap-pure-research-audit.md)                    | 当前审计                    | 区分可离线闭合的证书/classifier 与必须依赖 production、GPU、平台或 consumer 的工程事项         |
-| [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
-| [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |
-| [Python 研究工具链](python-research-tooling.md)                           | 当前方法                    | Python 3.14、uv lock、统一 CLI、pytest/Hypothesis 与 Ruff                                      |
+- [完整帧原子发布](atomic-frame-publication.md)：隐藏 candidate、完整 generation 发布，拒绝可见
+  tile 或低分辨率阶段。
+- [Production 单样本检查](sample-inspection.md)：固定单槽、ticket/completion、cancel-drain、
+  published texel 与 fresh retrace 分离，并保留 Metal protocol 反例。
+- [原生 HDR 输出](native-hdr-output.md)：native display state、extended-linear HDR 与 typed SDR
+  fallback。
+- [GPU benchmark 方法](gpu-benchmark-methodology.md)：只测 correctness-approved production
+  workload，不把临时 variant 变成永久接口。
 
-## 可复算脚本
+## 数学与数值证据
 
-[`scripts/`](scripts/) 使用[统一 Python 研究工具链](python-research-tooling.md)复核符号恒等式、binary32 interval、chart seam 与数值模型。脚本只生成研究证据，不进入 Cargo runtime dependency closure；脚本通过只证明它声明的命题，不自动授权 production 支持域。
+- [Kerr observable corpus](kerr-observable-corpus.md)：source-edge、critical、negative-spin 与
+  ill-conditioned fallback 的分层高精度证书，以及 Rust/WGSL 消费边界。
+- [Kerr–Schild RK4 约化](kerr-schild-rk4-reduction.md)：reduced Hamiltonian、Carter invariant 与
+  Hermite event localization；step policy 仍是开放研究。
+- [Kerr–Schild ↔ BL/Mino seam](kerr-schild-mino-map.md)：physical-spin、chart、covector 与 tangent
+  的 exact mapping。
+- [Kerr root topology 与 elliptic oracle](kerr-elliptic-oracle.md)：exact root isolation、
+  positive-real Carlson forms 与 Class Ib reduction；不授权 production solver。
+- [Scalar radiative transfer](radiative-transfer.md)：invariant transfer、analytic slab、spectral
+  fixture 与 equatorial emitter 的声明边界。
 
-## 记录格式
+## 候选与否决账本
 
-每份记录至少包含：
+- [GPU geodesic 加速](gpu-geodesic-acceleration.md)：Mino、map、interval、workgroup 与 wavefront
+  候选的正反证据；当前 production 仍使用 Cartesian Kerr–Schild。
+- [Source-space reconstruction](source-reconstruction.md)：已拒绝的 2-pixel candidate、最小
+  semantic key、准入 gate 与重开条件。
 
-1. **状态：** 已采用、仍实验、已拒绝或混合账本；
-2. **问题：** 要验证的可否证假设和定义域；
-3. **方法：** 符号/数值/性能输入、precision、observable 与工具版本；
-4. **结果：** 正反证据，不只给最优数字；
-5. **决策：** 对 production 的影响；
-6. **恢复条件：** 被拒绝方案需要什么新证据才可重开。
+## 研究工具链
+
+[统一 Python 研究工具链](python-research-tooling.md)定义 Python 3.14、锁定 `uv` 环境、单一 CLI、
+八个 end-to-end scientific checks、pytest/Hypothesis 与 Ruff。实现位于 [`scripts/`](scripts/)，
+不进入 Cargo runtime dependency closure；一项检查通过只证明它自己的命题。
 
 ## 维护规则
 
-- 新证据改变决策时更新原记录，不另写互相矛盾的“最终版”；
-- 性能结果绑定 revision、平台、adapter、backend、scene、extent、profile、样本设计和 correctness gate；
-- 临时绝对路径、源文件行号、已删除 variant 和 benchmark-only interface 不得成为持久结论；
-- 原始实验可保留，但摘要必须明确区分历史 baseline 与当前 production；
-- 研究记录可以较长，规范文档只保留采用后的稳定语义和链接。
+- 新证据改变决策时更新所属记录；不保留重复的路线图审计或“最终版”快照。
+- 已拒绝候选只保留最小反例、根因和可证伪的重开条件。
+- 性能数字必须绑定 revision、平台、adapter、backend、scene、extent、profile、样本设计和
+  correctness gate。
+- 历史 baseline 与当前 production 必须分开；临时路径、行号和已删除 API 不得成为合同。
+- 同一公式、阈值或状态只在一个权威位置定义，其他记录使用相对链接。

@@ -81,7 +81,7 @@ struct IndependentSurfaceWitness {
 }
 
 // Generated at 120/180 decimal digits by the independent separated-chart
-// witness documented in docs/research/high-precision-bl-mino-witness.md.
+// witness documented in docs/research/kerr-observable-corpus.md.
 const CANONICAL_SURFACE_WITNESS: IndependentSurfaceWitness = IndependentSurfaceWitness {
     source_radius_m: 19.650_678_984_603_292,
     source_azimuth_rad: 3.087_156_262_423_669_3,

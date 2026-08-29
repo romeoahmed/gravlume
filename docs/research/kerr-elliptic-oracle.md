@@ -1,20 +1,20 @@
-# Kerr radial root topology 与 Carlson 高精度 oracle
+# Kerr root topology 与 elliptic oracle
 
-本文审计 KA-1/2 所需的最小研究合同：如何为 pure Kerr null radial quartic 建立可复算的
+本文定义 pure Kerr null radial quartic 的最小研究合同：如何建立可复算的
 root-topology 证书，以及如何用 `RF`、`RC`、`RD`、`RJ` 建立不依赖生产求解器的高精度
 special-function oracle。本文是研究决策记录，不定义 production 支持域、Rust/WGSL API、
 fixture schema 或质量阈值；这些权威合同仍分别以[数学物理](../physics.md)、
 [验证](../validation.md)、[渲染准入](../rendering.md)和[路线图](../roadmap.md)为准。
 
-**状态：KA-1/2 的纯研究层已闭合。** 锁定环境中的 private oracle 以 exact rational root
+**状态：受限 pure-Kerr 研究层已闭合。** 锁定环境中的 private oracle 以 exact rational root
 isolation、Carlson defining integrals、minimal identities 与 120/180 位复算关闭 pure-Kerr
 nonextremal、分离裕量明确的研究切片；不能据此宣称 WGSL `f32`、真实 GPU、近极端、
-principal-value/complex Carlson 或完整 terminal solver 已闭合。正式实现与测试见
+principal-value/complex Carlson 或完整 terminal solver 已闭合。研究实现与测试见
 [`_topology.py`](scripts/src/gravlume_research/checks/kerr_elliptic/_topology.py)、
 [`_carlson.py`](scripts/src/gravlume_research/checks/kerr_elliptic/_carlson.py)和
 [`test_kerr_elliptic.py`](scripts/tests/test_kerr_elliptic.py)。
 
-## 1. 起始缺口与实现边界
+## 1. 职责与实现边界
 
 当前 production shader 仍是 Cartesian Kerr–Schild RK4；它没有 quartic root classifier 或
 Carlson special functions，见
@@ -22,17 +22,17 @@ Carlson special functions，见
 [GPU 加速研究](gpu-geodesic-acceleration.md)已把 root-aware elliptic/Carlson terminal solver
 列为 fixed-step Mino 失败后的下一候选，但没有把候选写成 production 事实。
 
-本轮开始前，[`bl_mino`](scripts/src/gravlume_research/checks/bl_mino/) proof package 已能为命名
+[`bl_mino`](scripts/src/gravlume_research/checks/bl_mino/) proof package 已能为命名
 surface/capture pair 以 `mp.polyroots`、exterior stationary minimum 和独立 quadrature 证明
 separatrix 两侧的 terminal、event order 与 continuous observables；120/180 位证书记录在
-[critical-curve 研究](critical-curve-surface-capture.md)。它的“虚部小于
+[Kerr observable corpus](kerr-observable-corpus.md)。它的“虚部小于
 `10^(-(dps-30))` 即视为 real”和“只数 observer 与 outer horizon 之间的 real roots”是该具名
 witness 的内部判据，不是 Gralla–Lupsasca 全局 topology classifier。把它直接复用为 accelerator
 admission seam 会漏掉 complex-root class、root/horizon coincidence、initial radial branch 与
 turning sequence。尤其现有 capture witness 的“零个 exterior root”只能证明它位于
 outer critical curve 的 capture 一侧，尚不足以在 II、III、IV 中命名一个 global class。
 
-因此本轮补齐的最小缺口不是另一组漂亮数值，而是两份相互独立的证据：
+该 oracle 需要两份相互独立的证据：
 
 1. `R(r)` 的 topology/branch 证书必须在有裕量的 generic case 给出稳定分类，并把所有
    degeneracy 明确送入 fallback；
@@ -74,7 +74,7 @@ taxonomy 假定 `zeta>0`、`E != 0`，extremal limit 也不在论文证明域内
 | class | root order | exterior allowed range | oracle 决策 |
 | --- | --- | --- | --- |
 | I | `r1<r2<r-<r+<r3<r4` | Ia: `r+<r<r3`; Ib: `r4<r<infinity` | 先只接纳分离的 Ib；Ia 分类但 fallback |
-| II | `r1<r2<r3<r4<r-<r+` | `r+<r<infinity`，fly-in/out | 分类但首版 terminal reduction fallback |
+| II | `r1<r2<r3<r4<r-<r+` | `r+<r<infinity`，fly-in/out | 分类，但 terminal reduction fallback |
 | III | `r1<r2<r-<r+`，`r3=conj(r4)` | `r+<r<infinity`，fly-in/out | 分类但 complex-pair reduction fallback |
 | IV | 两对 complex-conjugate roots | exterior 全域 | 分类但 complex-pair reduction fallback |
 
@@ -132,7 +132,7 @@ fast-path sample（double-root 角色见
 
 ## 3. Carlson oracle 的最小数学核
 
-### 3.1 首版定义域
+### 3.1 Accepted 定义域
 
 Carlson 的定义为
 
@@ -149,10 +149,10 @@ R_J(x,y,z,p)=\frac32\int_0^\infty
 
 定义、cut-plane branch 和 zero restrictions 见
 [Carlson 1995 Eq. 1--4](https://arxiv.org/pdf/math/9409227)与
-[DLMF §19.16](https://dlmf.nist.gov/19.16)。为了让首版 oracle 的“独立积分”与 branch 判据都
+[DLMF §19.16](https://dlmf.nist.gov/19.16)。为了让 oracle 的“独立积分”与 branch 判据都
 清楚，支持域应严格缩为：
 
-| function | 首版 accepted arguments |
+| function | accepted arguments |
 | --- | --- |
 | `RF` | `x,y,z>=0`，至多一个为零 |
 | `RC` | `x>=0, y>0` |
@@ -160,7 +160,7 @@ R_J(x,y,z,p)=\frac32\int_0^\infty
 | `RJ` | `x,y,z>=0`，至多一个为零，`p>0` |
 
 `p<0` 或 `RC` 的第二参数为负需要 Cauchy principal value；complex arguments 又需要一致的
-square-root branch。它们虽在数学定义域内，却不是首版 accepted 域
+square-root branch。它们虽在数学定义域内，却不属于当前 accepted 域
 （[Carlson 1995 Eq. 2--4](https://arxiv.org/pdf/math/9409227)）。`p=0` 不是 `RJ` 定义域，且
 正 `x,y,z` 下 `p->0+` 时发散，见
 [DLMF 19.20.7](https://dlmf.nist.gov/19.20.E7)。
@@ -212,14 +212,14 @@ library self-agreement 冒充 oracle independence。
 
 ### 3.3 Conditioning 与 typed fallback
 
-| condition | 数值风险 | 首版处理与证据 |
+| condition | 数值风险 | 处理与证据 |
 | --- | --- | --- |
 | 参数整体过大/过小 | 中间乘积 overflow/underflow | 先用 homogeneity 归一化，scale ladder 复核 |
 | equal/near-equal arguments | deviation polynomial wiring、过早停止 | diagonal exact case + separation ladder + duplication residual |
 | 一个允许的 zero | complete-integral endpoint | transformed defining integral + Carlson/DLMF zero anchors |
-| `p->0+` | `RJ` 发散、dynamic range 增长 | 有限 positive ladder；达到预注册 condition limit 后 typed fallback |
-| `p<0` | principal-value transform 与 cancellation | 首版拒绝；Carlson 展示 transform 在 `RJ` 过零附近丢失 significant figures（[Sec. 5](https://arxiv.org/pdf/math/9409227)） |
-| complex argument/branch | square-root branch 选择会改变结果 | 首版拒绝；DLMF 要求由 reduction 产生的首步 square roots 保持原 branch，不能一律取 principal root（[§19.36(i)](https://dlmf.nist.gov/19.36.i)） |
+| `p->0+` | `RJ` 发散、dynamic range 增长 | 有限 positive ladder；达到 declared condition limit 后 typed fallback |
+| `p<0` | principal-value transform 与 cancellation | 拒绝；Carlson 展示 transform 在 `RJ` 过零附近丢失 significant figures（[Sec. 5](https://arxiv.org/pdf/math/9409227)） |
+| complex argument/branch | square-root branch 选择会改变结果 | 拒绝；DLMF 要求由 reduction 产生的首步 square roots 保持原 branch，不能一律取 principal root（[§19.36(i)](https://dlmf.nist.gov/19.36.i)） |
 | iteration cap/non-finite correction | 无可证误差或 domain 逸出 | 返回 typed unsupported/ill-conditioned，不返回“最佳猜测” |
 | 多个准确 Carlson 值作相消线性组合 | 单函数 relative error 不界定 terminal observable | guard digits 下直接复算组合并保存 cancellation ratio；必要时退回 quadrature |
 | Kerr roots 合并或接近 horizon/pole | topology 跳变；BL `t,phi` 项可能分别发散 | root classifier fallback；沿用项目已证明的 KS/BL finite combination，不把 Carlson 当正则化证明 |
@@ -231,23 +231,14 @@ precision，因此 roundoff 相对 approximation error 可忽略
 algorithm，因此只保存 definition/identity residual 和 precision-doubling delta；未来 duplication
 候选还必须另外保存 truncation estimate，且不能把它直接标成 total error bound。
 
-## 4. RED tests 与闭合证据
+## 4. Mutation 与闭合证据
 
-实现先记录 module-missing RED，再以 deterministic mutations 锁定行为；测试名字描述语义，不冻结
-helper、quadrature 分段或 iteration count。核心 mutations 包括：
-
-- `test_radial_topology_rejects_near_double_root_without_margin`
-- `test_radial_topology_uses_initial_sign_to_select_ib_turn_sequence`
-- `test_carlson_oracle_rejects_wrong_homogeneity_degree`
-- `test_carlson_oracle_detects_missing_rd_additive_term`
-- `test_carlson_oracle_detects_missing_rj_rc_correction`
-- `test_carlson_oracle_does_not_treat_rd_as_fully_symmetric`
-- `test_carlson_oracle_rejects_negative_p_without_principal_value_policy`
-- `test_carlson_combination_reports_catastrophic_cancellation`
-- `test_radial_topology_retains_sign_changing_root_brackets`
-- `test_radial_topology_counts_nonreal_roots_without_imaginary_tolerance`
-- `test_radial_topology_rejects_preclassification_domain_boundaries`
-- `test_carlson_oracle_rejects_complex_and_ill_conditioned_arguments`
+Deterministic mutations 必须区分以下错误：near-double root 无裕量却被接纳、initial radial sign
+选错 turn sequence、homogeneity degree 错误、`RD` additive term 缺失、`RJ/RC` correction 缺失、
+把 `RD` 当作 full-permutation symmetric、未定义 principal-value policy 却接纳 negative `p`、
+catastrophic cancellation、丢失 sign-changing bracket、用 imaginary tolerance 计数 nonreal roots，
+以及在 classifier 前接纳 domain boundary。测试只冻结这些 observable behaviors，不冻结 helper、
+quadrature 分段、iteration count 或测试名。
 
 当前 corpus 包含：
 
@@ -258,11 +249,11 @@ helper、quadrature 分段或 iteration count。核心 mutations 包括：
 - II、III、IV、`E=0`、Schwarzschild `a=0`、principal null congruence、near-extremal、
   negative-spin canonicalization 与 principal-value/complex arguments 的 typed-rejection cases。
 
-KA-1/2 的纯研究层按以下预注册条件闭合：
+受限 pure-Kerr 研究层按以下证据条件闭合：
 
 1. 所有 accepted topology cases 在 120/180 decimal digits 从 canonical inputs 重建，class、
-   root order、turn sequence 不变；每个 normalized continuous delta
-   `|a-b|/max(1,|a|,|b|) < 1e-80`，沿用当前 scientific-witness 门槛；
+   root order、turn sequence 不变；normalized continuous deltas 统一满足
+   [通用证书门槛](kerr-observable-corpus.md#通用证书门槛)；
 2. 每个 accepted real root 有独立 sign bracket，所有 topology/domain margin 都大于相应
    precision delta，Vieta、potential、derivative 与 identity residual 都通过同一位数预算；
 3. 每个 Carlson case 同时通过 transformed definition integral、适用 exact identities、
@@ -280,7 +271,7 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research kerr-elliptic
 ```
 
-Python `3.14.7` 下的最终结果为：
+锁定研究环境的结果为：
 
 | 证书量 | 结果 |
 | --- | ---: |
@@ -294,10 +285,10 @@ Python `3.14.7` 下的最终结果为：
 | Kerr Ib radial reduction residual | `1.28580213625e-182` |
 
 Class I 的 separated Ib inward/outward 与 negative-spin canonical equivalent 只标记为
-`eligible-for-further-analysis`。Ia、II、III、IV、exact/near double 仍分别带 typed fallback reason；
-聚焦测试 `18 passed`。这些数字是该锁定研究环境的复算证据，不是 runtime tolerance。
+`eligible-for-further-analysis`。Ia、II、III、IV、exact/near double 仍分别带 typed fallback reason。
+这些数字是该锁定研究环境的复算证据，不是 runtime tolerance。
 
-这只证明“高精度 oracle 足以发现预注册错误”，不证明 Carlson reduction 已覆盖全部 Kerr
+这只证明“高精度 oracle 足以发现目标错误”，不证明 Carlson reduction 已覆盖全部 Kerr
 terminal integrals，也不证明生产 fast path 比现有 KS baseline 更快或更准。
 
 ## 5. 不能外推到 WGSL `f32` 的边界
@@ -333,7 +324,7 @@ GPU execution tests 都不能由 Python oracle 替代
 采用：
 
 - Gralla–Lupsasca I--IV 作为 pure-Kerr null generic topology vocabulary；
-- 首版 accepted slice 只含有分离裕量的 Ib exterior segment，其余 class 仍被正确分类并 fallback；
+- accepted slice 只含有分离裕量的 Ib exterior segment，其余 class 仍被正确分类并 fallback；
 - 正实参数 `RF/RC/RD/RJ`，以 transformed defining integral、minimal exact identities 与
   precision doubling 构成 high-precision oracle；
 - critical pair、complex/PV、principal congruence、horizon coincidence 与 near-extremal 作为
@@ -345,7 +336,7 @@ GPU execution tests 都不能由 Python oracle 替代
 - 把 `mp.polyroots` 的 imaginary tolerance 或 quartic discriminant 单独当 topology proof；
 - 只凭 exterior-root count 合并 II/III/IV，或忽略 initial sign/turn count；
 - 只比较 `mpmath` special functions 与自身 Legendre conversion；
-- 首版支持 negative-`p` principal value 或 complex Carlson branches；
+- 支持 negative-`p` principal value 或 complex Carlson branches；
 - 把 Carlson truncation bound、高精度证书或 CPU/GPU agreement 外推为 WGSL binary32
   correctness、统一 `RGBA16F` 质量、跨平台稳定性或性能结论。
 

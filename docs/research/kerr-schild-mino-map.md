@@ -2,7 +2,11 @@
 
 本文记录 KS/BL/Mino 局部变换的符号与数值证据，不定义 production integrator；normative chart convention 以[数学物理合同](../physics.md)为准，当前采用状态以源码和实现证据为准。
 
-**状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的 trajectory/f32 Gate C/D 随后被高分辨率反例否决。本文只封闭 Kerr–Newman chart convention、pure-Kerr Mino state 的局部零步 seam，以及 outgoing monotonic-capture radial primitive 的 exact regular combination；trajectory 与 step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式误写成整个积分器的证明。
+**状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，符号与局部
+映射 gate 通过；数值 reciprocal-Mino trajectory 随后被高分辨率反例否决。本文只封闭 Kerr–Newman
+chart convention、pure-Kerr Mino state 的局部零步 seam，以及 outgoing monotonic-capture radial
+primitive 的 exact regular combination；trajectory 与 step-factor 证据统一记录在
+[GPU 加速账本](gpu-geodesic-acceleration.md#21-数值-mino-实验为何失败以及为何转向解析路线)，避免把坐标恒等式误写成整个积分器的证明。
 
 可复现的 SymPy 证明实现为
 [`kerr_schild_map.py`](scripts/src/gravlume_research/checks/kerr_schild_map.py)。它是 docs 下的研究工具，
@@ -296,11 +300,12 @@ R=P^2-\Delta A,\qquad 2Mr=r^2+a^2-\Delta,
 \(A=(P^2-\rho_R^2)/\Delta\) 代回两边并用 exact `cancel` 证明恒等。该式只在
 `R>0`、`P+sqrt(R)>0` 的已分类 monotonic capture segment 使用；它证明 combined
 primitive 在 horizon 有限，不授权跨任意 root topology 的通用 BL solver。具名数值应用见
-[critical surface/capture 证书](critical-curve-surface-capture.md)。
+[Kerr observable corpus](kerr-observable-corpus.md)。
 
 ## 4. Pure Kerr Mino 零步状态
 
-Mino fast-path 的首版产品域仍限定 pure Kerr。使用
+本节只验证 pure Kerr separated state 的零步映射；它不授权已拒绝的 numerical-Mino fast path。
+使用
 
 - \(\sigma\)：仓库 affine parameter，\(dx^\mu/d\sigma=p^\mu\)；
 - \(\gamma\)：\(d\sigma/d\gamma=\Sigma\)；
@@ -318,7 +323,7 @@ P=r^2+a^2-a b,\qquad A=(b-a)^2+\eta,
 R=P^2-\Delta A,
 \qquad
 U=\eta+(a^2-\eta-b^2)\mu^2-a^2\mu^4.
-\tag{20}
+\tag{21}
 \]
 
 两个 chart 都使用同一个 physical \(a\)，而不是 \(s a\)。零步必须满足
@@ -329,7 +334,7 @@ v_r=\frac{dr}{d\tau}=\frac{\Sigma}{E}\dot r,
 \qquad
 v_\mu=\frac{d\mu}{d\tau}=\frac{\Sigma}{E}\dot\mu,
 \quad v_\mu^2=U.
-\tag{21}
+\tag{22}
 \]
 
 sign 来自实际 Hamilton tangent，不从 position、\(p_r^{KS}\) 或 backward traversal
@@ -338,7 +343,7 @@ sign 来自实际 Hamilton tangent，不从 position、\(p_r^{KS}\) 或 backward
 \[
 p_r^B=\frac{E v_r}{\Delta},\qquad
 p_\theta=-\frac{E v_\mu}{\sqrt{1-\mu^2}}.
-\tag{22}
+\tag{23}
 \]
 
 turning point 的 sign 是显式 branch state，不能用 `signum(0)` 永久锁死。
@@ -365,28 +370,11 @@ uv run --isolated --project docs/research/scripts --locked \
   gravlume-research kerr-schild-map
 ```
 
-2026-08-28 的完整摘要输出：
-
-```text
-python=3.14.7
-sympy=1.14.0
-symbolic.metric_pullback=PASS branches=ingoing,outgoing
-symbolic.cartesian_oblate_map=PASS
-symbolic.tangent_covector_duality=PASS
-symbolic.affine_mino=PASS
-symbolic.outgoing_capture_regularization=PASS
-symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing
-symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch=4*M*a*r*u/(a**2*(1 - u) + r**2)
-symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591
-boundary.precision_digits=180
-boundary.near_axis=PASS u=1.5000000e-70 abs_delta=15.562500 M2_minus_a2=0.43750000 metric=6.5174535e-552 duality=0 mino=9.9448448e-557
-boundary.near_horizon=PASS u=0.50000000 abs_delta=1.9843135e-60 M2_minus_a2=0.43750000 metric=2.6182860e-492 duality=0 mino=2.4969921e-498
-boundary.near_extremality=PASS u=0.75000000 abs_delta=5.1961524e-80 M2_minus_a2=3.0000000e-60 metric=1.5455632e-471 duality=0 mino=2.3030687e-479
-RESULT=PASS
-```
-
-这些 near-boundary substitutions 只验证 denominator 仍非零时的局部代数，不授权在
-exact axis 或 \(\Delta=0\) 求值，也不给出 f32 conditioning 或 full-trajectory 保证。
+检查同时覆盖 ingoing/outgoing metric pullback、oblate map、tangent/covector duality、affine/Mino
+relation、outgoing capture regularization、physical-spin correction，以及 legacy handedness mutation。
+Near-axis、near-horizon 与 near-extremality substitutions 只验证 denominator 仍非零时的局部代数；
+它们不授权在 exact axis 或 \(\Delta=0\) 求值，也不给出 binary32 conditioning 或 full-trajectory
+保证。精确工具版本只由锁定环境定义，不在本文复制。
 
 ### 5.1 Runtime mutation contracts
 
@@ -416,32 +404,16 @@ Cartesian \(x,z\) 在 \(\phi_s=0\) 保持，\(y\) 的 twist 反号；一般 azim
 应确定性搜索相邻 Horizon/Escape pair，再与 CPU reference 分类比较。ingoing chart、
 radius、horizon radii 与 parameter-state fixtures 不应变化。
 
-## 7. 剩余门槛
+## 7. 决策边界
 
-### Gate A — 连续模型：PASS
+Physical-spin、metric/position/covector/tangent、axis continuity、正负 spin、Kerr–Newman charge
+与 CPU/GPU initial-ray seam 已覆盖。该证据只证明连续 chart convention 与零步映射；完整 trajectory
+仍由独立 observable matrix 约束。
 
-public `spin_m`、\(g_{t\phi}\)、frame dragging、BL \(a=J/M\) 与 oblate azimuth 在两
-chart 中同义；Rust、WGSL 与 normative physics contract 使用同一公式。
-
-### Gate B — 零步恒等式：convention seam PASS
-
-legacy RED、corrected metric/position/covector/tangent GREEN、axis continuity、正负 spin、
-Kerr–Newman charge 与 CPU/GPU initial-ray seam 已覆盖。这个 Gate 只证明初值变换；完整
-trajectory 由独立 observable matrix 约束。
-
-### Gate C — 受限轨迹 oracle：扩大分辨率后 FAIL
-
-80×45 matrix 曾在 pure Kerr、finite \(E>0\)、off-axis、受限 subextremal exterior 内通过，
-但扩展到 `320×180` 后，pixel `(175, 51)` 的 accepted result 相对独立 Cartesian KS
-reference 产生约 `2.661354e-3 M` travel-time error，超过 `1e-3 M` contract。reciprocal
-constraint 与 winding gate 没有给出 terminal phase 的充分误差界，因此 Gate C 为 FAIL。
-
-### Gate D — `f32`/WGSL 与性能：虽有加速仍 REJECTED
-
-Apple M5/Metal、1280×720 的历史 256-pair ABBA 中，restricted Mino 相对 interval
-capture + KS 改善 `35.768%`，95% CI `[-36.390%, -35.189%]`。性能结果仍说明 separable
-polynomial dynamics 有价值，但 correctness gate 优先；高分辨率反例使 production
-candidate 失效，相关 WGSL、pipeline 和 benchmark variant 已删除。
+Numerical-Mino candidate 已被 high-resolution terminal-phase 反例否决，性能数字、根因与重开条件
+统一见 [GPU 加速账本](gpu-geodesic-acceleration.md#21-数值-mino-实验为何失败以及为何转向解析路线)。
+本页的 exact seam 仍可被未来 analytic/elliptic candidate 复用，但不能替代其 topology、conditioning、
+binary32 或 GPU evidence。
 
 ## 8. 一手来源与适用域
 
