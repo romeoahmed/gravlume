@@ -144,8 +144,10 @@ GPU tests 需要可用 Metal 或 Vulkan adapter。CPU 与 GPU 使用不同精度
 
 - Fresh binary32 continuous-observable comparison 已覆盖 canonical exterior Kerr surface sample 及同一
   positive-spin observation 上跨 outer source edge 的固定 stencil；扩展 Schwarzschild、负自旋与
-  Kerr–Newman matrix 目前只准入 terminal/branch exactness。其他非 canonical source/time phase 尚未
-  满足同一预算，详见
+  Kerr–Newman matrix 目前只准入 terminal/branch exactness。负自旋 `(62,7)` 虽已有独立 120/180 位
+  source/phase/transfer 研究证书，但尚未被 Reference regular/strict 与 fresh GPU structured comparison
+  消费。其他非 canonical source/time phase 尚未满足同一预算，详见
+  [负自旋研究记录](research/negative-spin-continuous-witness.md)与
   [reconstruction 研究记录](research/radiative-transfer-and-source-reconstruction.md#57-surface-full-ks-的-binary32-phase-边界)。
 - Near-critical/high-winding 的独立 BL/Mino pair 已有 research-only 证书，但 GPU/reference
   structured ladder 尚未闭合；near-axis 与 near-extreme 也仍缺对应 GPU/reference evidence。
