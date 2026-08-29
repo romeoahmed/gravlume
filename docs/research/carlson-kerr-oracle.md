@@ -265,7 +265,9 @@ KA-1/2 的纯研究层按以下预注册条件闭合：
 2. 每个 accepted real root 有独立 sign bracket，所有 topology/domain margin 都大于相应
    precision delta，Vieta、potential、derivative 与 identity residual 都通过同一位数预算；
 3. 每个 Carlson case 同时通过 transformed definition integral、适用 exact identities、
-   120/180 precision doubling 与 `mpmath` secondary triangulation；
+   120/180 precision doubling 与 `mpmath` secondary triangulation；formal certificate 在构造时
+   门禁所有 PASS residual，并把 `RD(x,y,z) != RD(z,y,x)` 保留为有裕量的 negative control，
+   因而端到端命令不能依赖 pytest 才发现稳定但错误的结果；
 4. 上述 mutations 都 RED，所有 out-of-domain/ill-conditioned cases 都稳定返回 typed fallback；
 5. 输出仍是 research-private record；不新增 solver trait、render graph、public Carlson API 或
    production support claim。
@@ -286,11 +288,13 @@ Python `3.14.7` 下的最终结果为：
 | Carlson definition residual | `1.12562807914e-203` |
 | Carlson identity residual | `2.35538393693e-181` |
 | Carlson 120/180 maximum normalized delta | `1.13505268495e-149` |
+| Carlson `RD` x-y symmetry residual | `0.0` |
+| Carlson `RD` full-permutation negative-control delta | `0.748822334264` |
 | Kerr Ib radial reduction residual | `1.28580213625e-182` |
 
 Class I 的 separated Ib inward/outward 与 negative-spin canonical equivalent 只标记为
 `eligible-for-further-analysis`。Ia、II、III、IV、exact/near double 仍分别带 typed fallback reason；
-聚焦测试 `17 passed`。这些数字是该锁定研究环境的复算证据，不是 runtime tolerance。
+聚焦测试 `18 passed`。这些数字是该锁定研究环境的复算证据，不是 runtime tolerance。
 
 这只证明“高精度 oracle 足以发现预注册错误”，不证明 Carlson reduction 已覆盖全部 Kerr
 terminal integrals，也不证明生产 fast path 比现有 KS baseline 更快或更准。
