@@ -7,7 +7,6 @@ import mpmath as mp
 import pytest
 
 from gravlume_research.checks.kerr_elliptic import (
-    REQUIRED_STABLE_DIGITS,
     _build_carlson_certificate,
     _build_topology_certificate,
     _build_topology_report,
@@ -48,9 +47,9 @@ def test_radial_topology_uses_initial_sign_to_select_ib_turn_sequence() -> None:
 def test_radial_topology_classifies_i_through_iv_before_fallback() -> None:
     certificate = _build_topology_certificate()
 
-    assert certificate.maximum_normalized_delta < mp.power(
+    assert certificate.precision.maximum_normalized_delta < mp.power(
         10,
-        -REQUIRED_STABLE_DIGITS,
+        -certificate.precision.policy.required_digits,
     )
     assert certificate.false_acceptance_count == 0
     assert certificate.report("class-i-ib-inward").topology_id == "I"
@@ -203,7 +202,6 @@ def test_carlson_certificate_rejects_any_failed_pass_metric() -> None:
     invalid_metrics = {
         "maximum_definition_residual": mp.mpf("1"),
         "maximum_identity_residual": mp.mpf("1"),
-        "maximum_normalized_delta": mp.mpf("1"),
         "rd_xy_symmetry_residual": mp.mpf("1"),
         "rd_full_permutation_delta": mp.mpf("0"),
         "kerr_radial_reduction_residual": mp.mpf("1"),
@@ -212,6 +210,9 @@ def test_carlson_certificate_rejects_any_failed_pass_metric() -> None:
     for field, invalid_value in invalid_metrics.items():
         with pytest.raises(AssertionError, match="Carlson certificate"):
             replace(certificate, **{field: invalid_value})
+
+    with pytest.raises(AssertionError, match="Carlson definition corpus"):
+        replace(certificate.precision, maximum_normalized_delta=mp.mpf("1"))
 
 
 def test_carlson_oracle_rejects_negative_p_without_principal_value_policy() -> None:
@@ -255,8 +256,8 @@ def test_carlson_certificate_matches_definitions_identities_and_kerr_segment() -
 
     assert certificate.maximum_definition_residual < mp.mpf("1e-100")
     assert certificate.maximum_identity_residual < mp.mpf("1e-100")
-    assert certificate.maximum_normalized_delta < mp.power(
+    assert certificate.precision.maximum_normalized_delta < mp.power(
         10,
-        -REQUIRED_STABLE_DIGITS,
+        -certificate.precision.policy.required_digits,
     )
     assert certificate.kerr_radial_reduction_residual < mp.mpf("1e-100")

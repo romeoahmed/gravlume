@@ -37,9 +37,8 @@ from itertools import pairwise
 
 import mpmath as mp
 
-LOW_PRECISION_DIGITS = 120
-HIGH_PRECISION_DIGITS = 180
-REQUIRED_STABLE_DIGITS = 80
+from .._precision import _SCIENTIFIC_PRECISION, _PrecisionEvidence
+
 MINIMUM_WITNESS_DIGITS = 70
 RESIDUAL_GUARD_DIGITS = 15
 SURFACE_INNER_RADIUS_M = 6
@@ -454,10 +453,7 @@ class _NegativeSpinSurfaceWitness:
 class _PrecisionCertificate[Witness]:
     """Precision-doubling evidence for one named witness."""
 
-    low_precision_digits: int
-    high_precision_digits: int
-    required_stable_digits: int
-    maximum_normalized_delta: mp.mpf
+    precision: _PrecisionEvidence
     witness: Witness
 
 
@@ -3189,25 +3185,6 @@ _NEGATIVE_SPIN_PRECISION_FIELDS = (
 )
 
 
-def _certify_precision_doubling(
-    values: Iterable[tuple[mp.mpf, mp.mpf]],
-) -> mp.mpf:
-    normalized_deltas = tuple(
-        abs(low - high) / max(mp.mpf(1), abs(high)) for low, high in values
-    )
-    if not normalized_deltas or not all(
-        mp.isfinite(delta) for delta in normalized_deltas
-    ):
-        raise AssertionError("precision doubling produced an empty or non-finite delta")
-    maximum_delta = max(normalized_deltas)
-    required = mp.power(10, -REQUIRED_STABLE_DIGITS)
-    if maximum_delta >= required:
-        raise AssertionError(
-            f"precision doubling retained only {-mp.log10(maximum_delta)} digits"
-        )
-    return maximum_delta
-
-
 def _witness_precision_pairs(
     low: _SurfaceWitness | _EscapeWitness,
     high: _SurfaceWitness | _EscapeWitness,
@@ -3273,20 +3250,22 @@ def _build_source_edge_corpus_precision_certificate() -> _PrecisionCertificate[
 ]:
     """Recompute all nine cases at 120/180 digits and certify every observable."""
 
-    low = _source_edge_corpus_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = _source_edge_corpus_witness(precision_digits=HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    low = _source_edge_corpus_witness(precision_digits=_SCIENTIFIC_PRECISION.low_digits)
+    high = _source_edge_corpus_witness(
+        precision_digits=_SCIENTIFIC_PRECISION.high_digits
+    )
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         value_pairs = []
         for low_case, high_case in zip(low.cases, high.cases, strict=True):
             value_pairs.extend(
                 _witness_precision_pairs(low_case.witness, high_case.witness)
             )
-        maximum_delta = _certify_precision_doubling(value_pairs)
+        precision = _SCIENTIFIC_PRECISION.certify_pairs(
+            value_pairs,
+            subject="source-edge corpus",
+        )
     return _PrecisionCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
+        precision=precision,
         witness=high,
     )
 
@@ -3296,9 +3275,13 @@ def _build_critical_curve_precision_certificate() -> _PrecisionCertificate[
 ]:
     """Rebuild both critical-curve cases at 120/180 digits."""
 
-    low = _critical_curve_corpus_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = _critical_curve_corpus_witness(precision_digits=HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
+    low = _critical_curve_corpus_witness(
+        precision_digits=_SCIENTIFIC_PRECISION.low_digits
+    )
+    high = _critical_curve_corpus_witness(
+        precision_digits=_SCIENTIFIC_PRECISION.high_digits
+    )
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
         value_pairs = [
             (low.critical_sample_y, high.critical_sample_y),
             (low.critical_radius_m, high.critical_radius_m),
@@ -3323,12 +3306,12 @@ def _build_critical_curve_precision_certificate() -> _PrecisionCertificate[
                     high_case.witness,
                 )
             )
-        maximum_delta = _certify_precision_doubling(value_pairs)
+        precision = _SCIENTIFIC_PRECISION.certify_pairs(
+            value_pairs,
+            subject="critical-curve corpus",
+        )
     return _PrecisionCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
+        precision=precision,
         witness=high,
     )
 
@@ -3338,18 +3321,22 @@ def _build_negative_spin_precision_certificate() -> _PrecisionCertificate[
 ]:
     """Rebuild the named negative-spin surface ray at 120/180 digits."""
 
-    low = _negative_spin_surface_witness(precision_digits=LOW_PRECISION_DIGITS)
-    high = _negative_spin_surface_witness(precision_digits=HIGH_PRECISION_DIGITS)
-    with mp.workdps(HIGH_PRECISION_DIGITS):
-        maximum_delta = _certify_precision_doubling(
-            (getattr(low, field), getattr(high, field))
-            for field in _NEGATIVE_SPIN_PRECISION_FIELDS
+    low = _negative_spin_surface_witness(
+        precision_digits=_SCIENTIFIC_PRECISION.low_digits
+    )
+    high = _negative_spin_surface_witness(
+        precision_digits=_SCIENTIFIC_PRECISION.high_digits
+    )
+    with mp.workdps(_SCIENTIFIC_PRECISION.high_digits):
+        precision = _SCIENTIFIC_PRECISION.certify_pairs(
+            (
+                (getattr(low, field), getattr(high, field))
+                for field in _NEGATIVE_SPIN_PRECISION_FIELDS
+            ),
+            subject="negative-spin surface",
         )
     return _PrecisionCertificate(
-        low_precision_digits=LOW_PRECISION_DIGITS,
-        high_precision_digits=HIGH_PRECISION_DIGITS,
-        required_stable_digits=REQUIRED_STABLE_DIGITS,
-        maximum_normalized_delta=maximum_delta,
+        precision=precision,
         witness=high,
     )
 
@@ -3575,11 +3562,12 @@ def run() -> None:
     print(f"mpmath={mp.__version__}")
     print(
         "source_edge_corpus_precision="
-        f"{source_edge_certificate.low_precision_digits},"
-        f"{source_edge_certificate.high_precision_digits} "
-        f"stable_digits>={source_edge_certificate.required_stable_digits} "
+        f"{source_edge_certificate.precision.policy.low_digits},"
+        f"{source_edge_certificate.precision.policy.high_digits} "
+        "stable_digits>="
+        f"{source_edge_certificate.precision.policy.required_digits} "
         "maximum_normalized_delta="
-        f"{_scientific(source_edge_certificate.maximum_normalized_delta, 12)}"
+        f"{_scientific(source_edge_certificate.precision.maximum_normalized_delta, 12)}"
     )
     for case in source_edge_certificate.witness.cases:
         pixel_x, pixel_y = case.pixel
@@ -3601,11 +3589,11 @@ def run() -> None:
     critical_corpus = critical_certificate.witness
     print(
         "critical_curve_corpus_precision="
-        f"{critical_certificate.low_precision_digits},"
-        f"{critical_certificate.high_precision_digits} "
-        f"stable_digits>={critical_certificate.required_stable_digits} "
+        f"{critical_certificate.precision.policy.low_digits},"
+        f"{critical_certificate.precision.policy.high_digits} "
+        f"stable_digits>={critical_certificate.precision.policy.required_digits} "
         "maximum_normalized_delta="
-        f"{_scientific(critical_certificate.maximum_normalized_delta, 12)}"
+        f"{_scientific(critical_certificate.precision.maximum_normalized_delta, 12)}"
     )
     print(f"critical_root_class={critical_corpus.critical_root_class}")
     print(f"critical_sample_y={_scientific(critical_corpus.critical_sample_y)}")
@@ -3645,11 +3633,12 @@ def run() -> None:
     negative_spin = negative_spin_certificate.witness
     print(
         "negative_spin_surface_precision="
-        f"{negative_spin_certificate.low_precision_digits},"
-        f"{negative_spin_certificate.high_precision_digits} "
-        f"stable_digits>={negative_spin_certificate.required_stable_digits} "
+        f"{negative_spin_certificate.precision.policy.low_digits},"
+        f"{negative_spin_certificate.precision.policy.high_digits} "
+        "stable_digits>="
+        f"{negative_spin_certificate.precision.policy.required_digits} "
         "maximum_normalized_delta="
-        f"{_scientific(negative_spin_certificate.maximum_normalized_delta, 12)}"
+        f"{_scientific(negative_spin_certificate.precision.maximum_normalized_delta, 12)}"
     )
     pixel_x, pixel_y = negative_spin.pixel
     print(f"case=kerr-negative-spin-outgoing-v1:{pixel_x}:{pixel_y}:0.5:0.5")
