@@ -64,6 +64,20 @@ _SURFACE_EQUATORIAL_CROSSINGS_BEFORE_TERMINAL = 0
 _SOURCE_EDGE_AZIMUTH_WINDING = 0
 _SOURCE_EDGE_ESCAPE_TERMINAL = "escape"
 _SOURCE_EDGE_ESCAPE_EQUATORIAL_CROSSINGS = 1
+_HORIZON_TERMINAL = "horizon"
+_CRITICAL_CURVE_PIXELS = ((33, 10), (33, 11))
+_CRITICAL_SURFACE_PIXEL = (33, 10)
+_CRITICAL_CAPTURE_PIXEL = (33, 11)
+_CRITICAL_VIEWPORT_WIDTH = 64
+_CRITICAL_VIEWPORT_HEIGHT = 36
+_CRITICAL_SURFACE_POLAR_TURNINGS = 2
+_CRITICAL_CAPTURE_POLAR_TURNINGS = 1
+_CRITICAL_EQUATORIAL_CROSSINGS = 1
+_CRITICAL_SURFACE_AZIMUTH_WINDING = 1
+_CRITICAL_CAPTURE_AZIMUTH_WINDING = 0
+_CRITICAL_ROOT_CLASS = "exterior-double-root"
+_INGOING_CHART_SIGN = 1
+_OUTGOING_CHART_SIGN = -1
 
 
 class _UnsupportedWitnessError(ValueError):
@@ -192,6 +206,196 @@ class _SourceEdgeCorpusWitness:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class _CriticalSurfaceWitness:
+    """Independent higher-order surface result on the scattering side."""
+
+    precision_digits: int
+    terminal: str
+    initial_polar_side: str
+    radial_turnings: int
+    polar_turnings: int
+    equatorial_crossings_before_terminal: int
+    azimuth_winding: int
+    first_equatorial_crossing_mino_duration: mp.mpf
+    terminal_equatorial_crossing_mino_duration: mp.mpf
+    terminal_after_first_crossing_mino_margin: mp.mpf
+    first_equatorial_crossing_radius_m: mp.mpf
+    first_crossing_below_surface_margin_m: mp.mpf
+    radial_turning_above_horizon_margin_m: mp.mpf
+    source_radius_m: mp.mpf
+    source_azimuth_unwrapped_rad: mp.mpf
+    source_azimuth_rad: mp.mpf
+    frequency_ratio: mp.mpf
+    travel_time_m: mp.mpf
+    emitted_bolometric_intensity: mp.mpf
+    observed_bolometric_intensity: mp.mpf
+    energy: mp.mpf
+    impact_parameter: mp.mpf
+    carter_parameter: mp.mpf
+    radial_turning_derivative: mp.mpf
+    polar_turning_derivative: mp.mpf
+    initial_null_residual: mp.mpf
+    mino_constraint_residual: mp.mpf
+    chart_primitive_residual: mp.mpf
+
+    def __post_init__(self) -> None:
+        _validate_critical_surface_witness(self)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _HorizonWitness:
+    """Independent monotonic capture result in outgoing Kerr--Schild time."""
+
+    precision_digits: int
+    terminal: str
+    initial_polar_side: str
+    radial_turnings: int
+    polar_turnings: int
+    equatorial_crossings_before_terminal: int
+    azimuth_winding: int
+    first_equatorial_crossing_mino_duration: mp.mpf
+    horizon_mino_duration: mp.mpf
+    first_equatorial_crossing_radius_m: mp.mpf
+    first_crossing_below_surface_margin_m: mp.mpf
+    horizon_after_first_crossing_mino_margin: mp.mpf
+    horizon_radius_m: mp.mpf
+    horizon_mu: mp.mpf
+    horizon_azimuth_unwrapped_rad: mp.mpf
+    horizon_azimuth_rad: mp.mpf
+    horizon_position_xyz_m: tuple[mp.mpf, mp.mpf, mp.mpf]
+    travel_time_m: mp.mpf
+    energy: mp.mpf
+    impact_parameter: mp.mpf
+    carter_parameter: mp.mpf
+    polar_turning_derivative: mp.mpf
+    initial_null_residual: mp.mpf
+    mino_constraint_residual: mp.mpf
+    horizon_cancellation_residual: mp.mpf
+
+    def __post_init__(self) -> None:
+        _validate_horizon_witness(self)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _CriticalCurveCaseWitness:
+    """One named pixel and its signed distance from the radial separatrix."""
+
+    pixel: tuple[int, int]
+    witness: _CriticalSurfaceWitness | _HorizonWitness
+    exterior_radial_root_count: int
+    signed_critical_distance_pixels: mp.mpf
+    radial_classification_margin: mp.mpf
+
+    def __post_init__(self) -> None:
+        if self.pixel == _CRITICAL_SURFACE_PIXEL:
+            expected_type = _CriticalSurfaceWitness
+        elif self.pixel == _CRITICAL_CAPTURE_PIXEL:
+            expected_type = _HorizonWitness
+        else:
+            raise _UnsupportedWitnessError(
+                "pixel is not in the named critical-curve corpus"
+            )
+        if type(self.witness) is not expected_type:
+            raise _UnsupportedWitnessError(
+                "critical-curve case does not match its certified terminal stratum"
+            )
+        expected_root_count = 2 if self.pixel == _CRITICAL_SURFACE_PIXEL else 0
+        if (
+            type(self.exterior_radial_root_count) is not int
+            or self.exterior_radial_root_count != expected_root_count
+        ):
+            raise _UnsupportedWitnessError(
+                "critical-curve case has the wrong exterior radial root topology"
+            )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _CriticalCurveCorpusWitness:
+    """The adjacent higher-order surface/capture pair around one critical curve."""
+
+    critical_root_class: str
+    critical_sample_y: mp.mpf
+    critical_radius_m: mp.mpf
+    critical_potential_residual: mp.mpf
+    critical_derivative_residual: mp.mpf
+    critical_second_derivative: mp.mpf
+    cases: tuple[_CriticalCurveCaseWitness, ...]
+
+    def __post_init__(self) -> None:
+        if self.critical_root_class != _CRITICAL_ROOT_CLASS:
+            raise _UnsupportedWitnessError(
+                "critical-curve corpus has the wrong root multiplicity class"
+            )
+        if tuple(case.pixel for case in self.cases) != _CRITICAL_CURVE_PIXELS:
+            raise _UnsupportedWitnessError(
+                "critical-curve corpus does not contain the named ordered pixels"
+            )
+        precision_digits = self.cases[0].witness.precision_digits
+        if any(
+            case.witness.precision_digits != precision_digits for case in self.cases
+        ):
+            raise _UnsupportedWitnessError(
+                "critical-curve corpus mixes working precisions"
+            )
+        continuous_fields = (
+            self.critical_sample_y,
+            self.critical_radius_m,
+            self.critical_potential_residual,
+            self.critical_derivative_residual,
+            self.critical_second_derivative,
+            *(case.signed_critical_distance_pixels for case in self.cases),
+            *(case.radial_classification_margin for case in self.cases),
+        )
+        if not all(
+            isinstance(value, mp.mpf) and mp.isfinite(value)
+            for value in continuous_fields
+        ):
+            raise _UnsupportedWitnessError(
+                "critical-curve corpus contains a non-real or non-finite value"
+            )
+        if not self.cases[0].signed_critical_distance_pixels < 0:
+            raise _UnsupportedWitnessError(
+                "higher-order surface case is not below the critical sample"
+            )
+        if not self.cases[1].signed_critical_distance_pixels > 0:
+            raise _UnsupportedWitnessError(
+                "capture case is not above the critical sample"
+            )
+        if not self.cases[0].radial_classification_margin < 0:
+            raise _UnsupportedWitnessError(
+                "higher-order surface case lacks a certified radial turning barrier"
+            )
+        if not self.cases[1].radial_classification_margin > 0:
+            raise _UnsupportedWitnessError(
+                "capture case lacks a certified positive radial barrier margin"
+            )
+        if self.critical_second_derivative <= 0:
+            raise _UnsupportedWitnessError(
+                "critical radial root is not a local double-root barrier"
+            )
+        with mp.workdps(precision_digits):
+            residual_limit = mp.power(
+                10,
+                RESIDUAL_GUARD_DIGITS - precision_digits,
+            )
+            distance_residual = max(
+                abs(
+                    case.signed_critical_distance_pixels
+                    - (mp.mpf(case.pixel[1]) + mp.mpf(1) / 2 - self.critical_sample_y)
+                )
+                for case in self.cases
+            )
+            if (
+                self.critical_potential_residual >= residual_limit
+                or self.critical_derivative_residual >= residual_limit
+                or distance_residual >= residual_limit
+            ):
+                raise _UnsupportedWitnessError(
+                    "critical double-root residual does not retain the required digits"
+                )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _PrecisionCertificate[Witness]:
     """Precision-doubling evidence for one named witness."""
 
@@ -206,10 +410,15 @@ class _PrecisionCertificate[Witness]:
 class _ObservationGeometry:
     mass: mp.mpf
     spin: mp.mpf
+    chart_sign: int
     radius: mp.mpf
     theta: mp.mpf
+    chart_azimuth: mp.mpf
     position: tuple[mp.mpf, mp.mpf, mp.mpf]
     metric: tuple[tuple[mp.mpf, ...], ...]
+    viewport_width: int
+    viewport_height: int
+    vertical_fov: mp.mpf
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -249,7 +458,7 @@ class _PolarMotion:
             lambda angle: (
                 numerator(self.turning * mp.sin(angle))
                 / (
-                    self.spin
+                    abs(self.spin)
                     * mp.sqrt(
                         self.turning_squared * mp.sin(angle) ** 2
                         - self.negative_turning_squared
@@ -275,7 +484,7 @@ class _PolarMotion:
             lambda angle: (
                 numerator(self.turning * mp.sin(angle))
                 / (
-                    self.spin
+                    abs(self.spin)
                     * mp.sqrt(
                         self.turning_squared * mp.sin(angle) ** 2
                         - self.negative_turning_squared
@@ -338,7 +547,118 @@ class _RadialMotion:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class _RadialClassification:
+    """Signed exterior potential barrier and the root topology it certifies."""
+
+    margin: mp.mpf
+    stationary_radius: mp.mpf
+    exterior_roots: tuple[mp.mpf, ...]
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _CriticalPoint:
+    """Verified double-root location between two adjacent sample centers."""
+
+    sample_y: mp.mpf
+    radius: mp.mpf
+    potential_residual: mp.mpf
+    derivative_residual: mp.mpf
+    second_derivative: mp.mpf
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _CaptureRadialMotion:
+    """Monotonic outgoing-chart capture with horizon-regular observables."""
+
+    mass: mp.mpf
+    spin: mp.mpf
+    impact: mp.mpf
+    separation: mp.mpf
+    horizon: mp.mpf
+    observer_radius: mp.mpf
+
+    def delta(self, radius: mp.mpf) -> mp.mpf:
+        return radius**2 - 2 * self.mass * radius + self.spin**2
+
+    def factor(self, radius: mp.mpf) -> mp.mpf:
+        return radius**2 + self.spin**2 - self.spin * self.impact
+
+    def potential(self, radius: mp.mpf) -> mp.mpf:
+        return self.factor(radius) ** 2 - self.delta(radius) * self.separation
+
+    def root(self, radius: mp.mpf) -> mp.mpf:
+        value = self.potential(radius)
+        if value <= 0:
+            raise _UnsupportedWitnessError(
+                "capture radial potential is not strictly positive"
+            )
+        return mp.sqrt(value)
+
+    def mino_duration_to(self, terminal_radius: mp.mpf) -> mp.mpf:
+        if not self.horizon <= terminal_radius <= self.observer_radius:
+            raise _UnsupportedWitnessError(
+                "capture radial endpoint lies outside the exterior segment"
+            )
+        return mp.quad(
+            lambda radius: 1 / self.root(radius),
+            [terminal_radius, self.observer_radius],
+        )
+
+    def mino_duration(self) -> mp.mpf:
+        return self.mino_duration_to(self.horizon)
+
+    def stable_time_integrand(self, radius: mp.mpf) -> mp.mpf:
+        radial_factor = self.factor(radius)
+        radial_root = self.root(radius)
+        if radial_factor + radial_root <= 0:
+            raise _UnsupportedWitnessError(
+                "capture time cancellation has an invalid radial factor"
+            )
+        radius_factor = radius**2 + self.spin**2
+        return 1 + (
+            radius_factor
+            * self.separation
+            / (radial_root * (radial_factor + radial_root))
+        )
+
+    def stable_azimuth_integrand(self, radius: mp.mpf) -> mp.mpf:
+        radial_factor = self.factor(radius)
+        radial_root = self.root(radius)
+        if radial_factor + radial_root <= 0:
+            raise _UnsupportedWitnessError(
+                "capture azimuth cancellation has an invalid radial factor"
+            )
+        return (
+            self.spin * self.separation / (radial_root * (radial_factor + radial_root))
+        )
+
+    def time_integral(self) -> mp.mpf:
+        return mp.quad(
+            self.stable_time_integrand,
+            [self.horizon, self.observer_radius],
+        )
+
+    def azimuth_integral(self) -> mp.mpf:
+        return mp.quad(
+            self.stable_azimuth_integrand,
+            [self.horizon, self.observer_radius],
+        )
+
+    def cancellation_residual(self) -> mp.mpf:
+        probe = (self.horizon + self.observer_radius) / 2
+        radial_factor = self.factor(probe)
+        radial_root = self.root(probe)
+        direct = (
+            (probe**2 + self.spin**2) * radial_factor / radial_root
+            - 2 * self.mass * probe
+        ) / self.delta(probe)
+        stable = self.stable_time_integrand(probe)
+        return abs(direct - stable) / max(mp.mpf(1), abs(stable))
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class _PathObservables:
+    terminal_azimuth_unwrapped: mp.mpf
     terminal_azimuth: mp.mpf
     travel_time: mp.mpf
     azimuth_winding: int
@@ -563,6 +883,289 @@ def _validate_escape_witness(witness: _EscapeWitness) -> None:
             )
 
 
+def _validate_critical_surface_witness(witness: _CriticalSurfaceWitness) -> None:
+    _validate_precision_digits(witness.precision_digits)
+    discrete_identity = (
+        (witness.terminal, _SURFACE_TERMINAL),
+        (witness.initial_polar_side, _SOURCE_EDGE_INITIAL_POLAR_SIDE),
+        (witness.radial_turnings, _SOURCE_EDGE_RADIAL_TURNINGS),
+        (witness.polar_turnings, _CRITICAL_SURFACE_POLAR_TURNINGS),
+        (
+            witness.equatorial_crossings_before_terminal,
+            _CRITICAL_EQUATORIAL_CROSSINGS,
+        ),
+        (witness.azimuth_winding, _CRITICAL_SURFACE_AZIMUTH_WINDING),
+    )
+    if any(
+        type(actual) is not type(expected) or actual != expected
+        for actual, expected in discrete_identity
+    ):
+        raise _UnsupportedWitnessError(
+            "critical surface witness does not match its discrete path identity"
+        )
+    continuous_fields = (
+        witness.first_equatorial_crossing_mino_duration,
+        witness.terminal_equatorial_crossing_mino_duration,
+        witness.terminal_after_first_crossing_mino_margin,
+        witness.first_equatorial_crossing_radius_m,
+        witness.first_crossing_below_surface_margin_m,
+        witness.radial_turning_above_horizon_margin_m,
+        witness.source_radius_m,
+        witness.source_azimuth_unwrapped_rad,
+        witness.source_azimuth_rad,
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+        witness.impact_parameter,
+        witness.carter_parameter,
+        witness.radial_turning_derivative,
+        witness.polar_turning_derivative,
+        witness.initial_null_residual,
+        witness.mino_constraint_residual,
+        witness.chart_primitive_residual,
+    )
+    if not all(
+        isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
+    ):
+        raise _UnsupportedWitnessError(
+            "critical surface witness contains a non-real or non-finite value"
+        )
+    if not (
+        witness.first_equatorial_crossing_radius_m < SURFACE_INNER_RADIUS_M
+        and SURFACE_INNER_RADIUS_M <= witness.source_radius_m <= SURFACE_OUTER_RADIUS_M
+    ):
+        raise _UnsupportedWitnessError(
+            "critical surface crossings do not certify the named event order"
+        )
+    positive_fields = (
+        witness.first_equatorial_crossing_mino_duration,
+        witness.terminal_equatorial_crossing_mino_duration,
+        witness.terminal_after_first_crossing_mino_margin,
+        witness.first_crossing_below_surface_margin_m,
+        witness.radial_turning_above_horizon_margin_m,
+        witness.frequency_ratio,
+        witness.travel_time_m,
+        witness.emitted_bolometric_intensity,
+        witness.observed_bolometric_intensity,
+        witness.energy,
+        witness.radial_turning_derivative,
+        witness.polar_turning_derivative,
+    )
+    if any(value <= 0 for value in positive_fields):
+        raise _UnsupportedWitnessError(
+            "critical surface witness lacks a positive physical or event margin"
+        )
+
+    with mp.workdps(witness.precision_digits):
+        residual_limit = mp.power(
+            10,
+            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+        )
+        margin_residual = abs(
+            witness.first_crossing_below_surface_margin_m
+            - (
+                mp.mpf(SURFACE_INNER_RADIUS_M)
+                - witness.first_equatorial_crossing_radius_m
+            )
+        )
+        event_residual = abs(
+            witness.terminal_after_first_crossing_mino_margin
+            - (
+                witness.terminal_equatorial_crossing_mino_duration
+                - witness.first_equatorial_crossing_mino_duration
+            )
+        )
+        phase_residual = abs(
+            _wrap_angle(witness.source_azimuth_unwrapped_rad)
+            - witness.source_azimuth_rad
+        )
+        transfer_residual = abs(
+            witness.observed_bolometric_intensity
+            - witness.emitted_bolometric_intensity * witness.frequency_ratio**4
+        ) / max(mp.mpf(1), abs(witness.observed_bolometric_intensity))
+        residuals = (
+            witness.initial_null_residual,
+            witness.mino_constraint_residual,
+            witness.chart_primitive_residual,
+            margin_residual,
+            event_residual,
+            phase_residual,
+            transfer_residual,
+        )
+        if any(residual < 0 or residual >= residual_limit for residual in residuals):
+            raise _UnsupportedWitnessError(
+                "critical surface equation or identity residual is too large"
+            )
+        if not -mp.pi <= witness.source_azimuth_rad < mp.pi:
+            raise _UnsupportedWitnessError("critical surface phase is not canonical")
+        geometry = _critical_curve_geometry()
+        if (
+            _azimuth_winding(
+                geometry,
+                witness.source_radius_m,
+                witness.source_azimuth_unwrapped_rad,
+            )
+            != witness.azimuth_winding
+        ):
+            raise _UnsupportedWitnessError(
+                "critical surface unwrapped phase disagrees with its winding"
+            )
+
+
+def _validate_horizon_witness(witness: _HorizonWitness) -> None:
+    _validate_precision_digits(witness.precision_digits)
+    discrete_identity = (
+        (witness.terminal, _HORIZON_TERMINAL),
+        (witness.initial_polar_side, _SOURCE_EDGE_INITIAL_POLAR_SIDE),
+        (witness.radial_turnings, 0),
+        (witness.polar_turnings, _CRITICAL_CAPTURE_POLAR_TURNINGS),
+        (
+            witness.equatorial_crossings_before_terminal,
+            _CRITICAL_EQUATORIAL_CROSSINGS,
+        ),
+        (witness.azimuth_winding, _CRITICAL_CAPTURE_AZIMUTH_WINDING),
+    )
+    if any(
+        type(actual) is not type(expected) or actual != expected
+        for actual, expected in discrete_identity
+    ):
+        raise _UnsupportedWitnessError(
+            "horizon witness does not match its discrete path identity"
+        )
+    if len(witness.horizon_position_xyz_m) != 3:
+        raise _UnsupportedWitnessError(
+            "horizon position must contain exactly three lanes"
+        )
+    continuous_fields = (
+        witness.first_equatorial_crossing_mino_duration,
+        witness.horizon_mino_duration,
+        witness.first_equatorial_crossing_radius_m,
+        witness.first_crossing_below_surface_margin_m,
+        witness.horizon_after_first_crossing_mino_margin,
+        witness.horizon_radius_m,
+        witness.horizon_mu,
+        witness.horizon_azimuth_unwrapped_rad,
+        witness.horizon_azimuth_rad,
+        *witness.horizon_position_xyz_m,
+        witness.travel_time_m,
+        witness.energy,
+        witness.impact_parameter,
+        witness.carter_parameter,
+        witness.polar_turning_derivative,
+        witness.initial_null_residual,
+        witness.mino_constraint_residual,
+        witness.horizon_cancellation_residual,
+    )
+    if not all(
+        isinstance(value, mp.mpf) and mp.isfinite(value) for value in continuous_fields
+    ):
+        raise _UnsupportedWitnessError(
+            "horizon witness contains a non-real or non-finite value"
+        )
+    if not (
+        witness.horizon_radius_m
+        < witness.first_equatorial_crossing_radius_m
+        < SURFACE_INNER_RADIUS_M
+    ):
+        raise _UnsupportedWitnessError(
+            "horizon witness does not certify the first non-surface crossing"
+        )
+    if not -1 < witness.horizon_mu < 0:
+        raise _UnsupportedWitnessError(
+            "horizon endpoint is not on the certified southern polar segment"
+        )
+    positive_fields = (
+        witness.first_equatorial_crossing_mino_duration,
+        witness.horizon_mino_duration,
+        witness.first_crossing_below_surface_margin_m,
+        witness.horizon_after_first_crossing_mino_margin,
+        witness.travel_time_m,
+        witness.energy,
+        witness.polar_turning_derivative,
+    )
+    if any(value <= 0 for value in positive_fields):
+        raise _UnsupportedWitnessError(
+            "horizon witness lacks a positive physical or event margin"
+        )
+
+    with mp.workdps(witness.precision_digits):
+        expected_horizon = mp.mpf(8) / 5
+        residual_limit = mp.power(
+            10,
+            RESIDUAL_GUARD_DIGITS - witness.precision_digits,
+        )
+        horizon_residual = abs(witness.horizon_radius_m - expected_horizon)
+        event_residual = abs(
+            witness.horizon_after_first_crossing_mino_margin
+            - (
+                witness.horizon_mino_duration
+                - witness.first_equatorial_crossing_mino_duration
+            )
+        )
+        phase_residual = abs(
+            _wrap_angle(witness.horizon_azimuth_unwrapped_rad)
+            - witness.horizon_azimuth_rad
+        )
+        margin_residual = abs(
+            witness.first_crossing_below_surface_margin_m
+            - (
+                mp.mpf(SURFACE_INNER_RADIUS_M)
+                - witness.first_equatorial_crossing_radius_m
+            )
+        )
+        sin_theta = mp.sqrt(1 - witness.horizon_mu**2)
+        azimuth = witness.horizon_azimuth_rad
+        spin = mp.mpf(4) / 5
+        expected_position = (
+            (witness.horizon_radius_m * mp.cos(azimuth) + spin * mp.sin(azimuth))
+            * sin_theta,
+            (witness.horizon_radius_m * mp.sin(azimuth) - spin * mp.cos(azimuth))
+            * sin_theta,
+            witness.horizon_radius_m * witness.horizon_mu,
+        )
+        position_residual = max(
+            abs(actual - expected)
+            for actual, expected in zip(
+                witness.horizon_position_xyz_m,
+                expected_position,
+                strict=True,
+            )
+        ) / max(
+            mp.mpf(1),
+            *(abs(component) for component in expected_position),
+        )
+        residuals = (
+            witness.initial_null_residual,
+            witness.mino_constraint_residual,
+            witness.horizon_cancellation_residual,
+            horizon_residual,
+            event_residual,
+            phase_residual,
+            margin_residual,
+            position_residual,
+        )
+        if any(residual < 0 or residual >= residual_limit for residual in residuals):
+            raise _UnsupportedWitnessError(
+                "horizon equation or identity residual is too large"
+            )
+        if not -mp.pi <= witness.horizon_azimuth_rad < mp.pi:
+            raise _UnsupportedWitnessError("horizon phase is not canonical")
+        geometry = _critical_curve_geometry()
+        if (
+            _azimuth_winding(
+                geometry,
+                witness.horizon_radius_m,
+                witness.horizon_azimuth_unwrapped_rad,
+            )
+            != witness.azimuth_winding
+        ):
+            raise _UnsupportedWitnessError(
+                "horizon unwrapped phase disagrees with its winding"
+            )
+
+
 def _vector_add(left: Sequence[mp.mpf], right: Sequence[mp.mpf]) -> tuple[mp.mpf, ...]:
     return tuple(a + b for a, b in zip(left, right, strict=True))
 
@@ -620,23 +1223,37 @@ def _orientation_determinant(columns: Sequence[Sequence[mp.mpf]]) -> mp.mpf:
     return mp.det(matrix)
 
 
-def _canonical_geometry() -> _ObservationGeometry:
+def _build_observation_geometry(
+    *,
+    spin: mp.mpf,
+    chart_sign: int,
+    radius: mp.mpf,
+    theta: mp.mpf,
+    chart_azimuth: mp.mpf,
+    viewport_width: int,
+    viewport_height: int,
+    vertical_fov: mp.mpf,
+) -> _ObservationGeometry:
+    """Reconstruct one pure-Kerr observation without importing Rust state."""
+
+    if chart_sign not in (_INGOING_CHART_SIGN, _OUTGOING_CHART_SIGN):
+        raise _UnsupportedWitnessError("Kerr--Schild chart sign must be +1 or -1")
     mass = mp.mpf(1)
-    spin = mp.mpf(4) / 5
-    radius = mp.mpf(30)
-    theta = mp.pi / 3
     sin_theta = mp.sin(theta)
     cos_theta = mp.cos(theta)
-    x = radius * sin_theta
-    y = spin * sin_theta
+    sin_azimuth = mp.sin(chart_azimuth)
+    cos_azimuth = mp.cos(chart_azimuth)
+    chart_spin = chart_sign * spin
+    x = (radius * cos_azimuth - chart_spin * sin_azimuth) * sin_theta
+    y = (radius * sin_azimuth + chart_spin * cos_azimuth) * sin_theta
     z = radius * cos_theta
     sigma = radius**2 + spin**2 * cos_theta**2
     scalar_f = 2 * mass * radius / sigma
     principal = (
         mp.mpf(1),
-        (radius * x + spin * y) / (radius**2 + spin**2),
-        (radius * y - spin * x) / (radius**2 + spin**2),
-        z / radius,
+        (chart_sign * radius * x + spin * y) / (radius**2 + spin**2),
+        (chart_sign * radius * y - spin * x) / (radius**2 + spin**2),
+        chart_sign * z / radius,
     )
     minkowski = (-1, 1, 1, 1)
     metric = tuple(
@@ -650,10 +1267,41 @@ def _canonical_geometry() -> _ObservationGeometry:
     return _ObservationGeometry(
         mass=mass,
         spin=spin,
+        chart_sign=chart_sign,
         radius=radius,
         theta=theta,
+        chart_azimuth=chart_azimuth,
         position=(x, y, z),
         metric=metric,
+        viewport_width=viewport_width,
+        viewport_height=viewport_height,
+        vertical_fov=vertical_fov,
+    )
+
+
+def _canonical_geometry() -> _ObservationGeometry:
+    return _build_observation_geometry(
+        spin=mp.mpf(4) / 5,
+        chart_sign=_INGOING_CHART_SIGN,
+        radius=mp.mpf(30),
+        theta=mp.pi / 3,
+        chart_azimuth=mp.mpf(0),
+        viewport_width=VIEWPORT_WIDTH,
+        viewport_height=VIEWPORT_HEIGHT,
+        vertical_fov=mp.pi / 4,
+    )
+
+
+def _critical_curve_geometry() -> _ObservationGeometry:
+    return _build_observation_geometry(
+        spin=mp.mpf(4) / 5,
+        chart_sign=_OUTGOING_CHART_SIGN,
+        radius=mp.mpf(30),
+        theta=mp.pi / 3,
+        chart_azimuth=mp.mpf(0),
+        viewport_width=_CRITICAL_VIEWPORT_WIDTH,
+        viewport_height=_CRITICAL_VIEWPORT_HEIGHT,
+        vertical_fov=mp.pi / 4,
     )
 
 
@@ -672,8 +1320,10 @@ def _try_image_right_axis(
 
 def _canonical_initial_ray(
     geometry: _ObservationGeometry,
-    pixel_x: int,
-    pixel_y: int,
+    pixel_x: int | mp.mpf,
+    pixel_y: int | mp.mpf,
+    *,
+    coordinates_are_centers: bool = False,
 ) -> _InitialRay:
     x, y, z = geometry.position
     metric = geometry.metric
@@ -721,12 +1371,14 @@ def _canonical_initial_ray(
     if _orientation_determinant((four_velocity, right, up, arrival)) < 0:
         right = _vector_scale(right, -1)
 
-    width = mp.mpf(VIEWPORT_WIDTH)
-    height = mp.mpf(VIEWPORT_HEIGHT)
+    width = mp.mpf(geometry.viewport_width)
+    height = mp.mpf(geometry.viewport_height)
     half = mp.mpf(1) / 2
-    normalized_x = 2 * (mp.mpf(pixel_x) + half) / width - 1
-    normalized_y = 1 - 2 * (mp.mpf(pixel_y) + half) / height
-    tangent_half_fov = mp.tan(mp.pi / 8)
+    sample_x = mp.mpf(pixel_x) if coordinates_are_centers else mp.mpf(pixel_x) + half
+    sample_y = mp.mpf(pixel_y) if coordinates_are_centers else mp.mpf(pixel_y) + half
+    normalized_x = 2 * sample_x / width - 1
+    normalized_y = 1 - 2 * sample_y / height
+    tangent_half_fov = mp.tan(geometry.vertical_fov / 2)
     sight_x = width / height * tangent_half_fov * normalized_x
     sight_y = tangent_half_fov * normalized_y
     normalization = 1 / mp.sqrt(1 + sight_x**2 + sight_y**2)
@@ -774,11 +1426,17 @@ def _separated_initial_state(
     sin_theta = mp.sin(theta)
     cos_theta = mp.cos(theta)
     p_t, p_x, p_y, p_z = initial_ray.momentum_covariant
-    p_r_ks = sin_theta * p_x + cos_theta * p_z
+    p_r_ks = (
+        sin_theta * mp.cos(geometry.chart_azimuth) * p_x
+        + sin_theta * mp.sin(geometry.chart_azimuth) * p_y
+        + cos_theta * p_z
+    )
     p_theta = mp.cos(theta) / sin_theta * (x * p_x + y * p_y) - radius * sin_theta * p_z
     p_phi = x * p_y - y * p_x
     delta = radius**2 - 2 * mass * radius + spin**2
-    p_r_bl = p_r_ks + 2 * mass * radius / delta * p_t + spin / delta * p_phi
+    p_r_bl = p_r_ks + geometry.chart_sign * (
+        2 * mass * radius / delta * p_t + spin / delta * p_phi
+    )
     energy = -p_t
     impact = p_phi / energy
     mu = cos_theta
@@ -854,6 +1512,43 @@ def _chart_primitives(
 
 def _wrap_angle(angle: mp.mpf) -> mp.mpf:
     return angle - 2 * mp.pi * mp.floor((angle + mp.pi) / (2 * mp.pi))
+
+
+def _oblate_position(
+    geometry: _ObservationGeometry,
+    radius: mp.mpf,
+    mu: mp.mpf,
+    chart_azimuth: mp.mpf,
+) -> tuple[mp.mpf, mp.mpf, mp.mpf]:
+    """Map one signed BL polar endpoint into the selected KS chart."""
+
+    sin_theta = mp.sqrt(1 - mu**2)
+    sin_azimuth = mp.sin(chart_azimuth)
+    cos_azimuth = mp.cos(chart_azimuth)
+    chart_spin = geometry.chart_sign * geometry.spin
+    return (
+        (radius * cos_azimuth - chart_spin * sin_azimuth) * sin_theta,
+        (radius * sin_azimuth + chart_spin * cos_azimuth) * sin_theta,
+        radius * mu,
+    )
+
+
+def _azimuth_winding(
+    geometry: _ObservationGeometry,
+    terminal_radius: mp.mpf,
+    terminal_chart_azimuth_unwrapped: mp.mpf,
+) -> int:
+    observer_cartesian_azimuth = geometry.chart_azimuth + mp.atan2(
+        geometry.chart_sign * geometry.spin,
+        geometry.radius,
+    )
+    terminal_cartesian_azimuth = terminal_chart_azimuth_unwrapped + mp.atan2(
+        geometry.chart_sign * geometry.spin,
+        terminal_radius,
+    )
+    observer_cycle = mp.floor((observer_cartesian_azimuth + mp.pi) / (2 * mp.pi))
+    terminal_cycle = mp.floor((terminal_cartesian_azimuth + mp.pi) / (2 * mp.pi))
+    return int(terminal_cycle - observer_cycle)
 
 
 def _unit_integrand(_: mp.mpf) -> mp.mpf:
@@ -952,6 +1647,176 @@ def _build_radial_motion(
     )
 
 
+def _radial_polynomial_coefficients(
+    geometry: _ObservationGeometry,
+    separated: _SeparatedState,
+) -> tuple[mp.mpf, mp.mpf, mp.mpf]:
+    spin = geometry.spin
+    impact = separated.impact
+    separation = (impact - spin) ** 2 + separated.carter
+    radial_constant = spin**2 - spin * impact
+    return (
+        2 * radial_constant - separation,
+        2 * geometry.mass * separation,
+        radial_constant**2 - spin**2 * separation,
+    )
+
+
+def _evaluate_radial_polynomial(
+    coefficients: tuple[mp.mpf, mp.mpf, mp.mpf],
+    radius: mp.mpf,
+) -> mp.mpf:
+    quadratic, linear, constant = coefficients
+    return radius**4 + quadratic * radius**2 + linear * radius + constant
+
+
+def _stationary_radial_barrier(
+    geometry: _ObservationGeometry,
+    coefficients: tuple[mp.mpf, mp.mpf, mp.mpf],
+) -> tuple[mp.mpf, mp.mpf]:
+    quadratic, linear, _ = coefficients
+    horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+    stationary = _real_polynomial_roots((mp.mpf(4), mp.mpf(0), 2 * quadratic, linear))
+    minima = tuple(
+        radius
+        for radius in stationary
+        if horizon < radius < geometry.radius and 12 * radius**2 + 2 * quadratic > 0
+    )
+    if not minima:
+        raise _UnsupportedWitnessError(
+            "radial topology has no exterior potential minimum"
+        )
+    stationary_radius = min(
+        minima,
+        key=lambda radius: _evaluate_radial_polynomial(coefficients, radius),
+    )
+    return (
+        stationary_radius,
+        _evaluate_radial_polynomial(coefficients, stationary_radius),
+    )
+
+
+def _radial_barrier_at_sample_y(
+    geometry: _ObservationGeometry,
+    sample_y: mp.mpf,
+) -> tuple[_SeparatedState, tuple[mp.mpf, mp.mpf, mp.mpf], mp.mpf, mp.mpf]:
+    sample_x = mp.mpf(_CRITICAL_SURFACE_PIXEL[0]) + mp.mpf(1) / 2
+    initial_ray = _canonical_initial_ray(
+        geometry,
+        sample_x,
+        sample_y,
+        coordinates_are_centers=True,
+    )
+    separated = _separated_initial_state(geometry, initial_ray)
+    coefficients = _radial_polynomial_coefficients(geometry, separated)
+    stationary_radius, margin = _stationary_radial_barrier(
+        geometry,
+        coefficients,
+    )
+    return separated, coefficients, stationary_radius, margin
+
+
+def _solve_critical_point(
+    geometry: _ObservationGeometry,
+    precision_digits: int,
+) -> _CriticalPoint:
+    lower_sample_y = mp.mpf(_CRITICAL_SURFACE_PIXEL[1]) + mp.mpf(1) / 2
+    upper_sample_y = mp.mpf(_CRITICAL_CAPTURE_PIXEL[1]) + mp.mpf(1) / 2
+
+    def barrier_margin(sample_y: mp.mpf) -> mp.mpf:
+        return _radial_barrier_at_sample_y(geometry, sample_y)[3]
+
+    lower_margin = barrier_margin(lower_sample_y)
+    upper_margin = barrier_margin(upper_sample_y)
+    if not lower_margin < 0 < upper_margin:
+        raise _UnsupportedWitnessError(
+            "named sample centers do not bracket the radial separatrix"
+        )
+    sample_y = mp.findroot(
+        barrier_margin,
+        (lower_sample_y, upper_sample_y),
+        solver="anderson",
+        tol=mp.power(10, -(precision_digits - 25)),
+        verify=True,
+    )
+    _, coefficients, radius, potential = _radial_barrier_at_sample_y(
+        geometry,
+        sample_y,
+    )
+    quadratic, linear, constant = coefficients
+    derivative = 4 * radius**3 + 2 * quadratic * radius + linear
+    second_derivative = 12 * radius**2 + 2 * quadratic
+    potential_scale = max(
+        mp.mpf(1),
+        abs(radius**4),
+        abs(quadratic * radius**2),
+        abs(linear * radius),
+        abs(constant),
+    )
+    derivative_scale = max(
+        mp.mpf(1),
+        abs(4 * radius**3),
+        abs(2 * quadratic * radius),
+        abs(linear),
+    )
+    return _CriticalPoint(
+        sample_y=sample_y,
+        radius=radius,
+        potential_residual=abs(potential) / potential_scale,
+        derivative_residual=abs(derivative) / derivative_scale,
+        second_derivative=second_derivative,
+    )
+
+
+def _classify_radial_barrier(
+    geometry: _ObservationGeometry,
+    separated: _SeparatedState,
+) -> _RadialClassification:
+    """Classify the relevant exterior minimum without consuming a trace."""
+
+    coefficients = _radial_polynomial_coefficients(geometry, separated)
+    quadratic_coefficient, linear_coefficient, constant = coefficients
+    horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+    roots = _real_polynomial_roots(
+        (mp.mpf(1), mp.mpf(0), quadratic_coefficient, linear_coefficient, constant)
+    )
+    exterior_roots = tuple(root for root in roots if horizon < root < geometry.radius)
+    stationary_radius, margin = _stationary_radial_barrier(
+        geometry,
+        coefficients,
+    )
+    return _RadialClassification(
+        margin=margin,
+        stationary_radius=stationary_radius,
+        exterior_roots=exterior_roots,
+    )
+
+
+def _build_capture_radial_motion(
+    geometry: _ObservationGeometry,
+    separated: _SeparatedState,
+    classification: _RadialClassification,
+) -> _CaptureRadialMotion:
+    if geometry.chart_sign != _OUTGOING_CHART_SIGN:
+        raise _UnsupportedWitnessError(
+            "horizon capture witness requires the outgoing Kerr--Schild chart"
+        )
+    if classification.margin <= 0 or classification.exterior_roots:
+        raise _UnsupportedWitnessError(
+            "capture witness does not have a strictly positive exterior barrier"
+        )
+    separation = (separated.impact - geometry.spin) ** 2 + separated.carter
+    horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+    return _CaptureRadialMotion(
+        mass=geometry.mass,
+        spin=geometry.spin,
+        impact=separated.impact,
+        separation=separation,
+        horizon=horizon,
+        observer_radius=geometry.radius,
+    )
+
+
 def _solve_equatorial_crossing_radius(
     radial: _RadialMotion,
     observer_radius: mp.mpf,
@@ -990,6 +1855,64 @@ def _solve_equatorial_crossing_radius(
     )
 
 
+def _solve_inbound_radius(
+    radial: _RadialMotion,
+    observer_radius: mp.mpf,
+    target_mino_duration: mp.mpf,
+    precision_digits: int,
+) -> mp.mpf:
+    """Invert the observer-to-turn branch before the radial turning event."""
+
+    observer_to_turn = radial.integrate_from_turn(
+        _unit_integrand,
+        observer_radius,
+    )
+    if not 0 < target_mino_duration < observer_to_turn:
+        raise _UnsupportedWitnessError(
+            "requested event is not on the inbound radial branch"
+        )
+
+    def event_equation(radius: mp.mpf) -> mp.mpf:
+        return (
+            target_mino_duration
+            - observer_to_turn
+            + radial.integrate_from_turn(_unit_integrand, radius)
+        )
+
+    return mp.findroot(
+        event_equation,
+        (radial.turning, observer_radius),
+        solver="anderson",
+        tol=mp.power(10, -(precision_digits - 25)),
+        verify=True,
+    )
+
+
+def _solve_capture_radius(
+    radial: _CaptureRadialMotion,
+    target_mino_duration: mp.mpf,
+    precision_digits: int,
+) -> mp.mpf:
+    """Invert one monotonic observer-to-horizon capture segment."""
+
+    total_duration = radial.mino_duration()
+    if not 0 < target_mino_duration < total_duration:
+        raise _UnsupportedWitnessError(
+            "requested event is not on the capture radial segment"
+        )
+
+    def event_equation(radius: mp.mpf) -> mp.mpf:
+        return target_mino_duration - radial.mino_duration_to(radius)
+
+    return mp.findroot(
+        event_equation,
+        (radial.horizon, radial.observer_radius),
+        solver="anderson",
+        tol=mp.power(10, -(precision_digits - 25)),
+        verify=True,
+    )
+
+
 def _solve_source_radius(
     radial: _RadialMotion,
     observer_radius: mp.mpf,
@@ -1006,6 +1929,57 @@ def _solve_source_radius(
     )
 
 
+def _integrate_polar_observables(
+    geometry: _ObservationGeometry,
+    polar: _PolarMotion,
+    impact: mp.mpf,
+    initial_mu: mp.mpf,
+    terminal_mu_magnitude: mp.mpf,
+    completed_polar_oscillations: int,
+) -> tuple[mp.mpf, mp.mpf]:
+    """Integrate even polar primitives along one explicitly counted branch."""
+
+    if (
+        type(completed_polar_oscillations) is not int
+        or completed_polar_oscillations < 0
+    ):
+        raise _UnsupportedWitnessError(
+            "completed polar oscillations must be a non-negative integer"
+        )
+    spin = geometry.spin
+
+    def polar_time_numerator(mu: mp.mpf) -> mp.mpf:
+        return spin * (impact - spin) + spin**2 * mu**2
+
+    def polar_azimuth_numerator(mu: mp.mpf) -> mp.mpf:
+        return impact / (1 - mu**2) - spin
+
+    quarter_multiplier = 2 * completed_polar_oscillations + 1
+    polar_time = polar.integrate_to_turn(polar_time_numerator, initial_mu)
+    polar_time += quarter_multiplier * polar.integrate_to_turn(
+        polar_time_numerator,
+        mp.mpf(0),
+    )
+    polar_time += polar.integrate_from_equator(
+        polar_time_numerator,
+        terminal_mu_magnitude,
+    )
+
+    polar_azimuth = polar.integrate_to_turn(
+        polar_azimuth_numerator,
+        initial_mu,
+    )
+    polar_azimuth += quarter_multiplier * polar.integrate_to_turn(
+        polar_azimuth_numerator,
+        mp.mpf(0),
+    )
+    polar_azimuth += polar.integrate_from_equator(
+        polar_azimuth_numerator,
+        terminal_mu_magnitude,
+    )
+    return polar_time, polar_azimuth
+
+
 def _integrate_path_observables(
     geometry: _ObservationGeometry,
     polar: _PolarMotion,
@@ -1013,6 +1987,7 @@ def _integrate_path_observables(
     initial_mu: mp.mpf,
     terminal_radius: mp.mpf,
     terminal_mu_magnitude: mp.mpf | None = None,
+    completed_polar_oscillations: int = 0,
 ) -> _PathObservables:
     terminal_mu_magnitude = (
         mp.mpf(0) if terminal_mu_magnitude is None else terminal_mu_magnitude
@@ -1026,14 +2001,13 @@ def _integrate_path_observables(
     radial_time = radial.integrate_from_turn(radial_time_numerator, terminal_radius)
     radial_time += radial.integrate_from_turn(radial_time_numerator, geometry.radius)
 
-    def polar_time_numerator(mu: mp.mpf) -> mp.mpf:
-        return spin * (impact - spin) + spin**2 * mu**2
-
-    polar_time = polar.integrate_to_turn(polar_time_numerator, mp.mpf(0))
-    polar_time += polar.integrate_to_turn(polar_time_numerator, initial_mu)
-    polar_time += polar.integrate_from_equator(
-        polar_time_numerator,
+    polar_time, polar_azimuth = _integrate_polar_observables(
+        geometry,
+        polar,
+        impact,
+        initial_mu,
         terminal_mu_magnitude,
+        completed_polar_oscillations,
     )
 
     def radial_azimuth_numerator(radius: mp.mpf) -> mp.mpf:
@@ -1046,22 +2020,6 @@ def _integrate_path_observables(
     radial_azimuth += radial.integrate_from_turn(
         radial_azimuth_numerator,
         geometry.radius,
-    )
-
-    def polar_azimuth_numerator(mu: mp.mpf) -> mp.mpf:
-        return impact / (1 - mu**2) - spin
-
-    polar_azimuth = polar.integrate_to_turn(
-        polar_azimuth_numerator,
-        mp.mpf(0),
-    )
-    polar_azimuth += polar.integrate_to_turn(
-        polar_azimuth_numerator,
-        initial_mu,
-    )
-    polar_azimuth += polar.integrate_from_equator(
-        polar_azimuth_numerator,
-        terminal_mu_magnitude,
     )
 
     chart_time_quad = mp.quad(
@@ -1082,20 +2040,20 @@ def _integrate_path_observables(
         abs(chart_time_quad - chart_time) / max(mp.mpf(1), abs(chart_time)),
         abs(chart_azimuth_quad - chart_azimuth) / max(mp.mpf(1), abs(chart_azimuth)),
     )
-    source_azimuth_unwrapped = -(radial_azimuth + polar_azimuth + chart_azimuth)
-    observer_cartesian_azimuth = mp.atan2(spin, geometry.radius)
-    source_cartesian_azimuth = source_azimuth_unwrapped + mp.atan2(
-        spin,
-        terminal_radius,
+    signed_chart_time = geometry.chart_sign * chart_time
+    signed_chart_azimuth = geometry.chart_sign * chart_azimuth
+    source_azimuth_unwrapped = geometry.chart_azimuth - (
+        radial_azimuth + polar_azimuth + signed_chart_azimuth
     )
-    observer_azimuth_cycle = mp.floor(
-        (observer_cartesian_azimuth + mp.pi) / (2 * mp.pi)
-    )
-    source_azimuth_cycle = mp.floor((source_cartesian_azimuth + mp.pi) / (2 * mp.pi))
     return _PathObservables(
+        terminal_azimuth_unwrapped=source_azimuth_unwrapped,
         terminal_azimuth=_wrap_angle(source_azimuth_unwrapped),
-        travel_time=radial_time + polar_time + chart_time,
-        azimuth_winding=int(source_azimuth_cycle - observer_azimuth_cycle),
+        travel_time=radial_time + polar_time + signed_chart_time,
+        azimuth_winding=_azimuth_winding(
+            geometry,
+            terminal_radius,
+            source_azimuth_unwrapped,
+        ),
         chart_primitive_residual=chart_residual,
     )
 
@@ -1135,6 +2093,38 @@ def _solve_escape_polar_endpoint(
         terminal_mu_magnitude,
         first_crossing_duration,
         next_crossing_duration - escape_duration,
+    )
+
+
+def _solve_capture_polar_endpoint(
+    polar: _PolarMotion,
+    capture_mino_duration: mp.mpf,
+    initial_mu: mp.mpf,
+    precision_digits: int,
+) -> tuple[mp.mpf, mp.mpf, mp.mpf]:
+    """Resolve a horizon endpoint after crossing but before the southern turn."""
+
+    initial_to_turn = polar.integrate_to_turn(_unit_integrand, initial_mu)
+    equator_to_turn = polar.integrate_to_turn(_unit_integrand, mp.mpf(0))
+    first_crossing_duration = initial_to_turn + equator_to_turn
+    after_first_crossing = capture_mino_duration - first_crossing_duration
+    if not 0 < after_first_crossing < equator_to_turn:
+        raise _UnsupportedWitnessError(
+            "horizon is not ordered between the first crossing and southern turning"
+        )
+    terminal_mu_magnitude = mp.findroot(
+        lambda mu: (
+            polar.integrate_from_equator(_unit_integrand, mu) - after_first_crossing
+        ),
+        (mp.mpf(0), polar.turning),
+        solver="anderson",
+        tol=mp.power(10, -(precision_digits - 25)),
+        verify=True,
+    )
+    return (
+        terminal_mu_magnitude,
+        first_crossing_duration,
+        after_first_crossing,
     )
 
 
@@ -1389,6 +2379,244 @@ def _compute_surface_witness(
     )
 
 
+def _compute_critical_surface_witness(
+    geometry: _ObservationGeometry,
+    initial_ray: _InitialRay,
+    separated: _SeparatedState,
+    classification: _RadialClassification,
+    precision_digits: int,
+) -> _CriticalSurfaceWitness:
+    if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
+        raise _UnsupportedWitnessError(
+            "critical surface witness requires the named outgoing polar branch"
+        )
+    if classification.margin >= 0 or len(classification.exterior_roots) != 2:
+        raise _UnsupportedWitnessError(
+            "critical surface witness lacks the two-root scattering topology"
+        )
+    initial_mu = mp.cos(geometry.theta)
+    polar = _build_polar_motion(
+        geometry.spin,
+        separated.impact,
+        separated.carter,
+        initial_mu,
+    )
+    initial_to_turn = polar.integrate_to_turn(_unit_integrand, initial_mu)
+    equator_to_turn = polar.integrate_to_turn(_unit_integrand, mp.mpf(0))
+    first_crossing_duration = initial_to_turn + equator_to_turn
+    second_crossing_duration = initial_to_turn + 3 * equator_to_turn
+
+    radial = _build_radial_motion(geometry, separated, precision_digits)
+    first_crossing_radius = _solve_inbound_radius(
+        radial,
+        geometry.radius,
+        first_crossing_duration,
+        precision_digits,
+    )
+    source_radius = _solve_equatorial_crossing_radius(
+        radial,
+        geometry.radius,
+        second_crossing_duration,
+        precision_digits,
+        mp.mpf(SURFACE_INNER_RADIUS_M),
+        mp.mpf(SURFACE_OUTER_RADIUS_M),
+    )
+    path = _integrate_path_observables(
+        geometry,
+        polar,
+        radial,
+        initial_mu,
+        source_radius,
+        completed_polar_oscillations=1,
+    )
+    transfer = _surface_transfer_observables(
+        geometry,
+        initial_ray,
+        separated,
+        radial,
+        source_radius,
+    )
+    horizon = geometry.mass + mp.sqrt(geometry.mass**2 - geometry.spin**2)
+    return _CriticalSurfaceWitness(
+        precision_digits=precision_digits,
+        terminal=_SURFACE_TERMINAL,
+        initial_polar_side=_SOURCE_EDGE_INITIAL_POLAR_SIDE,
+        radial_turnings=_SOURCE_EDGE_RADIAL_TURNINGS,
+        polar_turnings=_CRITICAL_SURFACE_POLAR_TURNINGS,
+        equatorial_crossings_before_terminal=_CRITICAL_EQUATORIAL_CROSSINGS,
+        azimuth_winding=path.azimuth_winding,
+        first_equatorial_crossing_mino_duration=first_crossing_duration,
+        terminal_equatorial_crossing_mino_duration=second_crossing_duration,
+        terminal_after_first_crossing_mino_margin=(
+            second_crossing_duration - first_crossing_duration
+        ),
+        first_equatorial_crossing_radius_m=first_crossing_radius,
+        first_crossing_below_surface_margin_m=(
+            mp.mpf(SURFACE_INNER_RADIUS_M) - first_crossing_radius
+        ),
+        radial_turning_above_horizon_margin_m=radial.turning - horizon,
+        source_radius_m=source_radius,
+        source_azimuth_unwrapped_rad=path.terminal_azimuth_unwrapped,
+        source_azimuth_rad=path.terminal_azimuth,
+        frequency_ratio=transfer.frequency_ratio,
+        travel_time_m=path.travel_time,
+        emitted_bolometric_intensity=transfer.emitted_intensity,
+        observed_bolometric_intensity=transfer.observed_intensity,
+        energy=separated.energy,
+        impact_parameter=separated.impact,
+        carter_parameter=separated.carter,
+        radial_turning_derivative=radial.turning_derivative,
+        polar_turning_derivative=polar.turning_derivative,
+        initial_null_residual=initial_ray.initial_null_residual,
+        mino_constraint_residual=separated.constraint_residual,
+        chart_primitive_residual=path.chart_primitive_residual,
+    )
+
+
+def _compute_horizon_witness(
+    geometry: _ObservationGeometry,
+    initial_ray: _InitialRay,
+    separated: _SeparatedState,
+    classification: _RadialClassification,
+    precision_digits: int,
+) -> _HorizonWitness:
+    if separated.radial_velocity <= 0 or separated.polar_velocity >= 0:
+        raise _UnsupportedWitnessError(
+            "horizon witness requires the named outgoing polar branch"
+        )
+    polar = _build_polar_motion(
+        geometry.spin,
+        separated.impact,
+        separated.carter,
+        mp.cos(geometry.theta),
+    )
+    radial = _build_capture_radial_motion(
+        geometry,
+        separated,
+        classification,
+    )
+    capture_mino_duration = radial.mino_duration()
+    initial_mu = mp.cos(geometry.theta)
+    (
+        terminal_mu_magnitude,
+        first_crossing_duration,
+        horizon_after_first_crossing,
+    ) = _solve_capture_polar_endpoint(
+        polar,
+        capture_mino_duration,
+        initial_mu,
+        precision_digits,
+    )
+    first_crossing_radius = _solve_capture_radius(
+        radial,
+        first_crossing_duration,
+        precision_digits,
+    )
+    polar_time, polar_azimuth = _integrate_polar_observables(
+        geometry,
+        polar,
+        separated.impact,
+        initial_mu,
+        terminal_mu_magnitude,
+        0,
+    )
+    horizon_azimuth_unwrapped = geometry.chart_azimuth - (
+        radial.azimuth_integral() + polar_azimuth
+    )
+    horizon_mu = -terminal_mu_magnitude
+    horizon_position = _oblate_position(
+        geometry,
+        radial.horizon,
+        horizon_mu,
+        horizon_azimuth_unwrapped,
+    )
+    return _HorizonWitness(
+        precision_digits=precision_digits,
+        terminal=_HORIZON_TERMINAL,
+        initial_polar_side=_SOURCE_EDGE_INITIAL_POLAR_SIDE,
+        radial_turnings=0,
+        polar_turnings=_CRITICAL_CAPTURE_POLAR_TURNINGS,
+        equatorial_crossings_before_terminal=_CRITICAL_EQUATORIAL_CROSSINGS,
+        azimuth_winding=_azimuth_winding(
+            geometry,
+            radial.horizon,
+            horizon_azimuth_unwrapped,
+        ),
+        first_equatorial_crossing_mino_duration=first_crossing_duration,
+        horizon_mino_duration=capture_mino_duration,
+        first_equatorial_crossing_radius_m=first_crossing_radius,
+        first_crossing_below_surface_margin_m=(
+            mp.mpf(SURFACE_INNER_RADIUS_M) - first_crossing_radius
+        ),
+        horizon_after_first_crossing_mino_margin=horizon_after_first_crossing,
+        horizon_radius_m=radial.horizon,
+        horizon_mu=horizon_mu,
+        horizon_azimuth_unwrapped_rad=horizon_azimuth_unwrapped,
+        horizon_azimuth_rad=_wrap_angle(horizon_azimuth_unwrapped),
+        horizon_position_xyz_m=horizon_position,
+        travel_time_m=radial.time_integral() + polar_time,
+        energy=separated.energy,
+        impact_parameter=separated.impact,
+        carter_parameter=separated.carter,
+        polar_turning_derivative=polar.turning_derivative,
+        initial_null_residual=initial_ray.initial_null_residual,
+        mino_constraint_residual=separated.constraint_residual,
+        horizon_cancellation_residual=radial.cancellation_residual(),
+    )
+
+
+def _critical_curve_corpus_witness(
+    *,
+    precision_digits: int,
+) -> _CriticalCurveCorpusWitness:
+    """Recompute the adjacent scattering/capture pair from canonical inputs."""
+
+    _validate_precision_digits(precision_digits)
+    with mp.workdps(precision_digits):
+        geometry = _critical_curve_geometry()
+        critical = _solve_critical_point(geometry, precision_digits)
+        cases = []
+        for pixel in _CRITICAL_CURVE_PIXELS:
+            initial_ray = _canonical_initial_ray(geometry, *pixel)
+            separated = _separated_initial_state(geometry, initial_ray)
+            classification = _classify_radial_barrier(geometry, separated)
+            if pixel == _CRITICAL_SURFACE_PIXEL:
+                witness = _compute_critical_surface_witness(
+                    geometry,
+                    initial_ray,
+                    separated,
+                    classification,
+                    precision_digits,
+                )
+            else:
+                witness = _compute_horizon_witness(
+                    geometry,
+                    initial_ray,
+                    separated,
+                    classification,
+                    precision_digits,
+                )
+            sample_y = mp.mpf(pixel[1]) + mp.mpf(1) / 2
+            cases.append(
+                _CriticalCurveCaseWitness(
+                    pixel=pixel,
+                    witness=witness,
+                    exterior_radial_root_count=len(classification.exterior_roots),
+                    signed_critical_distance_pixels=sample_y - critical.sample_y,
+                    radial_classification_margin=classification.margin,
+                )
+            )
+        return _CriticalCurveCorpusWitness(
+            critical_root_class=_CRITICAL_ROOT_CLASS,
+            critical_sample_y=critical.sample_y,
+            critical_radius_m=critical.radius,
+            critical_potential_residual=critical.potential_residual,
+            critical_derivative_residual=critical.derivative_residual,
+            critical_second_derivative=critical.second_derivative,
+            cases=tuple(cases),
+        )
+
+
 def _source_edge_corpus_witness(*, precision_digits: int) -> _SourceEdgeCorpusWitness:
     """Compute the fixed ordered source-edge corpus from canonical inputs."""
 
@@ -1437,6 +2665,42 @@ _ESCAPE_PRECISION_FIELDS = (
     "impact_parameter",
     "carter_parameter",
     "radial_turning_derivative",
+    "polar_turning_derivative",
+)
+_CRITICAL_SURFACE_PRECISION_FIELDS = (
+    "first_equatorial_crossing_mino_duration",
+    "terminal_equatorial_crossing_mino_duration",
+    "terminal_after_first_crossing_mino_margin",
+    "first_equatorial_crossing_radius_m",
+    "first_crossing_below_surface_margin_m",
+    "radial_turning_above_horizon_margin_m",
+    "source_radius_m",
+    "source_azimuth_unwrapped_rad",
+    "source_azimuth_rad",
+    "frequency_ratio",
+    "travel_time_m",
+    "emitted_bolometric_intensity",
+    "observed_bolometric_intensity",
+    "energy",
+    "impact_parameter",
+    "carter_parameter",
+    "radial_turning_derivative",
+    "polar_turning_derivative",
+)
+_HORIZON_PRECISION_FIELDS = (
+    "first_equatorial_crossing_mino_duration",
+    "horizon_mino_duration",
+    "first_equatorial_crossing_radius_m",
+    "first_crossing_below_surface_margin_m",
+    "horizon_after_first_crossing_mino_margin",
+    "horizon_radius_m",
+    "horizon_mu",
+    "horizon_azimuth_unwrapped_rad",
+    "horizon_azimuth_rad",
+    "travel_time_m",
+    "energy",
+    "impact_parameter",
+    "carter_parameter",
     "polar_turning_derivative",
 )
 
@@ -1492,6 +2756,34 @@ def _witness_precision_pairs(
     raise AssertionError("precision doubling changed a source-edge terminal stratum")
 
 
+def _critical_witness_precision_pairs(
+    low: _CriticalSurfaceWitness | _HorizonWitness,
+    high: _CriticalSurfaceWitness | _HorizonWitness,
+) -> list[tuple[mp.mpf, mp.mpf]]:
+    if isinstance(low, _CriticalSurfaceWitness) and isinstance(
+        high,
+        _CriticalSurfaceWitness,
+    ):
+        return [
+            (getattr(low, field), getattr(high, field))
+            for field in _CRITICAL_SURFACE_PRECISION_FIELDS
+        ]
+    if isinstance(low, _HorizonWitness) and isinstance(high, _HorizonWitness):
+        value_pairs = [
+            (getattr(low, field), getattr(high, field))
+            for field in _HORIZON_PRECISION_FIELDS
+        ]
+        value_pairs.extend(
+            zip(
+                low.horizon_position_xyz_m,
+                high.horizon_position_xyz_m,
+                strict=True,
+            )
+        )
+        return value_pairs
+    raise AssertionError("precision doubling changed a critical-curve terminal stratum")
+
+
 def _build_source_edge_corpus_precision_certificate() -> _PrecisionCertificate[
     _SourceEdgeCorpusWitness
 ]:
@@ -1515,11 +2807,58 @@ def _build_source_edge_corpus_precision_certificate() -> _PrecisionCertificate[
     )
 
 
+def _build_critical_curve_precision_certificate() -> _PrecisionCertificate[
+    _CriticalCurveCorpusWitness
+]:
+    """Rebuild both critical-curve cases at 120/180 digits."""
+
+    low = _critical_curve_corpus_witness(precision_digits=LOW_PRECISION_DIGITS)
+    high = _critical_curve_corpus_witness(precision_digits=HIGH_PRECISION_DIGITS)
+    with mp.workdps(HIGH_PRECISION_DIGITS):
+        value_pairs = [
+            (low.critical_sample_y, high.critical_sample_y),
+            (low.critical_radius_m, high.critical_radius_m),
+            (low.critical_second_derivative, high.critical_second_derivative),
+        ]
+        for low_case, high_case in zip(low.cases, high.cases, strict=True):
+            value_pairs.extend(
+                (
+                    (
+                        low_case.signed_critical_distance_pixels,
+                        high_case.signed_critical_distance_pixels,
+                    ),
+                    (
+                        low_case.radial_classification_margin,
+                        high_case.radial_classification_margin,
+                    ),
+                )
+            )
+            value_pairs.extend(
+                _critical_witness_precision_pairs(
+                    low_case.witness,
+                    high_case.witness,
+                )
+            )
+        maximum_delta = _certify_precision_doubling(value_pairs)
+    return _PrecisionCertificate(
+        low_precision_digits=LOW_PRECISION_DIGITS,
+        high_precision_digits=HIGH_PRECISION_DIGITS,
+        required_stable_digits=REQUIRED_STABLE_DIGITS,
+        maximum_normalized_delta=maximum_delta,
+        witness=high,
+    )
+
+
 def _scientific(value: mp.mpf, digits: int = 110) -> str:
     return mp.nstr(value, digits, strip_zeros=False)
 
 
-def _print_path_identity(witness: _SurfaceWitness | _EscapeWitness) -> None:
+def _print_path_identity(
+    witness: _SurfaceWitness
+    | _EscapeWitness
+    | _CriticalSurfaceWitness
+    | _HorizonWitness,
+) -> None:
     print(f"terminal={witness.terminal}")
     print(
         "branch="
@@ -1532,7 +2871,9 @@ def _print_path_identity(witness: _SurfaceWitness | _EscapeWitness) -> None:
     )
 
 
-def _print_turning_and_residuals(witness: _SurfaceWitness | _EscapeWitness) -> None:
+def _print_turning_and_residuals(
+    witness: _SurfaceWitness | _EscapeWitness | _CriticalSurfaceWitness,
+) -> None:
     print(f"energy={_scientific(witness.energy)}")
     print(f"impact_parameter={_scientific(witness.impact_parameter)}")
     print(f"carter_parameter={_scientific(witness.carter_parameter)}")
@@ -1553,7 +2894,7 @@ def _print_turning_and_residuals(witness: _SurfaceWitness | _EscapeWitness) -> N
 
 
 def _print_surface_observables(
-    witness: _SurfaceWitness,
+    witness: _SurfaceWitness | _CriticalSurfaceWitness,
     *,
     outer_edge_signed_margin: mp.mpf | None = None,
 ) -> None:
@@ -1598,18 +2939,97 @@ def _print_escape_observables(
     )
 
 
+def _print_critical_surface_observables(witness: _CriticalSurfaceWitness) -> None:
+    print(
+        "first_equatorial_crossing_mino_duration="
+        f"{_scientific(witness.first_equatorial_crossing_mino_duration)}"
+    )
+    print(
+        "terminal_equatorial_crossing_mino_duration="
+        f"{_scientific(witness.terminal_equatorial_crossing_mino_duration)}"
+    )
+    print(
+        "terminal_after_first_crossing_mino_margin="
+        f"{_scientific(witness.terminal_after_first_crossing_mino_margin)}"
+    )
+    print(
+        "first_equatorial_crossing_radius_m="
+        f"{_scientific(witness.first_equatorial_crossing_radius_m)}"
+    )
+    print(
+        "first_crossing_below_surface_margin_m="
+        f"{_scientific(witness.first_crossing_below_surface_margin_m)}"
+    )
+    print(
+        "radial_turning_above_horizon_margin_m="
+        f"{_scientific(witness.radial_turning_above_horizon_margin_m)}"
+    )
+    _print_surface_observables(witness)
+    print(
+        "source_azimuth_unwrapped_rad="
+        f"{_scientific(witness.source_azimuth_unwrapped_rad)}"
+    )
+
+
+def _print_horizon_observables(witness: _HorizonWitness) -> None:
+    print(
+        "first_equatorial_crossing_mino_duration="
+        f"{_scientific(witness.first_equatorial_crossing_mino_duration)}"
+    )
+    print(f"horizon_mino_duration={_scientific(witness.horizon_mino_duration)}")
+    print(
+        "first_equatorial_crossing_radius_m="
+        f"{_scientific(witness.first_equatorial_crossing_radius_m)}"
+    )
+    print(
+        "first_crossing_below_surface_margin_m="
+        f"{_scientific(witness.first_crossing_below_surface_margin_m)}"
+    )
+    print(
+        "horizon_after_first_crossing_mino_margin="
+        f"{_scientific(witness.horizon_after_first_crossing_mino_margin)}"
+    )
+    print(f"horizon_radius_m={_scientific(witness.horizon_radius_m)}")
+    print(f"horizon_mu={_scientific(witness.horizon_mu)}")
+    print(
+        "horizon_azimuth_unwrapped_rad="
+        f"{_scientific(witness.horizon_azimuth_unwrapped_rad)}"
+    )
+    print(f"horizon_azimuth_rad={_scientific(witness.horizon_azimuth_rad)}")
+    print(
+        "horizon_position_xyz_m="
+        + ",".join(_scientific(value) for value in witness.horizon_position_xyz_m)
+    )
+    print(f"travel_time_m={_scientific(witness.travel_time_m)}")
+    print(f"energy={_scientific(witness.energy)}")
+    print(f"impact_parameter={_scientific(witness.impact_parameter)}")
+    print(f"carter_parameter={_scientific(witness.carter_parameter)}")
+    print(
+        f"polar_turning_derivative={_scientific(witness.polar_turning_derivative, 20)}"
+    )
+    print(f"initial_null_residual={_scientific(witness.initial_null_residual, 12)}")
+    print(
+        f"mino_constraint_residual={_scientific(witness.mino_constraint_residual, 12)}"
+    )
+    print(
+        "horizon_cancellation_residual="
+        f"{_scientific(witness.horizon_cancellation_residual, 12)}"
+    )
+
+
 def run() -> None:
-    certificate = _build_source_edge_corpus_precision_certificate()
+    source_edge_certificate = _build_source_edge_corpus_precision_certificate()
     print(f"python={platform.python_version()}")
     print(f"mpmath={mp.__version__}")
     print(
         "source_edge_corpus_precision="
-        f"{certificate.low_precision_digits},{certificate.high_precision_digits} "
-        f"stable_digits>={certificate.required_stable_digits} "
+        f"{source_edge_certificate.low_precision_digits},"
+        f"{source_edge_certificate.high_precision_digits} "
+        f"stable_digits>={source_edge_certificate.required_stable_digits} "
         "maximum_normalized_delta="
-        f"{_scientific(certificate.maximum_normalized_delta, 12)}"
+        f"{_scientific(source_edge_certificate.maximum_normalized_delta, 12)}"
     )
-    for case in certificate.witness.cases:
+    for case in source_edge_certificate.witness.cases:
         pixel_x, pixel_y = case.pixel
         print(f"case=kerr-exterior-observation-v1:{pixel_x}:{pixel_y}:0.5:0.5")
         _print_path_identity(case.witness)
@@ -1624,4 +3044,48 @@ def run() -> None:
                 outer_edge_signed_margin=case.outer_edge_signed_margin_m,
             )
         _print_turning_and_residuals(case.witness)
+
+    critical_certificate = _build_critical_curve_precision_certificate()
+    critical_corpus = critical_certificate.witness
+    print(
+        "critical_curve_corpus_precision="
+        f"{critical_certificate.low_precision_digits},"
+        f"{critical_certificate.high_precision_digits} "
+        f"stable_digits>={critical_certificate.required_stable_digits} "
+        "maximum_normalized_delta="
+        f"{_scientific(critical_certificate.maximum_normalized_delta, 12)}"
+    )
+    print(f"critical_root_class={critical_corpus.critical_root_class}")
+    print(f"critical_sample_y={_scientific(critical_corpus.critical_sample_y)}")
+    print(f"critical_radius_m={_scientific(critical_corpus.critical_radius_m)}")
+    print(
+        "critical_potential_residual="
+        f"{_scientific(critical_corpus.critical_potential_residual, 12)}"
+    )
+    print(
+        "critical_derivative_residual="
+        f"{_scientific(critical_corpus.critical_derivative_residual, 12)}"
+    )
+    print(
+        "critical_second_derivative="
+        f"{_scientific(critical_corpus.critical_second_derivative)}"
+    )
+    for case in critical_corpus.cases:
+        pixel_x, pixel_y = case.pixel
+        print(f"case=kerr-critical-outgoing-v1:{pixel_x}:{pixel_y}:0.5:0.5")
+        print(
+            "signed_critical_distance_pixels="
+            f"{_scientific(case.signed_critical_distance_pixels)}"
+        )
+        print(f"exterior_radial_root_count={case.exterior_radial_root_count}")
+        print(
+            "radial_classification_margin="
+            f"{_scientific(case.radial_classification_margin)}"
+        )
+        _print_path_identity(case.witness)
+        if isinstance(case.witness, _CriticalSurfaceWitness):
+            _print_critical_surface_observables(case.witness)
+            _print_turning_and_residuals(case.witness)
+        else:
+            _print_horizon_observables(case.witness)
     print("RESULT=PASS")

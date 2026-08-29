@@ -37,6 +37,10 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
   witness 重建；120/180 位复算约束 exact path identity、signed classification/event-order margin、Escape
   position/direction/time 与 surface source/frequency/time/radiance，其中 `(640,16)` 与 canonical v2 重合。方法、数字与适用域见
   [独立 BL/Mino witness](research/high-precision-bl-mino-witness.md)。
+- outgoing Kerr–Schild `64×36` observation 的相邻 `(33,10)/(33,11)` 另有 120/180 位
+  research-only BL/Mino 证书，覆盖 radial double-root 两侧、Surface/Horizon event order、第二次
+  equatorial crossing、unwrapped phase 与 winding；它尚未成为 Rust fixture 或 GPU 支持证据。见
+  [critical pair 记录](research/critical-curve-surface-capture.md)。
 - v3 diluted-blackbody 的 $T_{obs}=gT_{em}$、三个 observer-frame boxcar bands，以及 vacuum、pure
   absorption、constant source 与 pure-emission slab 的 80 位解析 expected；另验证 Planck
   normalization、thin-limit cancellation 与 ordered partition invariance。
@@ -52,8 +56,9 @@ Backward Trace 使用负 affine traversal，不改写物理 momentum。coordinat
 - finite escape sphere 是数值边界，不能解释为无穷远精确 observable；
 - renderer 从同一 validated `Observation` 独立构造 GPU initial ray，不消费 CPU trajectory；
 - CPU surface geometry 仍以一个默认 Kerr image neighborhood 为主；固定 outer-edge 九点已有独立
-  high-precision terminal/continuous witness。更广 Kerr–Newman 参数、retrograde、surface/capture 与
-  critical boundary、多绕转、near-axis/near-extreme 以及独立 artifact/Jacobi oracle 尚未闭合；
+  high-precision terminal/continuous witness，critical surface/capture pair 的高精度研究层也已存在，
+  但对应 Rust regular/strict/GPU ladder 尚未闭合。更广 Kerr–Newman 参数、negative spin continuous、
+  near-axis/near-extreme 以及独立 artifact/Jacobi oracle 仍缺；
 - 当前 slab 是 terminal analytic operator，不沿 volume ray 积分变化的 invariant coefficients；它不能
   证明 general GRRT、scattering 或 polarization；
 - circular emitter 只验证 timelike existence，不声称 radial/vertical stability 或 stable accretion disk。

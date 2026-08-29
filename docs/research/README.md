@@ -16,6 +16,8 @@
 | [Production 按需单样本检查](on-demand-sample-inspection.md)               | 已采用，质量域仍开放        | 单槽 ticket/completion、cancel-drain、published texel/retrace 分离与 desktop consumer 已采用  |
 | [连续字段 corpus 首切片](continuous-field-corpus.md)                      | 九点 semantic seed 已闭合   | ordered batch 与九点独立 witness 已采用；texture/artifact 与其余 strata 仍开放                 |
 | [高精度 BL/Mino witness](high-precision-bl-mino-witness.md)               | 九点 corpus 已采用          | `(640,12..20)` 独立约束 branch、margin、Escape/source/transfer/phase                           |
+| [Critical surface/capture 证书](critical-curve-surface-capture.md)         | P1/P2 研究层已闭合          | 相邻 critical 两侧、event order、higher-order/winding 已有独立证书；Rust/GPU 支持仍开放        |
+| [路线图纯研究任务审计](roadmap-pure-research-audit.md)                    | 当前审计                    | 区分可离线闭合的证书/classifier 与必须依赖 production、GPU、平台或 consumer 的工程事项         |
 | [原生 HDR 输出](native-hdr-output.md)                                     | 已采用                      | native display state、extended-linear HDR 与 typed SDR fallback                               |
 | [GPU benchmark 方法](gpu-benchmark-methodology.md)                        | 当前方法                    | 只测固定 production workload；临时 variant 不形成永久接口                                     |
 | [Python 研究工具链](python-research-tooling.md)                           | 当前方法                    | Python 3.14、uv lock、统一 CLI、pytest/Hypothesis 与 Ruff                                      |

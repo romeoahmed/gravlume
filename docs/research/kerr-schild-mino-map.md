@@ -2,7 +2,7 @@
 
 本文记录 KS/BL/Mino 局部变换的符号与数值证据，不定义 production integrator；normative chart convention 以[数学物理合同](../physics.md)为准，当前采用状态以源码和实现证据为准。
 
-**状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的 trajectory/f32 Gate C/D 随后被高分辨率反例否决。本文只封闭 Kerr–Newman chart convention 与 pure-Kerr Mino state 的局部零步 seam；trajectory 与 step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式误写成整个积分器的证明。
+**状态：数学 seam 已采用；numerical Mino 已拒绝。** Physical-spin convention 已修复，Gate A/B 通过；数值 reciprocal-Mino 的 trajectory/f32 Gate C/D 随后被高分辨率反例否决。本文只封闭 Kerr–Newman chart convention、pure-Kerr Mino state 的局部零步 seam，以及 outgoing monotonic-capture radial primitive 的 exact regular combination；trajectory 与 step-factor 证据单独记录在 [Mino step selection](mino-step-selection.md)，避免把坐标恒等式误写成整个积分器的证明。
 
 可复现的 SymPy 证明实现为
 [`kerr_schild_map.py`](scripts/src/gravlume_research/checks/kerr_schild_map.py)。它是 docs 下的研究工具，
@@ -265,6 +265,39 @@ p_i=p^s_r\partial_i r+p_\theta\partial_i\theta+p_\phi\partial_i\phi_s,
 \(\rho=0\) 是 azimuth seam；不能先形成奇异的 \(\phi\) 分量再期待 Carter axis limit
 补救。第一版 Mino candidate 应在 exact/near-axis 回退到 Cartesian KS。
 
+### 3.3 Outgoing capture 的 horizon-finite radial combination
+
+对 pure Kerr monotonic capture，令
+
+\[
+P=r^2+a^2-ab,\qquad A=(b-a)^2+\eta,\qquad \rho_R=\sqrt{R},
+\]
+
+且 `outgoing` chart 取 `s=-1`。不要分别计算在 \(\Delta=0\) 发散的 BL radial
+primitive 与 chart correction；利用
+
+\[
+R=P^2-\Delta A,\qquad 2Mr=r^2+a^2-\Delta,
+\]
+
+先做 exact algebraic cancellation：
+
+\[
+\boxed{
+\frac{dt_{\rm out}}{dr}
+=1+\frac{(r^2+a^2)A}{\rho_R(P+\rho_R)},\qquad
+\frac{d\phi_{\rm out}}{dr}
+=\frac{aA}{\rho_R(P+\rho_R)}
+}.
+\tag{20}
+\]
+
+[`kerr_schild_map.py`](scripts/src/gravlume_research/checks/kerr_schild_map.py) 将
+\(A=(P^2-\rho_R^2)/\Delta\) 代回两边并用 exact `cancel` 证明恒等。该式只在
+`R>0`、`P+sqrt(R)>0` 的已分类 monotonic capture segment 使用；它证明 combined
+primitive 在 horizon 有限，不授权跨任意 root topology 的通用 BL solver。具名数值应用见
+[critical surface/capture 证书](critical-curve-surface-capture.md)。
+
 ## 4. Pure Kerr Mino 零步状态
 
 Mino fast-path 的首版产品域仍限定 pure Kerr。使用
@@ -341,6 +374,7 @@ symbolic.metric_pullback=PASS branches=ingoing,outgoing
 symbolic.cartesian_oblate_map=PASS
 symbolic.tangent_covector_duality=PASS
 symbolic.affine_mino=PASS
+symbolic.outgoing_capture_regularization=PASS
 symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing
 symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch=4*M*a*r*u/(a**2*(1 - u) + r**2)
 symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591
