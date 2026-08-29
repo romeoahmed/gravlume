@@ -6,16 +6,16 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from gravlume_research.checks.scalar_transport import (
-    planck_band_fraction,
-    planck_band_fraction_fast,
+    _planck_band_fraction,
+    _planck_band_fraction_fast,
 )
 
-ORACLE_PRECISION_DIGITS = 80
+_ORACLE_PRECISION_DIGITS = 80
 
 
 def test_six_thousand_kelvin_red_band_retains_decimal_precision() -> None:
-    with mp.workdps(ORACLE_PRECISION_DIGITS):
-        actual = planck_band_fraction(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
+    with mp.workdps(_ORACLE_PRECISION_DIGITS):
+        actual = _planck_band_fraction(mp.mpf(6000), mp.mpf(600), mp.mpf(700))
         expected = mp.mpf(
             "0.11240120367128770505189618323010601606160060957692600823721937343264961963013441"
         )
@@ -45,13 +45,13 @@ def test_planck_band_fraction_is_bounded_and_additive(
     wavelengths: tuple[int, int, int],
 ) -> None:
     lower, middle, upper = wavelengths
-    with mp.workdps(ORACLE_PRECISION_DIGITS):
+    with mp.workdps(_ORACLE_PRECISION_DIGITS):
         temperature_mpf = mp.mpf(temperature)
-        whole = planck_band_fraction(temperature_mpf, lower, upper)
-        closed_form = planck_band_fraction_fast(temperature_mpf, lower, upper)
-        partitioned = planck_band_fraction(
+        whole = _planck_band_fraction(temperature_mpf, lower, upper)
+        closed_form = _planck_band_fraction_fast(temperature_mpf, lower, upper)
+        partitioned = _planck_band_fraction(
             temperature_mpf, lower, middle
-        ) + planck_band_fraction(temperature_mpf, middle, upper)
+        ) + _planck_band_fraction(temperature_mpf, middle, upper)
 
         assert mp.mpf(0) <= whole <= mp.mpf(1)
         assert closed_form == pytest.approx(

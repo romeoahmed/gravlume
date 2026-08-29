@@ -21,11 +21,11 @@ from .._sympy import (
     trigonometric_rational_form,
 )
 
-PRECISION_DIGITS = 180
-BOUNDARY_TOLERANCE = sp.Rational(1, 10**80)
+_PRECISION_DIGITS = 180
+_BOUNDARY_TOLERANCE = sp.Rational(1, 10**80)
 
 
-class Chart(Enum):
+class _Chart(Enum):
     INGOING = 1
     OUTGOING = -1
 
@@ -35,7 +35,7 @@ class Chart(Enum):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BoundaryCase:
+class _BoundaryCase:
     name: str
     spin: sp.Expr
     radius: sp.Expr
@@ -46,7 +46,7 @@ class BoundaryCase:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BoundaryProbe:
+class _BoundaryProbe:
     state_symbols: tuple[sp.Symbol, ...]
     duality_left: tuple[sp.Expr, ...]
     duality_right: tuple[sp.Expr, ...]
@@ -55,7 +55,7 @@ class BoundaryProbe:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class BoundaryResult:
+class _BoundaryResult:
     sin_theta_squared: sp.Expr
     absolute_delta: sp.Expr
     extremality_gap: sp.Expr
@@ -65,21 +65,21 @@ class BoundaryResult:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class Geometry:
+class _Geometry:
     mass: sp.Symbol
     radius: sp.Symbol
     spin: sp.Symbol
     sin_theta_squared: sp.Symbol
     sigma: sp.Expr
     delta: sp.Expr
-    ks_metrics: dict[Chart, sp.MatrixBase]
+    ks_metrics: dict[_Chart, sp.MatrixBase]
     bl_metric: sp.MatrixBase
-    jacobians: dict[Chart, sp.MatrixBase]
-    pullbacks: dict[Chart, sp.MatrixBase]
+    jacobians: dict[_Chart, sp.MatrixBase]
+    pullbacks: dict[_Chart, sp.MatrixBase]
     legacy_outgoing_pullback: sp.MatrixBase
 
 
-def build_geometry() -> Geometry:
+def _build_geometry() -> _Geometry:
     mass, radius = sp.symbols("M r", positive=True)
     spin = sp.symbols("a", real=True)
     sin_theta_squared = sp.symbols("u", positive=True)
@@ -99,10 +99,10 @@ def build_geometry() -> Geometry:
         / sigma
     )
 
-    ks_metrics: dict[Chart, sp.MatrixBase] = {}
-    jacobians: dict[Chart, sp.MatrixBase] = {}
-    pullbacks: dict[Chart, sp.MatrixBase] = {}
-    for chart in Chart:
+    ks_metrics: dict[_Chart, sp.MatrixBase] = {}
+    jacobians: dict[_Chart, sp.MatrixBase] = {}
+    pullbacks: dict[_Chart, sp.MatrixBase] = {}
+    for chart in _Chart:
         branch = chart.branch
         # a is always the physical BL spin. The oblate spatial twist is s*a.
         flat_metric = sp.Matrix(
@@ -167,7 +167,7 @@ def build_geometry() -> Geometry:
         ]
     )
 
-    return Geometry(
+    return _Geometry(
         mass=mass,
         radius=radius,
         spin=spin,
@@ -182,8 +182,8 @@ def build_geometry() -> Geometry:
     )
 
 
-def verify_metric_pullback(geometry: Geometry) -> None:
-    for chart in Chart:
+def _verify_metric_pullback(geometry: _Geometry) -> None:
+    for chart in _Chart:
         require_matrix_equal(
             geometry.pullbacks[chart],
             geometry.bl_metric,
@@ -191,7 +191,7 @@ def verify_metric_pullback(geometry: Geometry) -> None:
         )
 
 
-def verify_legacy_same_spin_outgoing_mismatch(geometry: Geometry) -> sp.Expr:
+def _verify_legacy_same_spin_outgoing_mismatch(geometry: _Geometry) -> sp.Expr:
     mass = geometry.mass
     radius = geometry.radius
     spin = geometry.spin
@@ -221,7 +221,7 @@ def verify_legacy_same_spin_outgoing_mismatch(geometry: Geometry) -> sp.Expr:
     return mismatch
 
 
-def verify_cartesian_oblate_map(geometry: Geometry) -> None:
+def _verify_cartesian_oblate_map(geometry: _Geometry) -> None:
     radius, spin = geometry.radius, geometry.spin
     theta, azimuth = sp.symbols("theta phi_s", real=True)
     px, py, pz = sp.symbols("p_x p_y p_z", real=True)
@@ -234,7 +234,7 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
     cartesian_covector = sp.Matrix([px, py, pz])
     spheroidal_tangent = sp.Matrix([vr, vtheta, vazimuth])
 
-    for chart in Chart:
+    for chart in _Chart:
         branch = chart.branch
         chart_spin = branch * spin
         x = (radius * cos_phi - chart_spin * sin_phi) * sin_theta
@@ -326,13 +326,13 @@ def verify_cartesian_oblate_map(geometry: Geometry) -> None:
         )
 
 
-def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
+def _verify_bl_tangent_covector_duality(geometry: _Geometry) -> None:
     kt, kr, ktheta, kphi = sp.symbols("k_t k_r k_theta k_phi", real=True)
     pt, pr, ptheta, pphi = sp.symbols("p_t p_r p_theta p_phi", real=True)
     tangent_bl = sp.Matrix([kt, kr, ktheta, kphi])
     covector_ks = sp.Matrix([pt, pr, ptheta, pphi])
 
-    for chart in Chart:
+    for chart in _Chart:
         branch = chart.branch
         jacobian = geometry.jacobians[chart]
         tangent_ks = jacobian * tangent_bl
@@ -375,7 +375,7 @@ def verify_bl_tangent_covector_duality(geometry: Geometry) -> None:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class MinoSystem:
+class _MinoSystem:
     energy: sp.Symbol
     impact: sp.Symbol
     carter: sp.Symbol
@@ -390,7 +390,7 @@ class MinoSystem:
     hamiltonian_identity_right: sp.Expr
 
 
-def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
+def _build_and_verify_mino_system(geometry: _Geometry) -> _MinoSystem:
     mass, radius, spin = geometry.mass, geometry.radius, geometry.spin
     energy = sp.symbols("E", real=True, nonzero=True)
     impact, carter = sp.symbols("b eta", real=True)
@@ -457,7 +457,7 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
         "Mino polar acceleration",
     )
 
-    return MinoSystem(
+    return _MinoSystem(
         energy=energy,
         impact=impact,
         carter=carter,
@@ -473,7 +473,7 @@ def build_and_verify_mino_system(geometry: Geometry) -> MinoSystem:
     )
 
 
-def verify_outgoing_capture_regularization() -> None:
+def _verify_outgoing_capture_regularization() -> None:
     """Prove the horizon-finite outgoing radial time/azimuth identities."""
 
     mass, radius = sp.symbols("M r", positive=True)
@@ -503,7 +503,7 @@ def verify_outgoing_capture_regularization() -> None:
     )
 
 
-def build_boundary_cases() -> tuple[BoundaryCase, ...]:
+def _build_boundary_cases() -> tuple[_BoundaryCase, ...]:
     """Return named exact points close to the three audited chart seams."""
 
     ten = sp.Integer(10)
@@ -535,7 +535,7 @@ def build_boundary_cases() -> tuple[BoundaryCase, ...]:
     extremal_u = sp.Rational(3, 4)
 
     return (
-        BoundaryCase(
+        _BoundaryCase(
             name="near_axis",
             spin=axis_spin,
             radius=axis_radius,
@@ -544,7 +544,7 @@ def build_boundary_cases() -> tuple[BoundaryCase, ...]:
             energy=energy,
             carter=carter,
         ),
-        BoundaryCase(
+        _BoundaryCase(
             name="near_horizon",
             spin=horizon_spin,
             radius=horizon_radius,
@@ -553,7 +553,7 @@ def build_boundary_cases() -> tuple[BoundaryCase, ...]:
             energy=energy,
             carter=carter,
         ),
-        BoundaryCase(
+        _BoundaryCase(
             name="near_extremality",
             spin=extremal_spin,
             radius=extremal_radius,
@@ -565,19 +565,19 @@ def build_boundary_cases() -> tuple[BoundaryCase, ...]:
     )
 
 
-def build_boundary_probe(geometry: Geometry, mino: MinoSystem) -> BoundaryProbe:
+def _build_boundary_probe(geometry: _Geometry, mino: _MinoSystem) -> _BoundaryProbe:
     kt, kr, ktheta, kphi = sp.symbols("k_t k_r k_theta k_phi", real=True)
     pt, pr, ptheta, pphi = sp.symbols("p_t p_r p_theta p_phi", real=True)
     tangent_bl = sp.Matrix([kt, kr, ktheta, kphi])
     covector_ks = sp.Matrix([pt, pr, ptheta, pphi])
-    outgoing_jacobian = geometry.jacobians[Chart.OUTGOING]
+    outgoing_jacobian = geometry.jacobians[_Chart.OUTGOING]
     tangent_ks = outgoing_jacobian * tangent_bl
     covector_bl = outgoing_jacobian.T * covector_ks
     sin_squared = 1 - mino.mu**2
     sigma = geometry.radius**2 + geometry.spin**2 * mino.mu**2
     momentum = mino.covector
     inverse = mino.bl_inverse_metric
-    return BoundaryProbe(
+    return _BoundaryProbe(
         state_symbols=(kt, kr, ktheta, kphi, pt, pr, ptheta, pphi),
         duality_left=((covector_ks.T * tangent_ks)[0],),
         duality_right=((covector_bl.T * tangent_bl)[0],),
@@ -589,24 +589,24 @@ def build_boundary_probe(geometry: Geometry, mino: MinoSystem) -> BoundaryProbe:
     )
 
 
-def require_boundary_tolerance(name: str, result: BoundaryResult) -> None:
+def _require_boundary_tolerance(name: str, result: _BoundaryResult) -> None:
     for label, residual in (
         ("metric", result.metric_residual),
         ("duality", result.duality_residual),
         ("Mino", result.mino_residual),
     ):
-        if residual >= BOUNDARY_TOLERANCE:
+        if residual >= _BOUNDARY_TOLERANCE:
             raise AssertionError(
-                f"{name}: {label} residual {residual} >= {BOUNDARY_TOLERANCE}"
+                f"{name}: {label} residual {residual} >= {_BOUNDARY_TOLERANCE}"
             )
 
 
-def evaluate_boundary_case(
-    geometry: Geometry,
-    mino: MinoSystem,
-    probe: BoundaryProbe,
-    case: BoundaryCase,
-) -> BoundaryResult:
+def _evaluate_boundary_case(
+    geometry: _Geometry,
+    mino: _MinoSystem,
+    probe: _BoundaryProbe,
+    case: _BoundaryCase,
+) -> _BoundaryResult:
     name = case.name
     mass_value = sp.Integer(1)
     spin_value = case.spin
@@ -619,10 +619,10 @@ def evaluate_boundary_case(
         geometry.sin_theta_squared: u_value,
     }
     sigma_value = evaluate_real(
-        geometry.sigma, geometry_substitutions, PRECISION_DIGITS
+        geometry.sigma, geometry_substitutions, _PRECISION_DIGITS
     )
     delta_value = evaluate_real(
-        geometry.delta, geometry_substitutions, PRECISION_DIGITS
+        geometry.delta, geometry_substitutions, _PRECISION_DIGITS
     )
     denominators = (
         sigma_value,
@@ -636,10 +636,10 @@ def evaluate_boundary_case(
         raise AssertionError(f"{name}: substitution hit a coordinate denominator")
 
     metric_residual = maximum_relative_residual(
-        geometry.pullbacks[Chart.OUTGOING],
+        geometry.pullbacks[_Chart.OUTGOING],
         geometry.bl_metric,
         geometry_substitutions,
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
 
     state_substitutions = geometry_substitutions | dict(
@@ -649,7 +649,7 @@ def evaluate_boundary_case(
         probe.duality_left,
         probe.duality_right,
         state_substitutions,
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
 
     potential_substitutions = {
@@ -664,12 +664,12 @@ def evaluate_boundary_case(
     radial_potential_value = evaluate_real(
         radial_potential,
         {},
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
     polar_potential_value = evaluate_real(
         polar_potential,
         {},
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
     if radial_potential_value <= 0 or polar_potential_value <= 0:
         raise AssertionError(f"{name}: seeded Mino point is outside R,U >= 0")
@@ -679,53 +679,53 @@ def evaluate_boundary_case(
         (mino.hamiltonian_identity_left,),
         (mino.hamiltonian_identity_right,),
         potential_substitutions,
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
     affine_residual = maximum_relative_residual(
         probe.affine_mino_left,
         probe.affine_mino_right,
         potential_substitutions,
-        PRECISION_DIGITS,
+        _PRECISION_DIGITS,
     )
-    result = BoundaryResult(
+    result = _BoundaryResult(
         sin_theta_squared=u_value,
         absolute_delta=abs(delta_value),
-        extremality_gap=abs((mass_value**2 - spin_value**2).evalf(PRECISION_DIGITS)),
+        extremality_gap=abs((mass_value**2 - spin_value**2).evalf(_PRECISION_DIGITS)),
         metric_residual=metric_residual,
         duality_residual=duality_residual,
         mino_residual=max(hamiltonian_residual, affine_residual),
     )
-    require_boundary_tolerance(name, result)
+    _require_boundary_tolerance(name, result)
     return result
 
 
-def verify_boundary_substitutions(
-    geometry: Geometry, mino: MinoSystem
-) -> dict[str, BoundaryResult]:
+def _verify_boundary_substitutions(
+    geometry: _Geometry, mino: _MinoSystem
+) -> dict[str, _BoundaryResult]:
     """Stress outgoing expressions at defined points near three chart seams."""
 
-    probe = build_boundary_probe(geometry, mino)
+    probe = _build_boundary_probe(geometry, mino)
     return {
-        case.name: evaluate_boundary_case(geometry, mino, probe, case)
-        for case in build_boundary_cases()
+        case.name: _evaluate_boundary_case(geometry, mino, probe, case)
+        for case in _build_boundary_cases()
     }
 
 
-def short_scientific(value: sp.Expr) -> str:
+def _short_scientific(value: sp.Expr) -> str:
     if value == 0:
         return "0"
     return str(value.evalf(8))
 
 
 def run() -> None:
-    geometry = build_geometry()
-    verify_metric_pullback(geometry)
-    mismatch = verify_legacy_same_spin_outgoing_mismatch(geometry)
-    verify_cartesian_oblate_map(geometry)
-    verify_bl_tangent_covector_duality(geometry)
-    mino = build_and_verify_mino_system(geometry)
-    verify_outgoing_capture_regularization()
-    boundary_results = verify_boundary_substitutions(geometry, mino)
+    geometry = _build_geometry()
+    _verify_metric_pullback(geometry)
+    mismatch = _verify_legacy_same_spin_outgoing_mismatch(geometry)
+    _verify_cartesian_oblate_map(geometry)
+    _verify_bl_tangent_covector_duality(geometry)
+    mino = _build_and_verify_mino_system(geometry)
+    _verify_outgoing_capture_regularization()
+    boundary_results = _verify_boundary_substitutions(geometry, mino)
 
     print(f"python={platform.python_version()}")
     print(f"sympy={sp.__version__}")
@@ -737,15 +737,15 @@ def run() -> None:
     print("symbolic.corrected_physical_spin=PASS branches=ingoing,outgoing")
     print(f"symbolic.legacy_outgoing=RED_AS_EXPECTED mismatch={mismatch}")
     print("symbolic.legacy_outgoing_sample=RED_AS_EXPECTED g_tphi=g_phit=360/1591")
-    print(f"boundary.precision_digits={PRECISION_DIGITS}")
+    print(f"boundary.precision_digits={_PRECISION_DIGITS}")
     for name, result in boundary_results.items():
         print(
             f"boundary.{name}=PASS "
-            f"u={short_scientific(result.sin_theta_squared)} "
-            f"abs_delta={short_scientific(result.absolute_delta)} "
-            f"M2_minus_a2={short_scientific(result.extremality_gap)} "
-            f"metric={short_scientific(result.metric_residual)} "
-            f"duality={short_scientific(result.duality_residual)} "
-            f"mino={short_scientific(result.mino_residual)}"
+            f"u={_short_scientific(result.sin_theta_squared)} "
+            f"abs_delta={_short_scientific(result.absolute_delta)} "
+            f"M2_minus_a2={_short_scientific(result.extremality_gap)} "
+            f"metric={_short_scientific(result.metric_residual)} "
+            f"duality={_short_scientific(result.duality_residual)} "
+            f"mino={_short_scientific(result.mino_residual)}"
         )
     print("RESULT=PASS")

@@ -13,13 +13,13 @@ import mpmath as mp
 
 from ..._precision import _PrecisionEvidence
 
-MINIMUM_WITNESS_DIGITS = 70
-RESIDUAL_GUARD_DIGITS = 15
-SURFACE_INNER_RADIUS_M = 6
-SURFACE_OUTER_RADIUS_M = 20
-ESCAPE_RADIUS_M = 200
-VIEWPORT_WIDTH = 1280
-VIEWPORT_HEIGHT = 720
+_MINIMUM_WITNESS_DIGITS = 70
+_RESIDUAL_GUARD_DIGITS = 15
+_SURFACE_INNER_RADIUS_M = 6
+_SURFACE_OUTER_RADIUS_M = 20
+_ESCAPE_RADIUS_M = 200
+_VIEWPORT_WIDTH = 1280
+_VIEWPORT_HEIGHT = 720
 _SOURCE_EDGE_PIXELS = tuple((640, pixel_y) for pixel_y in range(12, 21))
 _SOURCE_EDGE_ESCAPE_PIXELS = ((640, 12), (640, 13))
 _SOURCE_EDGE_SURFACE_PIXELS = (
@@ -67,9 +67,9 @@ class _UnsupportedWitnessError(ValueError):
 def _validate_precision_digits(precision_digits: object) -> None:
     if type(precision_digits) is not int:
         raise _UnsupportedWitnessError("witness precision must be an integer")
-    if precision_digits < MINIMUM_WITNESS_DIGITS:
+    if precision_digits < _MINIMUM_WITNESS_DIGITS:
         raise _UnsupportedWitnessError(
-            f"witness precision must be at least {MINIMUM_WITNESS_DIGITS} digits"
+            f"witness precision must be at least {_MINIMUM_WITNESS_DIGITS} digits"
         )
 
 
@@ -166,7 +166,7 @@ class _SourceEdgeCaseWitness:
                 if isinstance(self.witness, _EscapeWitness)
                 else self.witness.source_radius_m
             )
-            return mp.mpf(SURFACE_OUTER_RADIUS_M) - terminal_radius
+            return mp.mpf(_SURFACE_OUTER_RADIUS_M) - terminal_radius
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -373,7 +373,7 @@ class _CriticalCurveCorpusWitness:
         with mp.workdps(precision_digits):
             residual_limit = mp.power(
                 10,
-                RESIDUAL_GUARD_DIGITS - precision_digits,
+                _RESIDUAL_GUARD_DIGITS - precision_digits,
             )
             distance_residual = max(
                 abs(

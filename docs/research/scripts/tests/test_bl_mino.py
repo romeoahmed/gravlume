@@ -14,7 +14,7 @@ from gravlume_research.checks.bl_mino._critical_curve import (
     _critical_curve_corpus_witness,
 )
 from gravlume_research.checks.bl_mino._model import (
-    MINIMUM_WITNESS_DIGITS,
+    _MINIMUM_WITNESS_DIGITS,
     _UnsupportedWitnessError,
 )
 from gravlume_research.checks.bl_mino._negative_spin import (
@@ -27,7 +27,7 @@ from gravlume_research.checks.bl_mino._source_edge import (
 
 def test_source_edge_corpus_orders_cases_across_the_outer_edge() -> None:
     corpus = _source_edge_corpus_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
 
     assert tuple(case.pixel for case in corpus.cases) == tuple(
@@ -52,7 +52,7 @@ def test_source_edge_corpus_orders_cases_across_the_outer_edge() -> None:
 
 def test_critical_curve_pair_brackets_capture_and_higher_order_surface() -> None:
     corpus = _critical_curve_corpus_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
 
     assert tuple(case.pixel for case in corpus.cases) == ((33, 10), (33, 11))
@@ -79,7 +79,7 @@ def test_critical_curve_pair_brackets_capture_and_higher_order_surface() -> None
 
 def test_critical_curve_certificate_rejects_stale_separatrix_distance() -> None:
     corpus = _critical_curve_corpus_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
 
     with pytest.raises(_UnsupportedWitnessError):
@@ -91,7 +91,7 @@ def test_critical_curve_certificate_rejects_stale_separatrix_distance() -> None:
 
 def test_surface_capture_certificate_rejects_stale_event_margin() -> None:
     corpus = _critical_curve_corpus_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
     capture = corpus.cases[1].witness
 
@@ -109,7 +109,7 @@ def test_surface_capture_certificate_rejects_stale_event_margin() -> None:
 
 def test_higher_order_certificate_rejects_unwrapped_phase_mutation() -> None:
     corpus = _critical_curve_corpus_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
     surface = corpus.cases[0].witness
 
@@ -142,7 +142,7 @@ def test_negative_spin_certificate_rejects_physical_spin_or_emitter_branch_flip(
     None
 ):
     witness = _negative_spin_surface_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
 
     with mp.workdps(witness.precision_digits):
@@ -181,7 +181,7 @@ def test_negative_spin_precision_doubling_retains_fields_and_topology() -> None:
 
 def test_negative_spin_certificate_rejects_stale_event_margin() -> None:
     witness = _negative_spin_surface_witness(
-        precision_digits=MINIMUM_WITNESS_DIGITS,
+        precision_digits=_MINIMUM_WITNESS_DIGITS,
     )
 
     with (

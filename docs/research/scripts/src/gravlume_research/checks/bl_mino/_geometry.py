@@ -11,8 +11,8 @@ from ._model import (
     _NEGATIVE_SPIN_VIEWPORT_HEIGHT,
     _NEGATIVE_SPIN_VIEWPORT_WIDTH,
     _OUTGOING_CHART_SIGN,
-    VIEWPORT_HEIGHT,
-    VIEWPORT_WIDTH,
+    _VIEWPORT_HEIGHT,
+    _VIEWPORT_WIDTH,
     _InitialRay,
     _ObservationGeometry,
     _SeparatedState,
@@ -140,8 +140,8 @@ def _canonical_geometry() -> _ObservationGeometry:
         radius=mp.mpf(30),
         theta=mp.pi / 3,
         chart_azimuth=mp.mpf(0),
-        viewport_width=VIEWPORT_WIDTH,
-        viewport_height=VIEWPORT_HEIGHT,
+        viewport_width=_VIEWPORT_WIDTH,
+        viewport_height=_VIEWPORT_HEIGHT,
         vertical_fov=mp.pi / 4,
     )
 
